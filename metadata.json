@@ -1,0 +1,6 @@
+{
+  "name": "HighlightLab — Phân Tích & Trích Xuất Highlight Video Local",
+  "description": "Công cụ phân tích video đa tầng chạy local miễn phí: quét chuyển động, âm thanh, chuyển cảnh, chấm điểm Funny/Badass/Cute và học gu người dùng.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
