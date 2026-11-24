@@ -6,6 +6,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import multer from 'multer';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
+import { GoogleGenAI, Type } from '@google/genai';
 import {
   buildAssFromCues,
   buildMediaClipsPlan,
@@ -16,13 +17,23 @@ import {
   extractEnglishSearchTerms,
   generateOfflineVietnameseScript,
   getCanvasDimensions,
+  getDefaultSecondaryVoiceForLanguage,
+  getQualityEncodingParams,
+  getSubtitleWrapBudget,
+  hasCjkChars,
+  hasVietnameseDiacritics,
+  isBilingualLanguage,
   parseAiWebOrJsonOutput,
+  planNarrationSegments,
   splitCueIntoShortSubCues,
   splitScriptSentences,
+  stripNarrationTags,
   validateRenderConfig,
 } from './src/shared/mptEngine';
 import {
   BgmPreset,
+  GroundingSource,
+  LanguageCode,
   MaterialSource,
   MediaAssetItem,
   RenderJobConfig,
@@ -30,10 +41,25 @@ import {
   ScenePreviewItem,
   ScriptStyle,
   SubtitleCue,
+  TopicSuggestion,
   TtsProvider,
   VideoAspectRatio,
+  VideoQuality,
   VoiceOptionId,
 } from './src/shared/types';
+
+function getGeminiClient(): GoogleGenAI | null {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) return null;
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -171,8 +197,9 @@ async function synthesizeWithGoogleFreeTts(
   voiceId: VoiceOptionId,
   outPath: string
 ): Promise<boolean> {
-  const lang = voiceId.startsWith('en-') ? 'en' : 'vi';
-  const isMale = voiceId.includes('NamMinh') || voiceId.includes('Guy');
+  const lang = voiceId.startsWith('ja-') ? 'ja' : voiceId.startsWith('en-') ? 'en' : 'vi';
+  const isMale =
+    voiceId.includes('NamMinh') || voiceId.includes('Guy') || voiceId.includes('Keita');
   const rawPath = `${outPath}.raw.mp3`;
 
   try {
@@ -216,24 +243,132 @@ async function synthesizeWithGoogleFreeTts(
   }
 }
 
+function getElevenLabsVoiceId(voiceId: VoiceOptionId): string {
+  const voiceMap: Record<VoiceOptionId, string> = {
+    'vi-VN-HoaiMyNeural': '21m00Tcm4TlvDq8ikWAM', // Rachel
+    'vi-VN-NamMinhNeural': 'pNInz6obpgDQGcFmaJgB', // Adam
+    'en-US-JennyNeural': 'EXAVITQu4vr4xnSDxMaL', // Sarah
+    'en-US-GuyNeural': 'ErXwobaYiN019PkySvjV', // Antoni
+    'ja-JP-NanamiNeural': 'MF3mGyEYCl7XYWbV9V6O', // Elli
+    'ja-JP-KeitaNeural': 'TxGEqnHWrfWFTfGW9XjX', // Josh
+  };
+  return voiceMap[voiceId] ?? '21m00Tcm4TlvDq8ikWAM';
+}
+
+async function createSilenceMp3(durationSec: number, outPath: string): Promise<void> {
+  const safeDur = Math.max(0.25, Math.min(5.0, durationSec));
+  await runFfmpeg(
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      `anullsrc=r=24000:cl=mono`,
+      '-t',
+      safeDur.toFixed(2),
+      '-c:a',
+      'libmp3lame',
+      '-b:a',
+      '96k',
+      outPath,
+    ],
+    12000
+  );
+}
+
+async function synthesizeWithElevenLabs(
+  text: string,
+  voiceId: VoiceOptionId,
+  outPath: string
+): Promise<{ ok: boolean; reason?: 'missing_key' | 'api_error'; detail?: string }> {
+  const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
+  if (!apiKey) {
+    return {
+      ok: false,
+      reason: 'missing_key',
+      detail: 'Chưa cấu hình ELEVENLABS_API_KEY trong Secrets trên server.',
+    };
+  }
+
+  const elevenVoiceId = getElevenLabsVoiceId(voiceId);
+  try {
+    const res = await fetchWithTimeout(
+      `https://api.elevenlabs.io/v1/text-to-speech/${elevenVoiceId}`,
+      {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json',
+          Accept: 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text,
+          model_id: 'eleven_multilingual_v2',
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+          },
+        }),
+      },
+      12000
+    );
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: 'api_error',
+        detail: `ElevenLabs trả về HTTP ${res.status}`,
+      };
+    }
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 400) {
+      return { ok: false, reason: 'api_error', detail: 'Dữ liệu âm thanh ElevenLabs rỗng.' };
+    }
+    fs.writeFileSync(outPath, buf);
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'api_error',
+      detail: err instanceof Error ? err.message : 'Lỗi kết nối ElevenLabs',
+    };
+  }
+}
+
 async function synthesizeChunkWithFallback(params: {
   text: string;
   voiceId: VoiceOptionId;
   ttsProvider: TtsProvider;
   voiceRate: number;
   outPath: string;
-}): Promise<{ engineUsed: string; recoveredFromEdgeError: boolean }> {
+}): Promise<{
+  engineUsed: string;
+  recoveredFromEdgeError: boolean;
+  fallbackNote?: string;
+}> {
   const tempPath = `${params.outPath}.base.mp3`;
   let engineUsed = 'Google TTS Miễn phí';
   let recoveredFromEdgeError = false;
+  let fallbackNote: string | undefined;
   let ok = false;
 
-  if (params.ttsProvider === 'edge_auto') {
+  if (params.ttsProvider === 'elevenlabs') {
+    const elRes = await synthesizeWithElevenLabs(params.text, params.voiceId, tempPath);
+    if (elRes.ok) {
+      ok = true;
+      engineUsed = 'ElevenLabs Multilingual v2';
+    } else {
+      fallbackNote = `${elRes.detail ?? 'ElevenLabs chưa sẵn sàng'} -> Tự chuyển sang Google TTS Miễn phí.`;
+      ok = await synthesizeWithGoogleFreeTts(params.text, params.voiceId, tempPath);
+    }
+  } else if (params.ttsProvider === 'edge_auto') {
     ok = await synthesizeWithEdgeTts(params.text, params.voiceId, tempPath);
     if (ok) {
       engineUsed = 'Microsoft Edge Neural TTS';
     } else {
       recoveredFromEdgeError = true;
+      fallbackNote = 'Edge-TTS bị Microsoft chặn 403 -> Đã tự chuyển sang Google TTS Miễn phí.';
       ok = await synthesizeWithGoogleFreeTts(params.text, params.voiceId, tempPath);
     }
   } else {
@@ -259,7 +394,7 @@ async function synthesizeChunkWithFallback(params: {
       ],
       15000
     );
-    return { engineUsed, recoveredFromEdgeError };
+    return { engineUsed, recoveredFromEdgeError, fallbackNote };
   }
 
   const rate = Math.max(0.75, Math.min(1.6, params.voiceRate));
@@ -284,7 +419,7 @@ async function synthesizeChunkWithFallback(params: {
     fs.renameSync(tempPath, params.outPath);
   }
 
-  return { engineUsed, recoveredFromEdgeError };
+  return { engineUsed, recoveredFromEdgeError, fallbackNote };
 }
 
 /**
@@ -372,34 +507,57 @@ async function searchArchiveOrgMp4s(terms: string[], limit = 6): Promise<MediaAs
 }
 
 /**
- * Free keyless Vietnamese -> English translator for exact stock media queries & scene prompts.
+ * Free keyless auto-language translator for queries, topics & exact stock media terms.
  */
-async function translateViToEn(text: string): Promise<string> {
+async function translateToTargetLang(text: string, tl: 'en' | 'ja' | 'vi'): Promise<string> {
   const clean = text.trim();
   if (!clean) return '';
-  if (/^[\x00-\x7F\s]+$/.test(clean)) return clean;
+  if (tl === 'en' && /^[\x00-\x7F\s]+$/.test(clean)) return clean;
   try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=vi&tl=en&dt=t&q=${encodeURIComponent(clean)}`;
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${tl}&dt=t&q=${encodeURIComponent(clean)}`;
     const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'MoneyPrinterTurboVN/2.0' } }, 4000);
     if (!res.ok) return '';
     const json = (await res.json()) as Array<Array<[string]>>;
-    const translated = (json[0] ?? []).map((seg) => seg[0] ?? '').join('').trim();
-    return translated;
+    return (json[0] ?? []).map((seg) => seg[0] ?? '').join('').trim();
   } catch {
     return '';
   }
 }
 
-/**
- * Fetches real Vietnamese Wikipedia facts + official English title for any topic (0 API key).
- */
-async function fetchWikipediaFacts(subject: string): Promise<{
+async function translateToEn(text: string): Promise<string> {
+  return translateToTargetLang(text, 'en');
+}
+
+function isTopicPureForLanguage(title: string, language: LanguageCode): boolean {
+  const clean = title.trim();
+  if (!clean) return false;
+  if (language === 'ja' || language === 'en') {
+    if (hasVietnameseDiacritics(clean)) return false;
+  }
+  return true;
+}
+
+function extractCoreWikiQuery(subject: string): string {
+  return subject
+    .replace(/^(?:top\s*\d+|sự thật về|bí mật về|bí ẩn về|vì sao|tại sao|điều gì|làm thế nào|cách|khám phá|\d+\s*(?:sự thật|điều|bí mật|thói quen))\s+/i, '')
+    .replace(/[?!.…「」『』【】"']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function queryWikipediaByKeyword(
+  keyword: string,
+  wikiHost: string
+): Promise<{
   title?: string;
   sentences: string[];
   englishTitle?: string;
+  articleUrl?: string;
 }> {
+  const cleanQ = keyword.trim();
+  if (!cleanQ) return { sentences: [] };
   try {
-    const searchUrl = `https://vi.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(subject)}&srlimit=1&format=json`;
+    const searchUrl = `https://${wikiHost}/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(cleanQ)}&srlimit=3&format=json`;
     const sRes = await fetchWithTimeout(
       searchUrl,
       { headers: { 'User-Agent': 'MoneyPrinterTurboVN/2.0' } },
@@ -407,39 +565,522 @@ async function fetchWikipediaFacts(subject: string): Promise<{
     );
     if (!sRes.ok) return { sentences: [] };
     const sJson = (await sRes.json()) as { query?: { search?: Array<{ title: string }> } };
-    const title = sJson.query?.search?.[0]?.title;
-    if (!title) return { sentences: [] };
+    const titles = (sJson.query?.search ?? []).map((s) => s.title).filter(Boolean);
+    if (titles.length === 0) return { sentences: [] };
 
-    const detailUrl = `https://vi.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=extracts|langlinks&exintro=1&explaintext=1&exsentences=6&lllang=en&format=json`;
-    const dRes = await fetchWithTimeout(
-      detailUrl,
-      { headers: { 'User-Agent': 'MoneyPrinterTurboVN/2.0' } },
-      4500
-    );
-    if (!dRes.ok) return { title, sentences: [] };
-    const dJson = (await dRes.json()) as {
-      query?: {
-        pages?: Record<
-          string,
-          {
-            title: string;
-            extract?: string;
-            langlinks?: Array<{ lang: string; '*': string }>;
-          }
-        >;
+    for (const title of titles.slice(0, 2)) {
+      const detailUrl = `https://${wikiHost}/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=extracts|info|langlinks&exintro=1&explaintext=1&exsentences=14&inprop=url&lllang=en&format=json`;
+      const dRes = await fetchWithTimeout(
+        detailUrl,
+        { headers: { 'User-Agent': 'MoneyPrinterTurboVN/2.0' } },
+        4500
+      );
+      if (!dRes.ok) continue;
+      const dJson = (await dRes.json()) as {
+        query?: {
+          pages?: Record<
+            string,
+            {
+              title: string;
+              extract?: string;
+              fullurl?: string;
+              langlinks?: Array<{ lang: string; '*': string }>;
+            }
+          >;
+        };
       };
-    };
-    const page = Object.values(dJson.query?.pages ?? {})[0];
-    if (!page?.extract) return { title, sentences: [] };
-    const rawSentences = page.extract
-      .split(/(?<=[.!?])\s+|\n+/)
-      .map((s) => s.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim())
-      .filter((s) => s.length >= 22 && s.length <= 185);
-    const englishTitle = page.langlinks?.find((l) => l.lang === 'en')?.['*'];
-    return { title: page.title, sentences: rawSentences, englishTitle };
+      const page = Object.values(dJson.query?.pages ?? {})[0];
+      if (!page?.extract) continue;
+      const rawSentences = page.extract
+        .split(/(?<=[.!?。！？])\s*|\n+/)
+        .map((s) => s.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim())
+        .filter((s) => s.length >= 16 && s.length <= 210);
+      if (rawSentences.length === 0) continue;
+      const englishTitle =
+        wikiHost.startsWith('en.')
+          ? page.title
+          : page.langlinks?.find((l) => l.lang === 'en')?.['*'];
+      return {
+        title: page.title,
+        sentences: rawSentences,
+        englishTitle,
+        articleUrl: page.fullurl || `https://${wikiHost}/wiki/${encodeURIComponent(page.title.replace(/ /g, '_'))}`,
+      };
+    }
+    return { sentences: [] };
   } catch {
     return { sentences: [] };
   }
+}
+
+/**
+ * Fetches real Wikipedia facts (vi/en/ja) + official English title + real article URL for any topic (0 API key).
+ */
+async function fetchWikipediaFacts(
+  subject: string,
+  language: LanguageCode = 'vi'
+): Promise<{
+  title?: string;
+  sentences: string[];
+  englishTitle?: string;
+  articleUrl?: string;
+  sourceWikiLang?: 'vi' | 'en' | 'ja';
+}> {
+  const targetWikiLang: 'vi' | 'en' | 'ja' =
+    language === 'ja' || language === 'ja_en' ? 'ja' : language === 'en' ? 'en' : 'vi';
+  const primaryHost = `${targetWikiLang}.wikipedia.org`;
+  const coreQuery = extractCoreWikiQuery(subject);
+
+  // 1. Try exact subject and core noun query on target Wikipedia
+  for (const candidateQ of Array.from(new Set([subject.trim(), coreQuery])).filter(Boolean)) {
+    const hit = await queryWikipediaByKeyword(candidateQ, primaryHost);
+    if (hit.sentences.length >= 2) {
+      return { ...hit, sourceWikiLang: targetWikiLang };
+    }
+  }
+
+  // 2. Fallback to English Wikipedia (translate verified English Wikipedia facts into target language)
+  if (targetWikiLang !== 'en') {
+    const enTerm = await translateToEn(coreQuery || subject);
+    if (enTerm) {
+      const enHit = await queryWikipediaByKeyword(enTerm, 'en.wikipedia.org');
+      if (enHit.sentences.length >= 2) {
+        const translatedSentences = await Promise.all(
+          enHit.sentences.slice(0, 8).map(async (s) => {
+            const tr = await translateToTargetLang(s, targetWikiLang);
+            return tr || s;
+          })
+        );
+        const trTitle = (await translateToTargetLang(enHit.title || enTerm, targetWikiLang)) || enHit.title;
+        return {
+          title: trTitle,
+          sentences: translatedSentences.filter((s) => s.length >= 12),
+          englishTitle: enHit.title,
+          articleUrl: enHit.articleUrl,
+          sourceWikiLang: 'en',
+        };
+      }
+    }
+  }
+
+  return { sentences: [] };
+}
+
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function isCleanEncyclopediaTitle(title: string, desc = ''): boolean {
+  const combined = `${title} ${desc}`.toLowerCase();
+  if (title.trim().length < 3 || /^\d+$/.test(title.trim())) return false;
+  if (
+    /^(main page|trang chính|メインページ|special:|wikipedia:|portal:|chủ đề:|thể loại:|category:|tập tin:|file:|template:|list of |danh sách )/i.test(
+      title.trim()
+    )
+  ) {
+    return false;
+  }
+  if (/(định hướng|disambiguation|曖昧さ回避|trang định hướng wikimedia)/i.test(combined)) {
+    return false;
+  }
+  if (/\b(xxx|porn|pornography|sex|sexual|erotic|nude|nudity|hentai)\b|(?:giao phối|tình dục|khiêu dâm|khỏa thân|アダルト|性交)/i.test(combined)) {
+    return false;
+  }
+  return true;
+}
+
+async function fetchGoogleNewsSnippets(
+  query: string,
+  language: LanguageCode
+): Promise<Array<{ title: string; url: string; source?: string }>> {
+  const hl = language === 'ja' || language === 'ja_en' ? 'ja' : language === 'en' ? 'en' : 'vi';
+  const gl = hl === 'ja' ? 'JP' : hl === 'en' ? 'US' : 'VN';
+  const ceid = `${gl}:${hl}`;
+  const cleanQ = extractCoreWikiQuery(query) || query.trim();
+  const rssUrl = cleanQ
+    ? `https://news.google.com/rss/search?q=${encodeURIComponent(cleanQ)}&hl=${hl}&gl=${gl}&ceid=${ceid}`
+    : `https://news.google.com/rss?hl=${hl}&gl=${gl}&ceid=${ceid}`;
+  const queryTokens = cleanQ
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !/^(the|and|for|của|những|trong|về|một|các|nhiều|này|với)$/i.test(w));
+
+  try {
+    const res = await fetchWithTimeout(rssUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 4500);
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const items = xml.match(/<item>[\s\S]*?<\/item>/gi) ?? [];
+    const out: Array<{ title: string; url: string; source?: string }> = [];
+    for (const itemXml of items.slice(0, 8)) {
+      const titleMatch = itemXml.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
+      const linkMatch = itemXml.match(/<link>([\s\S]*?)<\/link>/i);
+      const sourceMatch = itemXml.match(/<source[^>]*>([\s\S]*?)<\/source>/i);
+      const rawTitle = decodeHtmlEntities((titleMatch?.[1] ?? '').trim())
+        .replace(/\s+-\s+[^-]+$/, '')
+        .trim();
+      const url = (linkMatch?.[1] ?? '').trim();
+      if (rawTitle.length < 10 || !url || !isTopicPureForLanguage(rawTitle, language)) continue;
+      if (queryTokens.length > 0) {
+        const lowerTitle = rawTitle.toLowerCase();
+        const matchesQuery =
+          lowerTitle.includes(cleanQ.toLowerCase()) ||
+          (queryTokens.length > 3 &&
+            queryTokens.filter((t) =>
+              new RegExp(`(?:^|[^\\p{L}])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^\\p{L}])`, 'iu').test(rawTitle)
+            ).length >= 3);
+        if (!matchesQuery) continue;
+      }
+      out.push({
+        title: rawTitle,
+        url,
+        source: sourceMatch?.[1] ? decodeHtmlEntities(sourceMatch[1].trim()) : undefined,
+      });
+      if (out.length >= 4) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function discoverRealWikipediaTopics(
+  query: string,
+  language: LanguageCode
+): Promise<{ topics: TopicSuggestion[]; sources: GroundingSource[] }> {
+  const wikiLang: 'vi' | 'en' | 'ja' =
+    language === 'ja' || language === 'ja_en' ? 'ja' : language === 'en' ? 'en' : 'vi';
+  const wikiHost = `${wikiLang}.wikipedia.org`;
+  const topics: TopicSuggestion[] = [];
+  const sources: GroundingSource[] = [];
+  const seen = new Set<string>();
+
+  if (query.trim()) {
+    try {
+      const searchUrl = `https://${wikiHost}/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query.trim())}&gsrlimit=8&prop=extracts|info&exintro=1&explaintext=1&exsentences=2&inprop=url&format=json`;
+      const res = await fetchWithTimeout(searchUrl, { headers: { 'User-Agent': 'MoneyPrinterTurboVN/2.0' } }, 5000);
+      if (res.ok) {
+        const json = (await res.json()) as {
+          query?: {
+            pages?: Record<
+              string,
+              { title: string; extract?: string; fullurl?: string }
+            >;
+          };
+        };
+        const pages = Object.values(json.query?.pages ?? {});
+        for (const p of pages) {
+          const title = p.title?.trim();
+          if (
+            !title ||
+            seen.has(title.toLowerCase()) ||
+            !isTopicPureForLanguage(title, language) ||
+            !isCleanEncyclopediaTitle(title, p.extract ?? '')
+          ) {
+            continue;
+          }
+          seen.add(title.toLowerCase());
+          const url =
+            p.fullurl || `https://${wikiHost}/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+          const firstSentence = (p.extract ?? '')
+            .split(/(?<=[.!?。！？])\s+/)[0]
+            ?.trim()
+            .slice(0, 110);
+          topics.push({
+            title,
+            angle: firstSentence
+              ? `Wikipedia có thực: ${firstSentence}`
+              : 'Bài viết bách khoa Wikipedia có thực',
+            sourceType: 'ai',
+            sourceUrl: url,
+          });
+          sources.push({ title: `Wikipedia: ${title}`, url });
+          if (topics.length >= 6) break;
+        }
+      }
+    } catch {
+      // Ignore Wikipedia search error
+    }
+    return { topics, sources };
+  }
+
+  // No query -> fetch today's real Wikipedia Featured / Most Read / On-This-Day articles!
+  const now = new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(now.getUTCDate()).padStart(2, '0');
+  try {
+    const feedUrl = `https://${wikiHost}/api/rest_v1/feed/featured/${yyyy}/${mm}/${dd}`;
+    const res = await fetchWithTimeout(feedUrl, { headers: { 'User-Agent': 'MoneyPrinterTurboVN/2.0' } }, 5500);
+    if (res.ok) {
+      const feed = (await res.json()) as {
+        tfa?: {
+          normalizedtitle?: string;
+          title?: string;
+          description?: string;
+          extract?: string;
+          content_urls?: { desktop?: { page?: string } };
+        };
+        mostread?: {
+          articles?: Array<{
+            normalizedtitle?: string;
+            title?: string;
+            description?: string;
+            extract?: string;
+            content_urls?: { desktop?: { page?: string } };
+          }>;
+        };
+        onthisday?: Array<{
+          year?: number;
+          text?: string;
+          pages?: Array<{
+            normalizedtitle?: string;
+            title?: string;
+            content_urls?: { desktop?: { page?: string } };
+          }>;
+        }>;
+      };
+
+      const pushWikiArticle = (
+        rawTitle?: string,
+        desc?: string,
+        url?: string,
+        prefix = 'Bài viết Wikipedia có thực'
+      ) => {
+        const title = (rawTitle ?? '').replace(/_/g, ' ').trim();
+        if (!isCleanEncyclopediaTitle(title, desc)) {
+          return;
+        }
+        if (seen.has(title.toLowerCase()) || !isTopicPureForLanguage(title, language)) return;
+        seen.add(title.toLowerCase());
+        const resolvedUrl =
+          url || `https://${wikiHost}/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+        topics.push({
+          title,
+          angle: desc ? `${prefix}: ${desc.slice(0, 90)}` : prefix,
+          sourceType: 'ai',
+          sourceUrl: resolvedUrl,
+        });
+        sources.push({ title: `Wikipedia: ${title}`, url: resolvedUrl });
+      };
+
+      if (feed.tfa) {
+        pushWikiArticle(
+          feed.tfa.normalizedtitle || feed.tfa.title,
+          feed.tfa.description || feed.tfa.extract,
+          feed.tfa.content_urls?.desktop?.page,
+          'Bài chọn lọc có thực'
+        );
+      }
+
+      const otdList = feed.onthisday ?? [];
+      for (const ev of otdList.slice(0, 3)) {
+        const p = ev.pages?.[0];
+        if (ev.text && ev.year && isTopicPureForLanguage(ev.text, language)) {
+          const evTitle = p?.normalizedtitle || p?.title || ev.text.slice(0, 75);
+          pushWikiArticle(
+            evTitle,
+            `Ngày này năm ${ev.year}: ${ev.text}`,
+            p?.content_urls?.desktop?.page,
+            'Sự kiện lịch sử có thật'
+          );
+        }
+      }
+
+      const mostRead = [...(feed.mostread?.articles ?? [])];
+      for (let i = mostRead.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [mostRead[i], mostRead[j]] = [mostRead[j], mostRead[i]];
+      }
+      for (const art of mostRead) {
+        if (topics.length >= 6) break;
+        pushWikiArticle(
+          art.normalizedtitle || art.title,
+          art.description || art.extract,
+          art.content_urls?.desktop?.page,
+          'Đọc nhiều trên Wikipedia'
+        );
+      }
+    }
+  } catch {
+    // Ignore feed error
+  }
+
+  return { topics, sources };
+}
+
+const ROTATING_SEEDS: Record<'ja' | 'en' | 'vi', string[]> = {
+  ja: ['宇宙の謎 雑学', '心理学 面白い事実', '世界の歴史 不思議', '最新の科学技術 トレンド'],
+  en: ['psychology facts human brain', 'space discoveries astronomy', 'ancient history mysteries', 'everyday physics secrets'],
+  vi: ['bí ẩn vũ trụ khoa học', 'tâm lý học hành vi thú vị', 'lịch sử thế giới ít người biết', 'công nghệ tương lai đời sống'],
+};
+
+async function discoverTopicsViaGoogleFree(
+  query: string,
+  language: LanguageCode
+): Promise<{ topics: TopicSuggestion[]; sources: GroundingSource[] }> {
+  const hl = language === 'ja' ? 'ja' : language === 'en' ? 'en' : 'vi';
+  const gl = language === 'ja' ? 'JP' : language === 'en' ? 'US' : 'VN';
+  const ceid = language === 'ja' ? 'JP:ja' : language === 'en' ? 'US:en' : 'VN:vi';
+  const pool = ROTATING_SEEDS[hl];
+  const seed = query.trim() || pool[Math.floor(Math.random() * pool.length)];
+
+  const topics: TopicSuggestion[] = [];
+  const sources: GroundingSource[] = [];
+  const seen = new Set<string>();
+
+  const [suggestRes, newsRes] = await Promise.allSettled([
+    fetchWithTimeout(
+      `https://suggestqueries.google.com/complete/search?client=firefox&hl=${hl}&gl=${gl}&q=${encodeURIComponent(seed)}`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' } },
+      4500
+    ),
+    fetchWithTimeout(
+      query.trim()
+        ? `https://news.google.com/rss/search?q=${encodeURIComponent(seed)}&hl=${hl}&gl=${gl}&ceid=${ceid}`
+        : `https://news.google.com/rss?hl=${hl}&gl=${gl}&ceid=${ceid}`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' } },
+      5000
+    ),
+  ]);
+
+  if (newsRes.status === 'fulfilled' && newsRes.value.ok) {
+    try {
+      const xml = await newsRes.value.text();
+      const items = xml.match(/<item>[\s\S]*?<\/item>/gi) ?? [];
+      for (const itemXml of items.slice(0, 8)) {
+        const titleMatch = itemXml.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
+        const linkMatch = itemXml.match(/<link>([\s\S]*?)<\/link>/i);
+        const rawTitle = decodeHtmlEntities((titleMatch?.[1] ?? '').trim())
+          .replace(/\s+-\s+[^-]+$/, '')
+          .trim();
+        const url = (linkMatch?.[1] ?? '').trim();
+        if (
+          rawTitle.length >= 8 &&
+          isTopicPureForLanguage(rawTitle, language) &&
+          !seen.has(rawTitle.toLowerCase())
+        ) {
+          seen.add(rawTitle.toLowerCase());
+          topics.push({
+            title: rawTitle,
+            angle: 'Tin tức & xu hướng từ Google News',
+            sourceType: 'google_search',
+            sourceUrl: url || undefined,
+          });
+          if (url) {
+            sources.push({ title: rawTitle, url });
+          }
+        }
+        if (topics.length >= 4) break;
+      }
+    } catch {
+      // Ignore XML parse failure
+    }
+  }
+
+  if (suggestRes.status === 'fulfilled' && suggestRes.value.ok) {
+    try {
+      const json = (await suggestRes.value.json()) as [string, string[]];
+      const suggestions = Array.isArray(json?.[1]) ? json[1] : [];
+      for (const s of suggestions) {
+        const clean = String(s).trim();
+        if (
+          clean.length >= 4 &&
+          isTopicPureForLanguage(clean, language) &&
+          !seen.has(clean.toLowerCase())
+        ) {
+          seen.add(clean.toLowerCase());
+          topics.push({
+            title: clean,
+            angle: 'Gợi ý tìm kiếm phổ biến trên Google',
+            sourceType: 'google_search',
+            sourceUrl: `https://www.google.com/search?q=${encodeURIComponent(clean)}`,
+          });
+        }
+        if (topics.length >= 6) break;
+      }
+    } catch {
+      // Ignore autocomplete parse failure
+    }
+  }
+
+  return { topics, sources };
+}
+
+const CURATED_KNOWLEDGE_TOPICS: Record<'ja' | 'en' | 'vi', TopicSuggestion[]> = {
+  ja: [
+    { title: 'なぜ人間は寝ている間に記憶を整理できるのか？', angle: '脳科学・雑学', sourceType: 'ai' },
+    { title: '宇宙空間で音がまったく聞こえない本当の理由', angle: '物理・宇宙', sourceType: 'ai' },
+    { title: '古代ローマのコンクリートが2000年以上崩れない秘密', angle: '歴史・建築', sourceType: 'ai' },
+    { title: '東京の鉄道が秒単位で正確に運行できる驚きの仕組み', angle: 'テクノロジー・日本', sourceType: 'ai' },
+    { title: '猫が狭い箱にどうしても入りたがる心理学的な理由', angle: '動物行動学', sourceType: 'ai' },
+    { title: '飛行機が雲の上を飛ぶと揺れが少なくなる科学', angle: '日常の科学', sourceType: 'ai' },
+    { title: '世界で最もお金持ちが実践している朝の3つの習慣', angle: 'ライフハック', sourceType: 'ai' },
+    { title: '南極の氷の下に眠る知られざる湖のミステリー', angle: '地球の謎', sourceType: 'ai' },
+  ],
+  en: [
+    { title: 'Why Your Brain Deletes Most Memories While You Sleep', angle: 'Neuroscience hook', sourceType: 'ai' },
+    { title: 'How Ancient Roman Concrete Heals Its Own Cracks', angle: 'History & engineering', sourceType: 'ai' },
+    { title: 'Why Time Feels Twice As Fast After Age 30', angle: 'Psychology insight', sourceType: 'ai' },
+    { title: 'What Really Happens Inside A Black Hole Horizon', angle: 'Space physics', sourceType: 'ai' },
+    { title: '3 Tiny Morning Habits That Rewire Focus In 10 Minutes', angle: 'Productivity tips', sourceType: 'ai' },
+    { title: 'The Japanese Train Engineering Trick Behind Zero Delays', angle: 'Engineering marvel', sourceType: 'ai' },
+    { title: 'Why Glass Is Technically Neither Solid Nor Liquid', angle: 'Everyday science', sourceType: 'ai' },
+    { title: 'The Lost Underground Cities Built Thousands Of Years Ago', angle: 'Ancient mystery', sourceType: 'ai' },
+  ],
+  vi: [
+    { title: 'Vì sao não bộ tự xóa bớt ký ức cũ mỗi đêm bạn ngủ?', angle: 'Khoa học thần kinh', sourceType: 'ai' },
+    { title: 'Bí mật khiến bê tông La Mã cổ đại bền vững hơn 2.000 năm', angle: 'Lịch sử & Kỹ thuật', sourceType: 'ai' },
+    { title: 'Tại sao càng trưởng thành ta càng thấy 1 năm trôi qua nhanh hơn?', angle: 'Tâm lý học nhận thức', sourceType: 'ai' },
+    { title: 'Điều gì thực sự xảy ra nếu Trái Đất ngừng quay trong 1 giây?', angle: 'Vật lý giả tưởng', sourceType: 'ai' },
+    { title: '3 thói quen 10 phút giúp tỉnh táo gấp đôi mà không cần cà phê', angle: 'Mẹo hiệu suất', sourceType: 'ai' },
+    { title: 'Bí ẩn thành phố ngầm khổng lồ chứa 20.000 người dưới lòng đất Thổ Nhĩ Kỳ', angle: 'Khám phá cổ đại', sourceType: 'ai' },
+    { title: 'Tại sao máy bay thương mại luôn bay ở độ cao 10.000 mét?', angle: 'Khoa học hàng không', sourceType: 'ai' },
+    { title: 'Nghịch lý kinh tế: Vì sao sản phẩm càng đắt lại càng bán chạy?', angle: 'Kinh tế & Hành vi', sourceType: 'ai' },
+  ],
+};
+
+function buildFallbackTopics(query: string, language: LanguageCode): TopicSuggestion[] {
+  const clean = query.trim();
+  const targetLang: 'ja' | 'en' | 'vi' =
+    language === 'ja' ? 'ja' : language === 'en' ? 'en' : 'vi';
+
+  if (clean && isTopicPureForLanguage(clean, language)) {
+    if (targetLang === 'ja') {
+      return [
+        { title: `${clean}に隠された意外と知らない3つの事実`, angle: '雑学・フック3秒', sourceType: 'ai' },
+        { title: `なぜ${clean}は多くの専門家から注目されているのか？`, angle: 'ストーリー解説', sourceType: 'ai' },
+        { title: `${clean}の仕組みを30秒でわかりやすく解説`, angle: '時短解説', sourceType: 'ai' },
+        { title: `${clean}の知られざる歴史と未来のトレンド`, angle: 'トレンド分析', sourceType: 'ai' },
+      ];
+    }
+    if (targetLang === 'en') {
+      return [
+        { title: `3 Surprising Facts About ${clean} Most People Miss`, angle: 'Curiosity hook', sourceType: 'ai' },
+        { title: `The Hidden Science Behind ${clean}`, angle: 'Visual explainer', sourceType: 'ai' },
+        { title: `How ${clean} Quietly Shapes Our Everyday World`, angle: 'Storytelling', sourceType: 'ai' },
+        { title: `What Happens When You Look Closer at ${clean}?`, angle: 'Short documentary', sourceType: 'ai' },
+      ];
+    }
+    return [
+      { title: `3 sự thật bất ngờ về ${clean} ít người từng nghe`, angle: 'Hook tò mò 3 giây', sourceType: 'ai' },
+      { title: `Khoa học giải mã bí ẩn đằng sau ${clean}`, angle: 'Giải thích trực quan', sourceType: 'ai' },
+      { title: `Điều gì xảy ra nếu nhìn cận cảnh vào ${clean}?`, angle: 'Kể chuyện cuốn hút', sourceType: 'ai' },
+      { title: `Những góc nhìn mới nhất về ${clean} năm nay`, angle: 'Xu hướng nổi bật', sourceType: 'ai' },
+    ];
+  }
+
+  // Rotate curated knowledge pool so every discovery yields fresh, non-repetitive topics
+  const pool = [...CURATED_KNOWLEDGE_TOPICS[targetLang]];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, 5);
 }
 
 /**
@@ -775,17 +1416,21 @@ async function resolveSceneAssets(params: {
   scenePrompts: string[];
   materialSource: MaterialSource;
   aspectRatio: VideoAspectRatio;
+  videoQuality?: VideoQuality;
   selectedMediaIds: string[];
+  customScenes?: ScenePreviewItem[];
   onLog?: (msg: string) => void;
 }): Promise<{ cacheKey: string; assets: ResolvedSceneAsset[] }> {
-  const sentences = splitScriptSentences(params.script);
+  const rawSentences = splitScriptSentences(params.script)
+    .map((s) => stripNarrationTags(s))
+    .filter(Boolean);
   const effectiveSentences =
-    sentences.length > 0 ? sentences : [params.subject || 'Khám phá điều kỳ diệu quanh ta'];
+    rawSentences.length > 0 ? rawSentences : [params.subject || 'Khám phá điều kỳ diệu quanh ta'];
 
   // Preserve user/AI-provided English terms directly! Only translate if empty or non-ASCII.
   let searchTerms = params.terms.map((t) => t.trim()).filter((t) => t.length >= 2 && /^[\x00-\x7F\s,.-]+$/.test(t));
   if (searchTerms.length === 0) {
-    const translatedSubject = await translateViToEn(params.subject);
+    const translatedSubject = await translateToEn(params.subject);
     if (translatedSubject) {
       searchTerms = [translatedSubject];
     } else {
@@ -810,7 +1455,103 @@ async function resolveSceneAssets(params: {
 
   const sceneCacheDir = path.join(CACHE_DIR, cacheKey);
   fs.mkdirSync(sceneCacheDir, { recursive: true });
-  const { width, height } = getCanvasDimensions(params.aspectRatio);
+  const { width, height } = getCanvasDimensions(
+    params.aspectRatio,
+    params.videoQuality ?? '720p'
+  );
+
+  // If user edited/replaced/deleted scenes in the storyboard, honor them directly!
+  if (params.customScenes && params.customScenes.length > 0) {
+    const customResolved: ResolvedSceneAsset[] = [];
+    for (let idx = 0; idx < params.customScenes.length; idx++) {
+      const scene = params.customScenes[idx];
+      const url = scene.previewUrl ?? '';
+      if (url.startsWith('/files/uploads/')) {
+        const fname = sanitizeName(decodeURIComponent(url.replace('/files/uploads/', '')));
+        const localPath = path.join(UPLOADS_DIR, fname);
+        if (fs.existsSync(localPath)) {
+          customResolved.push({
+            index: idx,
+            sentence: scene.sentence || effectiveSentences[idx % effectiveSentences.length],
+            prompt: scene.prompt,
+            kind: scene.kind,
+            localPath,
+            previewUrl: url,
+            thumbUrl: scene.thumbUrl,
+            sourceLabel: scene.sourceLabel || 'Tệp tải lên',
+          });
+          continue;
+        }
+      } else if (url.startsWith('/files/cache/')) {
+        const rel = url.replace('/files/cache/', '').replace(/\.\./g, '');
+        const localPath = path.join(CACHE_DIR, rel);
+        if (fs.existsSync(localPath)) {
+          customResolved.push({
+            index: idx,
+            sentence: scene.sentence || effectiveSentences[idx % effectiveSentences.length],
+            prompt: scene.prompt,
+            kind: scene.kind,
+            localPath,
+            previewUrl: url,
+            thumbUrl: scene.thumbUrl,
+            sourceLabel: scene.sourceLabel,
+          });
+          continue;
+        }
+      } else if (url.startsWith('http://') || url.startsWith('https://')) {
+        if (scene.kind === 'video' && url.includes('mixkit.co')) {
+          customResolved.push({
+            index: idx,
+            sentence: scene.sentence || effectiveSentences[idx % effectiveSentences.length],
+            prompt: scene.prompt,
+            kind: 'video',
+            localPath: '',
+            remoteUrl: url,
+            previewUrl: url,
+            thumbUrl: scene.thumbUrl,
+            sourceLabel: scene.sourceLabel || 'Mixkit Stock HD',
+          });
+          continue;
+        }
+        const ext = scene.kind === 'image' ? '.jpg' : '.mp4';
+        const customFile = `custom_${crypto.createHash('sha1').update(url).digest('hex').slice(0, 10)}${ext}`;
+        const customPath = path.join(sceneCacheDir, customFile);
+        const ok = await downloadRemoteMedia(url, scene.kind, customPath);
+        if (ok) {
+          customResolved.push({
+            index: idx,
+            sentence: scene.sentence || effectiveSentences[idx % effectiveSentences.length],
+            prompt: scene.prompt,
+            kind: scene.kind,
+            localPath: customPath,
+            previewUrl: `/files/cache/${cacheKey}/${customFile}`,
+            thumbUrl: scene.thumbUrl,
+            sourceLabel: scene.sourceLabel,
+          });
+          continue;
+        }
+        if (scene.kind === 'video') {
+          customResolved.push({
+            index: idx,
+            sentence: scene.sentence || effectiveSentences[idx % effectiveSentences.length],
+            prompt: scene.prompt,
+            kind: 'video',
+            localPath: '',
+            remoteUrl: url,
+            previewUrl: url,
+            thumbUrl: scene.thumbUrl,
+            sourceLabel: scene.sourceLabel,
+          });
+          continue;
+        }
+      }
+    }
+
+    if (customResolved.length > 0) {
+      params.onLog?.(`Sử dụng ${customResolved.length} phân cảnh đã chọn/chỉnh sửa.`);
+      return { cacheKey, assets: customResolved };
+    }
+  }
 
   // Local upload mode
   if (params.materialSource === 'local_upload') {
@@ -1166,51 +1907,79 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       'Bắt đầu quy trình dựng video chuẩn MoneyPrinterTurbo.'
     );
 
-    const sentences = splitScriptSentences(config.script);
-    if (sentences.length === 0) {
+    const segments = planNarrationSegments(config);
+    if (segments.length === 0) {
       throw new Error('Nội dung lời thoại đang trống.');
     }
 
-    // 1. Synthesize each sentence individually so voice cues & scene visuals sync 1-to-1
+    const usedVoices = Array.from(new Set(segments.map((s) => s.voiceId)));
+    if (usedVoices.length > 1) {
+      updateJob(
+        jobId,
+        {},
+        `Chế độ 2 giọng đọc đang bật: kết hợp ${usedVoices.join(' + ')} theo từng câu.`
+      );
+    }
+
+    // 1. Synthesize each segment with its resolved voiceId & insert thinking pauses where specified
     const cues: SubtitleCue[] = [];
     const audioParts: string[] = [];
     let cursorSec = 0;
     let loggedRecovery = false;
 
-    for (let i = 0; i < sentences.length; i++) {
-      const sentence = sentences[i];
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
       const partPath = path.join(workDir, `tts_${i}.mp3`);
       const ttsRes = await synthesizeChunkWithFallback({
-        text: sentence,
-        voiceId: config.voiceId,
+        text: seg.text,
+        voiceId: seg.voiceId,
         ttsProvider: config.ttsProvider,
         voiceRate: config.voiceRate,
         outPath: partPath,
       });
 
-      if (ttsRes.recoveredFromEdgeError && !loggedRecovery) {
+      if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
         loggedRecovery = true;
         updateJob(
           jobId,
           {},
-          'Đã phát hiện lỗi Edge-TTS (Microsoft 403) -> tự chuyển sang Google TTS Miễn phí.'
+          ttsRes.fallbackNote ??
+            'Đã phát hiện lỗi Edge-TTS (Microsoft 403) -> tự chuyển sang Google TTS Miễn phí.'
         );
       }
 
       const dur = await probeDurationSec(partPath);
       cues.push({
-        index: i + 1,
+        index: cues.length + 1,
         startSec: cursorSec,
         endSec: cursorSec + dur,
-        text: sentence,
+        text: seg.text,
+        voiceSlot: seg.voiceSlot,
       });
       audioParts.push(partPath);
       cursorSec += dur;
 
-      const pct = 8 + Math.round(((i + 1) / sentences.length) * 20);
+      if (seg.pauseAfterSec > 0) {
+        const pausePath = path.join(workDir, `pause_${i}.mp3`);
+        await createSilenceMp3(seg.pauseAfterSec, pausePath);
+        const pauseDur = await probeDurationSec(pausePath);
+        audioParts.push(pausePath);
+        if (config.scriptStyle === 'language_challenge' || config.scriptStyle === 'quiz_riddle') {
+          cues.push({
+            index: cues.length + 1,
+            startSec: cursorSec,
+            endSec: cursorSec + pauseDur,
+            text: '⏱ 3... 2... 1...',
+            voiceSlot: 'primary',
+          });
+        }
+        cursorSec += pauseDur;
+      }
+
+      const pct = 8 + Math.round(((i + 1) / segments.length) * 20);
       updateJob(jobId, {
         progressPct: pct,
-        stepLabel: `Đang tạo giọng đọc câu ${i + 1}/${sentences.length}...`,
+        stepLabel: `Đang tạo giọng đọc ${i + 1}/${segments.length} (${seg.detectedLang.toUpperCase()})...`,
       });
     }
 
@@ -1221,19 +1990,37 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       'utf-8'
     );
     const voiceAllPath = path.join(workDir, 'voice_all.mp3');
+    // Re-encode mono 24kHz so multiple TTS voices & silence segments merge cleanly with exact timing
     await runFfmpeg(
-      ['-y', '-f', 'concat', '-safe', '0', '-i', voiceListPath, '-c', 'copy', voiceAllPath],
-      20000
+      [
+        '-y',
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        voiceListPath,
+        '-ar',
+        '24000',
+        '-ac',
+        '1',
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '96k',
+        voiceAllPath,
+      ],
+      30000
     );
 
     const totalVoiceSec = Math.max(3, await probeDurationSec(voiceAllPath));
     updateJob(
       jobId,
       { progressPct: 32, stepLabel: 'Đang tìm video & ảnh AI khớp từng câu lời thoại...' },
-      `Đã hoàn tất giọng đọc (${totalVoiceSec.toFixed(1)}s, ${cues.length} phân cảnh).`
+      `Đã hoàn tất giọng đọc (${totalVoiceSec.toFixed(1)}s, ${segments.length} nhịp đọc, ${usedVoices.length} giọng).`
     );
 
-    // 2. Resolve real per-sentence visual assets (Archive.org MP4 + Wikimedia + Pollinations AI scenes)
+    // 2. Resolve real per-sentence visual assets (honoring custom edited scenes first)
     const { assets } = await resolveSceneAssets({
       subject: config.subject,
       script: config.script,
@@ -1241,7 +2028,9 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       scenePrompts: config.scenePrompts ?? [],
       materialSource: config.materialSource,
       aspectRatio: config.aspectRatio,
+      videoQuality: config.videoQuality,
       selectedMediaIds: config.selectedMediaIds,
+      customScenes: config.customScenes,
       onLog: (msg) => updateJob(jobId, {}, msg),
     });
 
@@ -1266,7 +2055,11 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     );
 
     // 3. Plan lively ~3-3.5s B-roll cuts across the narration (splitting long sentences into 2 distinct video beats!)
-    const { width, height } = getCanvasDimensions(config.aspectRatio);
+    const { width, height } = getCanvasDimensions(
+      config.aspectRatio,
+      config.videoQuality ?? '720p'
+    );
+    const qualityParams = getQualityEncodingParams(config.videoQuality ?? '720p');
     const usePerSentenceAlignment = config.concatMode === 'sequential';
     const fadeDur = config.transitionMode !== 'none' && cues.length > 1 ? 0.3 : 0;
 
@@ -1431,7 +2224,9 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     // 5. Split long cues into punchy 1-2 line subtitles & mix voiceover + BGM
     updateJob(jobId, { progressPct: 82, stepLabel: 'Đang gắn phụ đề tiếng Việt & trộn nhạc nền...' });
 
-    const shortSubCues = splitCueIntoShortSubCues(cues, width < height ? 38 : 54);
+    const hasCjkSub = cues.some((c) => hasCjkChars(c.text));
+    const wrapBudget = getSubtitleWrapBudget(config.subtitle, width, height, hasCjkSub);
+    const shortSubCues = splitCueIntoShortSubCues(cues, wrapBudget.maxCueChars);
     const srtContent = buildSrtFromCues(shortSubCues);
     const srtFilename = `${jobId}.srt`;
     const srtOutPath = path.join(OUTPUTS_DIR, srtFilename);
@@ -1465,20 +2260,28 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       finalArgs.push('-stream_loop', '-1', '-i', bgmPath);
     }
 
-    if (config.subtitle.enabled) {
-      finalArgs.push('-vf', `ass='${escapedAss}'`);
-    }
-
     if (bgmPath) {
+      const filters: string[] = [];
+      if (config.subtitle.enabled) {
+        filters.push(`[0:v]ass='${escapedAss}'[vout]`);
+      }
+      filters.push(
+        `[1:a]volume=${voiceVol.toFixed(2)}[va]`,
+        `[2:a]volume=${bgmVol.toFixed(2)}[ba]`,
+        `[va][ba]amix=inputs=2:duration=first:dropout_transition=2[aout]`
+      );
       finalArgs.push(
         '-filter_complex',
-        `[1:a]volume=${voiceVol.toFixed(2)}[va];[2:a]volume=${bgmVol.toFixed(2)}[ba];[va][ba]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+        filters.join(';'),
         '-map',
-        '0:v',
+        config.subtitle.enabled ? '[vout]' : '0:v',
         '-map',
         '[aout]'
       );
     } else {
+      if (config.subtitle.enabled) {
+        finalArgs.push('-vf', `ass='${escapedAss}'`);
+      }
       finalArgs.push('-af', `volume=${voiceVol.toFixed(2)}`, '-map', '0:v', '-map', '1:a');
     }
 
@@ -1488,19 +2291,29 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       '-c:v',
       'libx264',
       '-preset',
-      'veryfast',
+      'fast',
+      '-profile:v',
+      'main',
+      '-level',
+      '4.0',
+      '-crf',
+      qualityParams.crf,
+      '-maxrate',
+      qualityParams.maxrate,
+      '-bufsize',
+      qualityParams.bufsize,
       '-pix_fmt',
       'yuv420p',
       '-c:a',
       'aac',
       '-b:a',
-      '128k',
+      qualityParams.audioBitrate,
       '-movflags',
       '+faststart',
       mp4OutPath
     );
 
-    await runFfmpeg(finalArgs, 90000);
+    await runFfmpeg(finalArgs, 180000);
 
     const stat = fs.statSync(mp4OutPath);
     const finalDur = await probeDurationSec(mp4OutPath);
@@ -1556,10 +2369,38 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
 
-  app.use('/files/outputs', express.static(OUTPUTS_DIR));
+  app.use(
+    '/files/outputs',
+    express.static(OUTPUTS_DIR, {
+      acceptRanges: true,
+      setHeaders: (res, filePath) => {
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        if (filePath.endsWith('.mp4')) {
+          res.setHeader('Content-Type', 'video/mp4');
+        } else if (filePath.endsWith('.srt')) {
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        }
+      },
+    })
+  );
   app.use('/files/uploads', express.static(UPLOADS_DIR));
   app.use('/files/bgm', express.static(BGM_DIR));
   app.use('/files/cache', express.static(CACHE_DIR));
+
+  // Forced-attachment download endpoint so downloading works reliably inside iframes & browsers
+  app.get('/api/download/:filename', (req, res) => {
+    const safeFile = sanitizeName(req.params.filename);
+    const fullPath = path.join(OUTPUTS_DIR, safeFile);
+    if (!fs.existsSync(fullPath)) {
+      res.status(404).json({ error: 'Không tìm thấy tệp video hoặc phụ đề.' });
+      return;
+    }
+    const requestedName = sanitizeName(String(req.query.name || safeFile));
+    res.setHeader('Cache-Control', 'no-store');
+    res.download(fullPath, requestedName);
+  });
 
   void ensureBuiltinBgm();
 
@@ -1599,15 +2440,224 @@ async function startServer() {
       ollamaReachable: ollamaModels.length > 0,
       ollamaModels,
       builtinBgmReady: fs.existsSync(path.join(BGM_DIR, 'lofi_chill.mp3')),
+      elevenLabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY?.trim()),
     });
   });
 
-  // 2. Upgraded AI Script + Terms + Per-Sentence Scene Prompts (MoneyPrinterTurbo standard)
+  // 2a. Discover Video Topics via AI or Google Search (with Gemini Grounding + Free Fallbacks)
+  app.post('/api/topics/discover', async (req, res) => {
+    const mode = req.body?.mode === 'google_search' ? 'google_search' : 'ai';
+    const rawQuery = String(req.body?.query ?? '').trim();
+    const language = (req.body?.language ?? 'vi') as LanguageCode;
+    const langLabel =
+      language === 'ja'
+        ? '100% tiếng Nhật (日本語)'
+        : language === 'en'
+        ? '100% tiếng Anh (English)'
+        : language === 'vi_ja'
+        ? 'song ngữ Việt-Nhật (học tiếng Nhật)'
+        : language === 'ja_en'
+        ? 'song ngữ Nhật-Anh (học tiếng Anh cho người Nhật)'
+        : language === 'bilingual'
+        ? 'song ngữ Việt-Anh (học tiếng Anh)'
+        : '100% tiếng Việt';
+
+    // Translate user seed keyword into target language if it contains mismatched Vietnamese script
+    let query = rawQuery;
+    if (rawQuery && (language === 'ja' || language === 'en') && hasVietnameseDiacritics(rawQuery)) {
+      const translated = await translateToTargetLang(rawQuery, language);
+      query = translated || '';
+    }
+
+    const ai = getGeminiClient();
+
+    if (mode === 'google_search') {
+      if (ai) {
+        try {
+          const searchPrompt = query
+            ? `Tìm kiếm trên Google các thông tin, sự thật thú vị hoặc xu hướng mới nhất liên quan đến "${query}". Sau đó đề xuất 5 chủ đề video ngắn (TikTok / Shorts / Reels) hấp dẫn viết bằng ${langLabel}. Trả về JSON array gồm các object có "title" và "angle".`
+            : `Tìm kiếm trên Google các chủ đề khoa học, công nghệ, khám phá hoặc xu hướng nổi bật đang được quan tâm hiện nay. Đề xuất 5 chủ đề video ngắn hấp dẫn viết bằng ${langLabel}. Trả về JSON array gồm các object có "title" và "angle".`;
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: searchPrompt,
+            config: {
+              tools: [{ googleSearch: {} }],
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    angle: { type: Type.STRING },
+                  },
+                  required: ['title', 'angle'],
+                },
+              },
+            },
+          });
+
+          const parsed = JSON.parse((response.text ?? '[]').trim()) as Array<{
+            title: string;
+            angle: string;
+          }>;
+          const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+          const sources: GroundingSource[] = chunks
+            .map((c) => ({
+              title: c.web?.title || 'Nguồn Google Search',
+              url: c.web?.uri || '',
+            }))
+            .filter((s) => Boolean(s.url))
+            .slice(0, 5);
+
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const topics: TopicSuggestion[] = parsed.slice(0, 6).map((item, idx) => ({
+              title: String(item.title).trim(),
+              angle: String(item.angle).trim(),
+              sourceType: 'google_search',
+              sourceUrl: sources[idx]?.url,
+            }));
+            res.json({
+              topics,
+              sources,
+              providerUsed: 'Gemini + Google Search Grounding',
+            });
+            return;
+          }
+        } catch {
+          // Fall through cleanly to keyless Google Search Suggest + Google News RSS
+        }
+      }
+
+      const freeGoogle = await discoverTopicsViaGoogleFree(query, language);
+      if (freeGoogle.topics.length > 0) {
+        res.json({
+          topics: freeGoogle.topics,
+          sources: freeGoogle.sources,
+          providerUsed: 'Google Search Suggest & Google News',
+        });
+        return;
+      }
+
+      res.json({
+        topics: buildFallbackTopics(query, language),
+        sources: [],
+        providerUsed: 'Gợi ý chủ đề tự động (Offline)',
+      });
+      return;
+    }
+
+    // Real-article topic discovery: prioritize Wikipedia real articles + Google News RSS over fictional AI invention
+    if (ai && mode === 'ai') {
+      // Even when Gemini key exists, fetch real Wikipedia/Google News topics first so topics are factual & verifiable!
+    }
+
+    const [realWiki, realNews] = await Promise.all([
+      discoverRealWikipediaTopics(query, language),
+      discoverTopicsViaGoogleFree(query, language),
+    ]);
+
+    const combinedTopics: TopicSuggestion[] = [];
+    const combinedSources: GroundingSource[] = [];
+    const seenTopicTitle = new Set<string>();
+
+    for (const t of [...realWiki.topics, ...realNews.topics]) {
+      const k = t.title.toLowerCase();
+      if (seenTopicTitle.has(k)) continue;
+      seenTopicTitle.add(k);
+      combinedTopics.push(t);
+      if (combinedTopics.length >= 6) break;
+    }
+    for (const s of [...realWiki.sources, ...realNews.sources]) {
+      if (!combinedSources.some((x) => x.url === s.url)) {
+        combinedSources.push(s);
+      }
+      if (combinedSources.length >= 6) break;
+    }
+
+    if (combinedTopics.length > 0) {
+      res.json({
+        topics: combinedTopics,
+        sources: combinedSources,
+        providerUsed:
+          realWiki.topics.length > 0 && realNews.topics.length > 0
+            ? 'Wikipedia Bách Khoa & Google News (Bài viết có thực)'
+            : realWiki.topics.length > 0
+            ? 'Wikipedia (Kiến thức & Bài viết có thực)'
+            : 'Google News & Search (Xu hướng thực tế)',
+      });
+      return;
+    }
+
+    if (ai) {
+      try {
+        const aiPrompt = query
+          ? `Hãy gợi ý 5 chủ đề kiến thức, hiện tượng khoa học hoặc sự kiện lịch sử CÓ THẬT xoay quanh "${query}", viết hoàn toàn bằng ${langLabel}. Không bịa đặt. Trả về JSON array gồm "title" và "angle".`
+          : `Hãy gợi ý 5 chủ đề kiến thức khoa học, lịch sử hoặc tự nhiên CÓ THẬT (có thể kiểm chứng trên bách khoa toàn thư), viết hoàn toàn bằng ${langLabel}. Trả về JSON array gồm "title" và "angle".`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: aiPrompt,
+          config: {
+            tools: [{ googleSearch: {} }],
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  angle: { type: Type.STRING },
+                },
+                required: ['title', 'angle'],
+              },
+            },
+          },
+        });
+        const parsed = JSON.parse((response.text ?? '[]').trim()) as Array<{
+          title: string;
+          angle: string;
+        }>;
+        const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+        const sources: GroundingSource[] = chunks
+          .map((c) => ({
+            title: c.web?.title || 'Nguồn thực tế',
+            url: c.web?.uri || '',
+          }))
+          .filter((s) => Boolean(s.url))
+          .slice(0, 5);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          res.json({
+            topics: parsed.slice(0, 6).map((item, idx) => ({
+              title: String(item.title).trim(),
+              angle: String(item.angle).trim(),
+              sourceType: 'ai' as const,
+              sourceUrl: sources[idx]?.url,
+            })),
+            sources,
+            providerUsed: 'Gemini AI + Google Search Grounding',
+          });
+          return;
+        }
+      } catch {
+        // Fall through to curated real-fact fallback
+      }
+    }
+
+    res.json({
+      topics: buildFallbackTopics(query, language),
+      sources: [],
+      providerUsed: 'Kho kiến thức thực tế (Offline)',
+    });
+  });
+
+  // 2b. Upgraded AI Script + Terms + Per-Sentence Scene Prompts grounded on real Wikipedia & News facts
   app.post('/api/generate-script', async (req, res) => {
     const subject = String(req.body?.subject ?? '').trim();
-    const language = (req.body?.language ?? 'vi') as 'vi' | 'en' | 'bilingual';
+    const language = (req.body?.language ?? 'vi') as LanguageCode;
     const scriptStyle = (req.body?.scriptStyle ?? 'curious_facts') as ScriptStyle;
-    const sentenceCount = Math.max(3, Math.min(8, Number(req.body?.sentenceCount ?? 4)));
+    const sentenceCount = Math.max(2, Math.min(25, Math.round(Number(req.body?.sentenceCount ?? 4))));
     const llmProvider = String(req.body?.llmProvider ?? 'pollinations');
 
     if (!subject) {
@@ -1615,18 +2665,37 @@ async function startServer() {
       return;
     }
 
+    const wikiLang: LanguageCode =
+      language === 'ja_en' ? 'ja' : language === 'vi_ja' ? 'vi' : language;
+    const [wikiData, newsSnippets, translatedSubject] = await Promise.all([
+      fetchWikipediaFacts(subject, wikiLang),
+      fetchGoogleNewsSnippets(subject, wikiLang),
+      translateToEn(subject),
+    ]);
+
+    const verifiedFacts: string[] = [
+      ...wikiData.sentences.slice(0, 8),
+      ...newsSnippets.slice(0, 3).map((n) => (n.source ? `${n.title} (${n.source})` : n.title)),
+    ];
+
+    const verifiedSources: GroundingSource[] = [];
+    if (wikiData.articleUrl) {
+      verifiedSources.push({
+        title: `Wikipedia: ${wikiData.title || subject}`,
+        url: wikiData.articleUrl,
+      });
+    }
+    for (const n of newsSnippets.slice(0, 3)) {
+      verifiedSources.push({ title: n.title, url: n.url });
+    }
+
     const promptText = buildMoneyPrinterPrompt({
       subject,
       language,
       scriptStyle,
       sentenceCount,
+      verifiedFacts,
     });
-
-    // Fetch factual Wikipedia VN data + free English translation in parallel (<600ms, 0 API key)
-    const [wikiData, translatedSubject] = await Promise.all([
-      fetchWikipediaFacts(subject),
-      translateViToEn(subject),
-    ]);
 
     const accurateEnglishTerms = Array.from(
       new Set(
@@ -1636,19 +2705,72 @@ async function startServer() {
           ...extractEnglishSearchTerms(subject, ''),
         ].filter((s): s is string => Boolean(s && s.trim().length >= 3))
       )
-    ).slice(0, 4);
+    ).slice(0, 5);
 
     if (llmProvider === 'offline_vi') {
-      const out = generateOfflineVietnameseScript(subject, language, sentenceCount, accurateEnglishTerms);
+      const out = buildSmartVietnameseScriptFromFacts({
+        subject,
+        language,
+        scriptStyle,
+        sentenceCount,
+        wikiTitle: wikiData.title,
+        wikiSentences: wikiData.sentences,
+        englishTerms: accurateEnglishTerms,
+      });
       res.json({
         script: out.script,
         terms: out.terms,
         scenePrompts: out.scenePrompts,
+        groundingSources: verifiedSources,
         promptText,
-        providerUsed: 'Mẫu kịch bản Tiếng Việt (Offline, 0ms)',
+        providerUsed:
+          wikiData.sentences.length >= 2
+            ? `Wikipedia Thực tế (${language.toUpperCase()})`
+            : `Mẫu kịch bản ${language.toUpperCase()} (${scriptStyle}, Offline)`,
         fallbackUsed: false,
       });
       return;
+    }
+
+    if (llmProvider === 'gemini_search') {
+      const ai = getGeminiClient();
+      if (ai) {
+        try {
+          const response = await ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: promptText,
+            config: {
+              tools: [{ googleSearch: {} }],
+            },
+          });
+          const parsed = parseAiWebOrJsonOutput(response.text ?? '', subject);
+          if (parsed) {
+            const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+            const groundingSources: GroundingSource[] = [
+              ...verifiedSources,
+              ...chunks
+                .map((c) => ({
+                  title: c.web?.title || 'Nguồn Google Search',
+                  url: c.web?.uri || '',
+                }))
+                .filter((s) => Boolean(s.url)),
+            ].slice(0, 5);
+
+            res.json({
+              script: parsed.script,
+              terms: parsed.terms.length > 0 ? parsed.terms : accurateEnglishTerms,
+              scenePrompts: parsed.scenePrompts,
+              groundingSources,
+              promptText,
+              providerUsed: 'Gemini AI + Google Search Grounding',
+              fallbackUsed: false,
+            });
+            return;
+          }
+        } catch {
+          // Fall through cleanly to Wikipedia + Free Search synthesis
+        }
+      }
     }
 
     if (llmProvider === 'ollama') {
@@ -1672,6 +2794,7 @@ async function startServer() {
           if (parsed) {
             res.json({
               ...parsed,
+              groundingSources: verifiedSources,
               promptText,
               providerUsed: 'Ollama Local (Miễn phí trên máy)',
               fallbackUsed: false,
@@ -1684,9 +2807,17 @@ async function startServer() {
       }
     }
 
-    // Try Pollinations AI if chosen, validating fluent output & avoiding 402/gibberish
-    if (llmProvider === 'pollinations') {
+    if (llmProvider === 'pollinations' || llmProvider === 'gemini_search') {
       try {
+        const systemLangNote =
+          language === 'ja'
+            ? 'あなたは事実に基づくプロの動画脚本家です。推測や創作をせず、提供されたWikipediaやニュースの事実に忠実に自然な日本語でJSONのみ返してください。'
+            : language === 'en'
+            ? 'You are a fact-based short-form video scriptwriter. Rely strictly on verified facts provided, never fabricate statistics or events, and return valid JSON only.'
+            : isBilingualLanguage(language)
+            ? 'You are a bilingual language-challenge short video writer. Return valid JSON only with [VI]/[EN]/[JA] line tags and [PAUSE] markers.'
+            : 'Bạn là biên kịch video sự thật (fact-based) tiếng Việt. Chỉ dùng thông tin có thật từ dữ liệu xác minh được cung cấp, KHÔNG bịa đặt số liệu hay hư cấu, và chỉ trả về JSON hợp lệ.';
+
         const aiRes = await fetchWithTimeout(
           'https://text.pollinations.ai/',
           {
@@ -1699,11 +2830,7 @@ async function startServer() {
               model: 'openai',
               seed: Math.floor(Math.random() * 99999),
               messages: [
-                {
-                  role: 'system',
-                  content:
-                    'Bạn là biên kịch tiếng Việt chuyên nghiệp cho video ngắn. Viết tiếng Việt chuẩn xác 100%, tự nhiên, không dùng từ tiếng Anh chen ngang vô nghĩa. Chỉ trả về JSON hợp lệ.',
-                },
+                { role: 'system', content: systemLangNote },
                 { role: 'user', content: promptText },
               ],
             }),
@@ -1713,10 +2840,9 @@ async function startServer() {
         if (aiRes.ok) {
           const text = await aiRes.text();
           const parsed = parseAiWebOrJsonOutput(text, subject);
-          // Reject obvious quantized gibberish or empty responses
           const hasGibberish =
             !parsed ||
-            parsed.script.length < 35 ||
+            parsed.script.length < 25 ||
             /rumor|tanh mưa|đá ván|lưới sóng/i.test(parsed.script);
           if (parsed && !hasGibberish) {
             const cleanTerms =
@@ -1727,34 +2853,42 @@ async function startServer() {
               script: parsed.script,
               terms: cleanTerms,
               scenePrompts: parsed.scenePrompts,
+              groundingSources: verifiedSources,
               promptText,
-              providerUsed: 'Pollinations AI (OpenAI Free · Không cần Key)',
-              fallbackUsed: false,
+              providerUsed:
+                verifiedSources.length > 0
+                  ? 'Pollinations AI + Đối chiếu Wikipedia/News thực tế'
+                  : 'Pollinations AI (Miễn phí)',
+              fallbackUsed: llmProvider === 'gemini_search',
             });
             return;
           }
         }
       } catch {
-        // Fall through cleanly to Wikipedia VN + Translate synthesis
+        // Fall through cleanly to Wikipedia + Translate synthesis
       }
     }
 
-    // Smart Vietnamese synthesis using real Wikipedia VN facts + Google Translate English terms & scenes
     const smartOut = buildSmartVietnameseScriptFromFacts({
       subject,
       language,
       scriptStyle,
       sentenceCount,
       wikiTitle: wikiData.title,
-      wikiSentences: wikiData.sentences,
+      wikiSentences:
+        wikiData.sentences.length > 0
+          ? wikiData.sentences
+          : newsSnippets.map((n) => (n.source ? `${n.title}, theo ${n.source}.` : `${n.title}.`)),
       englishTerms: accurateEnglishTerms,
     });
 
-    // Translate each Vietnamese sentence to create 1-to-1 accurate English scene prompts
     const smartLines = splitScriptSentences(smartOut.script);
     const translatedPrompts = await Promise.all(
       smartLines.map(async (line, idx) => {
-        const enLine = await translateViToEn(line);
+        if (idx >= 8) {
+          return smartOut.scenePrompts[idx] ?? `${accurateEnglishTerms[0] ?? 'cinematic scene'}, photorealistic, 8k, no text`;
+        }
+        const enLine = await translateToEn(line);
         const anchor = accurateEnglishTerms[0] ?? 'cinematic scene';
         return enLine
           ? `${anchor}, ${enLine}, photorealistic cinematic photography, 8k, no text`
@@ -1766,12 +2900,15 @@ async function startServer() {
       script: smartOut.script,
       terms: accurateEnglishTerms,
       scenePrompts: translatedPrompts,
+      groundingSources: verifiedSources,
       promptText,
       providerUsed:
         wikiData.sentences.length >= 2
-          ? 'Wikipedia Tiếng Việt + Dịch Cảnh Chuẩn (Miễn phí, 100% chuẩn ngữ pháp)'
-          : 'Bộ sinh kịch bản Tiếng Việt Thông minh + Dịch Cảnh Chuẩn (0đ)',
-      fallbackUsed: llmProvider === 'pollinations',
+          ? `Wikipedia Thực tế (${language.toUpperCase()})`
+          : newsSnippets.length > 0
+          ? `Tin tức Google News (${language.toUpperCase()})`
+          : `Bộ sinh kịch bản ${language.toUpperCase()} (Offline)`,
+      fallbackUsed: llmProvider === 'pollinations' || llmProvider === 'gemini_search',
     });
   });
 
@@ -1785,6 +2922,7 @@ async function startServer() {
       : [];
     const materialSource = (req.body?.materialSource ?? 'hybrid_real') as MaterialSource;
     const aspectRatio = (req.body?.aspectRatio ?? '9:16') as VideoAspectRatio;
+    const videoQuality = (req.body?.videoQuality ?? '720p') as VideoQuality;
     const selectedMediaIds = Array.isArray(req.body?.selectedMediaIds)
       ? req.body.selectedMediaIds.map(String)
       : [];
@@ -1802,6 +2940,7 @@ async function startServer() {
         scenePrompts,
         materialSource,
         aspectRatio,
+        videoQuality,
         selectedMediaIds,
       });
 
@@ -1822,20 +2961,243 @@ async function startServer() {
     }
   });
 
-  // 4. TTS Preview endpoint
+  // 3b. Search alternative replacement clips/images for a single scene
+  app.post('/api/scenes/alternatives', async (req, res) => {
+    const query = String(req.body?.query ?? '').trim() || 'nature landscape';
+    const aspectRatio = (req.body?.aspectRatio ?? '9:16') as VideoAspectRatio;
+    const videoQuality = (req.body?.videoQuality ?? '720p') as VideoQuality;
+
+    let searchTerms = extractEnglishSearchTerms(query, '');
+    if (/^[a-zA-Z0-9\s,.-]{2,}$/.test(query)) {
+      searchTerms = [query, ...searchTerms];
+    } else {
+      const translated = await translateToEn(query);
+      if (translated) searchTerms = [translated, ...searchTerms];
+    }
+
+    try {
+      const [mixkitItems, wmItems, archiveItems] = await Promise.all([
+        searchMixkitVideos(searchTerms.slice(0, 3), 8),
+        searchWikimediaCommons(searchTerms.slice(0, 2), 6),
+        searchArchiveOrgMp4s(searchTerms.slice(0, 2), 3),
+      ]);
+
+      const candidates: ScenePreviewItem[] = [];
+      const seen = new Set<string>();
+
+      for (const item of [...mixkitItems, ...wmItems, ...archiveItems]) {
+        if (seen.has(item.url)) continue;
+        seen.add(item.url);
+        candidates.push({
+          index: candidates.length,
+          sentence: '',
+          prompt: item.name || query,
+          kind: item.kind === 'video' ? 'video' : 'image',
+          previewUrl: item.url,
+          thumbUrl: item.previewThumbUrl,
+          sourceLabel:
+            item.source === 'mixkit_free'
+              ? 'Mixkit Stock HD'
+              : item.source === 'archive_free'
+              ? 'Archive.org MP4'
+              : item.kind === 'video'
+              ? 'Wikimedia Video'
+              : 'Wikimedia Ảnh thật',
+        });
+        if (candidates.length >= 10) break;
+      }
+
+      // Also provide 1 AI generated image candidate cached locally if user wants illustration
+      const { width, height } = getCanvasDimensions(aspectRatio, videoQuality);
+      const aiCacheDir = path.join(CACHE_DIR, 'scene_alts');
+      fs.mkdirSync(aiCacheDir, { recursive: true });
+      const aiFile = `ai_${crypto.createHash('sha1').update(`${query}_${width}_${height}_${Date.now()}`).digest('hex').slice(0, 10)}.jpg`;
+      const aiPath = path.join(aiCacheDir, aiFile);
+      const aiPrompt = `${searchTerms[0] ?? query}, photorealistic cinematic 8k, no text`;
+      const aiOk = await fetchPollinationsSceneImage({
+        prompt: aiPrompt,
+        width,
+        height,
+        outPath: aiPath,
+        seed: Math.floor(Math.random() * 99999),
+      });
+      if (aiOk) {
+        candidates.unshift({
+          index: 0,
+          sentence: '',
+          prompt: aiPrompt,
+          kind: 'image',
+          previewUrl: `/files/cache/scene_alts/${aiFile}`,
+          thumbUrl: `/files/cache/scene_alts/${aiFile}`,
+          sourceLabel: 'Ảnh AI Pollinations',
+        });
+      }
+
+      res.json({ candidates });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Không tìm được cảnh thay thế.',
+      });
+    }
+  });
+
+  // 3c. Generate a single replacement AI scene image for a prompt
+  app.post('/api/scenes/ai-image', async (req, res) => {
+    const prompt = String(req.body?.prompt ?? '').trim() || 'cinematic nature landscape';
+    const aspectRatio = (req.body?.aspectRatio ?? '9:16') as VideoAspectRatio;
+    const videoQuality = (req.body?.videoQuality ?? '720p') as VideoQuality;
+    const { width, height } = getCanvasDimensions(aspectRatio, videoQuality);
+
+    let cleanEn = prompt;
+    if (!/^[a-zA-Z0-9\s,.-]{2,}$/.test(prompt)) {
+      const translated = await translateToEn(prompt);
+      cleanEn = translated || extractEnglishSearchTerms(prompt, '')[0] || 'cinematic nature scene';
+    }
+
+    const aiCacheDir = path.join(CACHE_DIR, 'scene_alts');
+    fs.mkdirSync(aiCacheDir, { recursive: true });
+    const aiFile = `ai_${Date.now()}_${Math.floor(Math.random() * 999)}.jpg`;
+    const aiPath = path.join(aiCacheDir, aiFile);
+    const ok = await fetchPollinationsSceneImage({
+      prompt: `${cleanEn}, photorealistic cinematic lighting 8k, no text`,
+      width,
+      height,
+      outPath: aiPath,
+      seed: Math.floor(Math.random() * 99999),
+    });
+
+    if (!ok) {
+      res.status(502).json({ error: 'Không tạo được ảnh AI lúc này, thử lại hoặc tải ảnh từ máy.' });
+      return;
+    }
+
+    res.json({
+      scene: {
+        index: 0,
+        sentence: '',
+        prompt: cleanEn,
+        kind: 'image',
+        previewUrl: `/files/cache/scene_alts/${aiFile}`,
+        thumbUrl: `/files/cache/scene_alts/${aiFile}`,
+        sourceLabel: 'Ảnh AI Pollinations',
+      } satisfies ScenePreviewItem,
+    });
+  });
+
+  // 4. TTS Preview endpoint (supports both single-voice and dual-voice bilingual sample!)
   app.post('/api/tts-preview', async (req, res) => {
-    const text =
+    const rawText =
       String(req.body?.text ?? '').trim() ||
       'Xin chào, đây là bản nghe thử giọng đọc miễn phí của MoneyPrinterTurbo Việt Nam.';
+    const rawScript = String(req.body?.script ?? '').trim();
+    const language = (req.body?.language ?? 'vi') as LanguageCode;
+    const scriptStyle = (req.body?.scriptStyle ?? 'curious_facts') as ScriptStyle;
     const voiceId = (req.body?.voiceId ?? 'vi-VN-HoaiMyNeural') as VoiceOptionId;
+    const secondaryVoiceId = (req.body?.secondaryVoiceId ??
+      getDefaultSecondaryVoiceForLanguage(language)) as VoiceOptionId;
+    const dualVoiceEnabled = Boolean(req.body?.dualVoiceEnabled) || isBilingualLanguage(language);
+    const pauseBetweenLinesSec = Number(req.body?.pauseBetweenLinesSec ?? 0);
     const ttsProvider = (req.body?.ttsProvider ?? 'google_free') as TtsProvider;
     const voiceRate = Number(req.body?.voiceRate ?? 1.0);
 
-    const previewChunk = splitScriptSentences(text, 160)[0] ?? text.slice(0, 160);
     const filename = `preview_${Date.now()}.mp3`;
     const outPath = path.join(OUTPUTS_DIR, filename);
 
     try {
+      if (dualVoiceEnabled && rawScript) {
+        const planned = planNarrationSegments({
+          script: rawScript,
+          language,
+          scriptStyle,
+          voiceId,
+          dualVoiceEnabled,
+          secondaryVoiceId,
+          pauseBetweenLinesSec,
+        });
+
+        // Pick first primary + first secondary (or first 2 segments) so user hears both voices!
+        const sampleSegs = planned.slice(0, 2);
+        const firstSecondaryIdx = planned.findIndex((s) => s.voiceSlot === 'secondary');
+        if (firstSecondaryIdx >= 2 && planned[0]) {
+          sampleSegs[1] = planned[firstSecondaryIdx];
+        }
+
+        if (sampleSegs.length >= 2) {
+          const previewWorkDir = path.join(CACHE_DIR, `preview_mix_${Date.now()}`);
+          fs.mkdirSync(previewWorkDir, { recursive: true });
+          const parts: string[] = [];
+          let lastResult: {
+            engineUsed: string;
+            recoveredFromEdgeError: boolean;
+            fallbackNote?: string;
+          } = {
+            engineUsed: 'Google TTS Miễn phí',
+            recoveredFromEdgeError: false,
+          };
+
+          for (let i = 0; i < sampleSegs.length; i++) {
+            const seg = sampleSegs[i];
+            const segPath = path.join(previewWorkDir, `p_${i}.mp3`);
+            lastResult = await synthesizeChunkWithFallback({
+              text: seg.text,
+              voiceId: seg.voiceId,
+              ttsProvider,
+              voiceRate,
+              outPath: segPath,
+            });
+            parts.push(segPath);
+            if (i === 0 && seg.pauseAfterSec > 0) {
+              const pGap = path.join(previewWorkDir, 'gap.mp3');
+              await createSilenceMp3(Math.min(1.5, seg.pauseAfterSec), pGap);
+              parts.push(pGap);
+            }
+          }
+
+          const listFile = path.join(previewWorkDir, 'list.txt');
+          fs.writeFileSync(
+            listFile,
+            parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'),
+            'utf-8'
+          );
+          await runFfmpeg(
+            [
+              '-y',
+              '-f',
+              'concat',
+              '-safe',
+              '0',
+              '-i',
+              listFile,
+              '-ar',
+              '24000',
+              '-ac',
+              '1',
+              '-c:a',
+              'libmp3lame',
+              '-b:a',
+              '96k',
+              outPath,
+            ],
+            20000
+          );
+          fs.rmSync(previewWorkDir, { recursive: true, force: true });
+
+          const durationSec = await probeDurationSec(outPath);
+          const voicesUsed = Array.from(new Set(sampleSegs.map((s) => s.voiceId)));
+          res.json({
+            audioUrl: `/files/outputs/${filename}`,
+            engineUsed: `${lastResult.engineUsed} (${voicesUsed.join(' + ')})`,
+            recoveredFromEdgeError: lastResult.recoveredFromEdgeError,
+            fallbackNote: lastResult.fallbackNote,
+            voicesUsed,
+            durationSec,
+          });
+          return;
+        }
+      }
+
+      const cleanSingle = stripNarrationTags(rawText);
+      const previewChunk = splitScriptSentences(cleanSingle, 160)[0] ?? cleanSingle.slice(0, 160);
       const result = await synthesizeChunkWithFallback({
         text: previewChunk,
         voiceId,
@@ -1848,6 +3210,8 @@ async function startServer() {
         audioUrl: `/files/outputs/${filename}`,
         engineUsed: result.engineUsed,
         recoveredFromEdgeError: result.recoveredFromEdgeError,
+        fallbackNote: result.fallbackNote,
+        voicesUsed: [voiceId],
         durationSec,
       });
     } catch (err) {
@@ -1970,6 +3334,25 @@ async function startServer() {
       return;
     }
     res.json(job);
+  });
+
+  // Never let unknown /api/* requests fall through to Vite/SPA HTML fallback
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'Đường dẫn API không tồn tại.' });
+  });
+
+  // Global JSON error handler for Multer / JSON body parse / unexpected route errors
+  app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    const msg = err instanceof Error ? err.message : 'Lỗi xử lý yêu cầu trên máy chủ.';
+    if (req.path.startsWith('/api') || req.path.startsWith('/files')) {
+      res.status(400).json({ error: msg });
+      return;
+    }
+    next(err);
   });
 
   if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(ROOT_DIR, 'dist'))) {

@@ -1,15 +1,333 @@
 import {
+  LanguageCode,
   RenderJobConfig,
   ScriptStyle,
   SubtitleConfig,
   SubtitleCue,
+  SubtitleEffect,
   VideoAspectRatio,
+  VideoQuality,
+  VoiceOptionId,
 } from './types';
 
-export function getCanvasDimensions(aspectRatio: VideoAspectRatio): {
+export async function safeParseJsonResponse<T>(
+  res: Response,
+  fallbackError = 'Phản hồi từ máy chủ không hợp lệ.'
+): Promise<T> {
+  const rawText = await res.text();
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    throw new Error(fallbackError);
+  }
+  if (trimmed.startsWith('<')) {
+    throw new Error(
+      `Máy chủ đang khởi động lại hoặc phản hồi HTML (HTTP ${res.status}). Vui lòng thử lại sau vài giây.`
+    );
+  }
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    throw new Error(`${fallbackError} (HTTP ${res.status})`);
+  }
+}
+
+export function hasCjkChars(text: string): boolean {
+  return /[\u3040-\u30ff\u4e00-\u9faf\uff00-\uffef]/.test(text);
+}
+
+export function hasVietnameseDiacritics(text: string): boolean {
+  return /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ]/.test(
+    text
+  );
+}
+
+const LANGUAGE_PRESETS: Record<LanguageCode, string[]> = {
+  vi: [
+    'Bí ẩn đại dương sâu thẳm chưa từng được giải mã',
+    'Khoa học đằng sau tách cà phê Espresso hoàn hảo',
+    '3 thói quen nhỏ buổi sáng giúp tập trung làm việc hiệu quả',
+    'Vì sao thời gian trôi nhanh hơn khi chúng ta trưởng thành?',
+  ],
+  en: [
+    'Why Time Feels Faster As We Get Older',
+    'The Hidden Physics Inside A Cup Of Espresso',
+    '3 Deep Sea Creatures That Glow In Total Darkness',
+    'How Ancient Roman Concrete Lasts Over 2,000 Years',
+  ],
+  ja: [
+    'なぜ年齢を重ねると時間が早く感じるのか？',
+    '深海で自ら光を放つ不思議な生き物たちの秘密',
+    'コーヒー1杯に隠された驚きの科学と集中力',
+    '宇宙で一番静かな場所と無重力の世界の真実',
+  ],
+  bilingual: [
+    'Phản xạ 3s: "Hãy cẩn thận với cô ấy!" nói tiếng Anh sao?',
+    'Giao tiếp công sở: Cách từ chối khéo bằng tiếng Anh tự nhiên',
+    'Tại sao thời gian trôi nhanh hơn? — Why Time Feels Faster',
+  ],
+  vi_ja: [
+    'Phản xạ tiếng Nhật 3s: "Hôm nay bạn vất vả rồi!" nói sao?',
+    '3 câu giao tiếp tiếng Nhật quán ăn dùng mỗi ngày',
+    'Cách nói "Đừng lo lắng quá nhé" cực tự nhiên trong tiếng Nhật',
+  ],
+  ja_en: [
+    '【瞬間英作文】「彼女には気をつけて！」を英語で言えますか？',
+    '【1分英語】「ちょっと待ってね」をネイティブ英語で言うと？',
+    '【瞬間英作文】「無理しないでね」を自然な英語で表現しよう',
+  ],
+};
+
+export function isBilingualLanguage(language: LanguageCode): boolean {
+  return language === 'bilingual' || language === 'vi_ja' || language === 'ja_en';
+}
+
+export function getPresetsForLanguage(language: LanguageCode): string[] {
+  return LANGUAGE_PRESETS[language] ?? LANGUAGE_PRESETS.vi;
+}
+
+export function isKnownPresetSubject(subject: string): boolean {
+  const clean = subject.trim();
+  if (!clean) return true;
+  return Object.values(LANGUAGE_PRESETS).some((list) => list.includes(clean));
+}
+
+export function getDefaultVoiceForLanguage(language: LanguageCode): VoiceOptionId {
+  if (language === 'ja' || language === 'ja_en') return 'ja-JP-NanamiNeural';
+  if (language === 'en') return 'en-US-JennyNeural';
+  return 'vi-VN-HoaiMyNeural';
+}
+
+export function getDefaultSecondaryVoiceForLanguage(language: LanguageCode): VoiceOptionId {
+  if (language === 'bilingual') return 'en-US-JennyNeural';
+  if (language === 'vi_ja') return 'ja-JP-NanamiNeural';
+  if (language === 'ja_en') return 'en-US-JennyNeural';
+  if (language === 'en') return 'en-US-GuyNeural';
+  if (language === 'ja') return 'ja-JP-KeitaNeural';
+  return 'vi-VN-NamMinhNeural';
+}
+
+export function doesVoiceMatchLanguage(voiceId: VoiceOptionId, language: LanguageCode): boolean {
+  if (isBilingualLanguage(language)) return true;
+  if (language === 'ja') return voiceId.startsWith('ja-');
+  if (language === 'en') return voiceId.startsWith('en-');
+  return voiceId.startsWith('vi-');
+}
+
+export function getVoiceLanguagePrefix(voiceId: VoiceOptionId): 'vi' | 'en' | 'ja' {
+  if (voiceId.startsWith('ja-')) return 'ja';
+  if (voiceId.startsWith('en-')) return 'en';
+  return 'vi';
+}
+
+export function detectLineLanguage(
+  text: string,
+  fallbackLang: 'vi' | 'en' | 'ja' = 'vi'
+): 'vi' | 'en' | 'ja' {
+  const clean = text.trim();
+  if (!clean) return fallbackLang;
+  if (hasCjkChars(clean)) return 'ja';
+  if (hasVietnameseDiacritics(clean)) return 'vi';
+  if (/[a-zA-Z]{2,}/.test(clean)) {
+    // Check common unaccented Vietnamese words only when fallback is vi and no clear English words
+    if (fallbackLang === 'en') return 'en';
+    const likelyEnglish = /\b(the|is|are|was|were|you|your|she|he|her|him|they|we|this|that|with|for|watch|out|don't|do|how|what|why|when|can|could|would|please|thank|sorry)\b/i.test(
+      clean
+    );
+    if (likelyEnglish || fallbackLang !== 'vi') return 'en';
+  }
+  return fallbackLang;
+}
+
+export function stripNarrationTags(line: string): string {
+  return line
+    .replace(/^\s*\[(?:V1|V2|1|2|A|B|VI|EN|JA)\]\s*/i, '')
+    .replace(/^\s*(?:A|B|Speaker\s*[12]|Người\s*[12])\s*:\s*/i, '')
+    .replace(/\s*\[PAUSE(?::\d+(?:\.\d+)?)?\]\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export interface PlannedNarrationSegment {
+  text: string;
+  voiceId: VoiceOptionId;
+  voiceSlot: 'primary' | 'secondary';
+  detectedLang: 'vi' | 'en' | 'ja';
+  pauseAfterSec: number;
+}
+
+function getFallbackVoiceForLangCode(
+  lang: 'vi' | 'en' | 'ja',
+  primary: VoiceOptionId,
+  secondary: VoiceOptionId
+): { voiceId: VoiceOptionId; slot: 'primary' | 'secondary' } {
+  if (getVoiceLanguagePrefix(primary) === lang) return { voiceId: primary, slot: 'primary' };
+  if (getVoiceLanguagePrefix(secondary) === lang) return { voiceId: secondary, slot: 'secondary' };
+  if (lang === 'ja') return { voiceId: 'ja-JP-NanamiNeural', slot: 'secondary' };
+  if (lang === 'en') return { voiceId: 'en-US-JennyNeural', slot: 'secondary' };
+  return { voiceId: 'vi-VN-HoaiMyNeural', slot: 'primary' };
+}
+
+export function planNarrationSegments(
+  config: Pick<
+    RenderJobConfig,
+    | 'script'
+    | 'language'
+    | 'scriptStyle'
+    | 'voiceId'
+    | 'dualVoiceEnabled'
+    | 'secondaryVoiceId'
+    | 'pauseBetweenLinesSec'
+  >
+): PlannedNarrationSegment[] {
+  const rawLines = config.script
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (rawLines.length === 0) return [];
+
+  const primaryVoice = config.voiceId;
+  const secondaryVoice =
+    config.secondaryVoiceId ?? getDefaultSecondaryVoiceForLanguage(config.language);
+  const primaryLang = getVoiceLanguagePrefix(primaryVoice);
+  const secondaryLang = getVoiceLanguagePrefix(secondaryVoice);
+  const dualEnabled = Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language);
+  const basePause = Math.max(0, Math.min(4, Number(config.pauseBetweenLinesSec ?? 0)));
+
+  const segments: PlannedNarrationSegment[] = [];
+
+  rawLines.forEach((rawLine, lineIdx) => {
+    const pauseMatch = rawLine.match(/\[PAUSE(?::(\d+(?:\.\d+)?))?\]/i);
+    const explicitPauseSec = pauseMatch
+      ? pauseMatch[1]
+        ? Math.max(0.3, Math.min(5, parseFloat(pauseMatch[1])))
+        : Math.max(0.9, basePause || 1.2)
+      : 0;
+
+    let explicitSlot: 'primary' | 'secondary' | null = null;
+    let explicitLangTag: 'vi' | 'en' | 'ja' | null = null;
+
+    if (/^\s*\[(?:V1|1|A)\]/i.test(rawLine) || /^\s*(?:A|Speaker\s*1|Người\s*1)\s*:/i.test(rawLine)) {
+      explicitSlot = 'primary';
+    } else if (
+      /^\s*\[(?:V2|2|B)\]/i.test(rawLine) ||
+      /^\s*(?:B|Speaker\s*2|Người\s*2)\s*:/i.test(rawLine)
+    ) {
+      explicitSlot = 'secondary';
+    } else if (/^\s*\[VI\]/i.test(rawLine)) {
+      explicitLangTag = 'vi';
+    } else if (/^\s*\[EN\]/i.test(rawLine)) {
+      explicitLangTag = 'en';
+    } else if (/^\s*\[JA\]/i.test(rawLine)) {
+      explicitLangTag = 'ja';
+    }
+
+    const cleanText = stripNarrationTags(rawLine);
+    if (!cleanText) {
+      // Standalone [PAUSE] line attaches pause to previous segment
+      if (segments.length > 0 && explicitPauseSec > 0) {
+        segments[segments.length - 1].pauseAfterSec = Math.max(
+          segments[segments.length - 1].pauseAfterSec,
+          explicitPauseSec
+        );
+      }
+      return;
+    }
+
+    let chosenVoice = primaryVoice;
+    let chosenSlot: 'primary' | 'secondary' = 'primary';
+    let detectedLang = detectLineLanguage(cleanText, primaryLang);
+
+    if (explicitSlot === 'primary') {
+      chosenVoice = primaryVoice;
+      chosenSlot = 'primary';
+    } else if (explicitSlot === 'secondary') {
+      chosenVoice = secondaryVoice;
+      chosenSlot = 'secondary';
+    } else if (explicitLangTag) {
+      detectedLang = explicitLangTag;
+      const mapped = getFallbackVoiceForLangCode(explicitLangTag, primaryVoice, secondaryVoice);
+      chosenVoice = mapped.voiceId;
+      chosenSlot = mapped.slot;
+    } else if (dualEnabled) {
+      if (detectedLang !== primaryLang) {
+        if (detectedLang === secondaryLang) {
+          chosenVoice = secondaryVoice;
+          chosenSlot = 'secondary';
+        } else {
+          const mapped = getFallbackVoiceForLangCode(detectedLang, primaryVoice, secondaryVoice);
+          chosenVoice = mapped.voiceId;
+          chosenSlot = mapped.slot;
+        }
+      } else if (
+        primaryLang === secondaryLang &&
+        (config.scriptStyle === 'bilingual_dialogue' || config.scriptStyle === 'quiz_riddle') &&
+        lineIdx % 2 === 1
+      ) {
+        chosenVoice = secondaryVoice;
+        chosenSlot = 'secondary';
+      }
+    }
+
+    const subChunks = splitScriptSentences(cleanText, 165);
+    subChunks.forEach((chunk, chunkIdx) => {
+      const isLastChunk = chunkIdx === subChunks.length - 1;
+      const isLastLine = lineIdx === rawLines.length - 1;
+      const pauseAfter = isLastChunk
+        ? explicitPauseSec > 0
+          ? explicitPauseSec
+          : !isLastLine
+          ? basePause
+          : 0
+        : 0;
+      segments.push({
+        text: chunk,
+        voiceId: chosenVoice,
+        voiceSlot: chosenSlot,
+        detectedLang,
+        pauseAfterSec: pauseAfter,
+      });
+    });
+  });
+
+  return segments;
+}
+
+export function getScriptLengthSummary(sentenceCount: number): {
+  tierLabel: string;
+  estSec: number;
+  estClips: number;
+} {
+  const count = Math.max(2, Math.min(25, Math.round(sentenceCount)));
+  const estSec = Math.round(count * 5.2);
+  const estClips = count * 2;
+  let tierLabel = 'Ngắn';
+  if (count <= 4) tierLabel = 'Rất ngắn';
+  else if (count <= 7) tierLabel = 'Ngắn';
+  else if (count <= 12) tierLabel = 'Trung bình';
+  else if (count <= 18) tierLabel = 'Dài';
+  else tierLabel = 'Rất dài';
+  return { tierLabel, estSec, estClips };
+}
+
+export function getCanvasDimensions(
+  aspectRatio: VideoAspectRatio,
+  quality: VideoQuality = '720p'
+): {
   width: number;
   height: number;
 } {
+  if (quality === '480p') {
+    if (aspectRatio === '9:16') return { width: 480, height: 854 };
+    if (aspectRatio === '1:1') return { width: 480, height: 480 };
+    return { width: 854, height: 480 };
+  }
+  if (quality === '1080p') {
+    if (aspectRatio === '9:16') return { width: 1080, height: 1920 };
+    if (aspectRatio === '1:1') return { width: 1080, height: 1080 };
+    return { width: 1920, height: 1080 };
+  }
   if (aspectRatio === '9:16') {
     return { width: 720, height: 1280 };
   }
@@ -19,8 +337,85 @@ export function getCanvasDimensions(aspectRatio: VideoAspectRatio): {
   return { width: 1280, height: 720 };
 }
 
+export function getQualityEncodingParams(quality: VideoQuality = '720p'): {
+  crf: string;
+  maxrate: string;
+  bufsize: string;
+  audioBitrate: string;
+  label: string;
+} {
+  if (quality === '480p') {
+    return {
+      crf: '22',
+      maxrate: '1250k',
+      bufsize: '2500k',
+      audioBitrate: '112k',
+      label: '480p Tiết kiệm',
+    };
+  }
+  if (quality === '1080p') {
+    return {
+      crf: '18',
+      maxrate: '4000k',
+      bufsize: '8000k',
+      audioBitrate: '192k',
+      label: '1080p Full HD',
+    };
+  }
+  return {
+    crf: '20',
+    maxrate: '2200k',
+    bufsize: '4400k',
+    audioBitrate: '128k',
+    label: '720p HD',
+  };
+}
+
+export function getSubtitleWrapBudget(
+  subtitle: Pick<SubtitleConfig, 'fontSize' | 'strokeWidth' | 'boxStyle'>,
+  width: number,
+  height: number,
+  hasCjk = false
+): {
+  resScale: number;
+  scaledFontSize: number;
+  marginH: number;
+  maxCharsPerLine: number;
+  maxCueChars: number;
+  outlineWidth: number;
+  shadowDepth: number;
+} {
+  const minDim = Math.max(320, Math.min(width, height));
+  const resScale = minDim / 720;
+  const baseSize = Math.max(24, Math.min(64, Math.round(subtitle.fontSize)));
+  const scaledFontSize = Math.max(18, Math.round(baseSize * resScale));
+  const marginH = Math.max(24, Math.round(width * 0.08));
+  const usableWidth = Math.max(180, width - marginH * 2);
+  const charWidthFactor = hasCjk ? 1.08 : 0.58;
+  const maxCharsPerLine = Math.max(
+    hasCjk ? 8 : 12,
+    Math.min(hasCjk ? 24 : 44, Math.floor(usableWidth / (scaledFontSize * charWidthFactor)))
+  );
+  const maxCueChars = Math.max(hasCjk ? 14 : 20, Math.round(maxCharsPerLine * 1.9));
+  const isBox = subtitle.boxStyle === 'dark_box';
+  const outlineWidth = isBox
+    ? Math.max(4, Math.round(6.5 * resScale))
+    : Math.max(1.5, Number((subtitle.strokeWidth * resScale * 1.15).toFixed(1)));
+  const shadowDepth = isBox ? 0 : Math.max(0.9, Number((1.3 * resScale).toFixed(1)));
+
+  return {
+    resScale,
+    scaledFontSize,
+    marginH,
+    maxCharsPerLine,
+    maxCueChars,
+    outlineWidth,
+    shadowDepth,
+  };
+}
+
 /**
- * Splits a Vietnamese or English script into speakable chunks <= maxLen characters,
+ * Splits Vietnamese, English, or Japanese scripts into speakable chunks <= maxLen chars,
  * preserving natural sentence boundaries so TTS and per-scene visuals align accurately.
  */
 export function splitScriptSentences(script: string, maxLen = 165): string[] {
@@ -28,31 +423,39 @@ export function splitScriptSentences(script: string, maxLen = 165): string[] {
   if (!cleaned) return [];
 
   const rawSentences = cleaned
-    .split(/(?<=[.!?…。！？\n])\s+|\n+/)
+    .split(/(?<=[.!?…。！？\n])\s*|\n+/)
     .map((s) => s.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
   const chunks: string[] = [];
   for (const sentence of rawSentences) {
-    if (sentence.length <= maxLen) {
+    const effectiveMax = hasCjkChars(sentence) ? Math.min(maxLen, 72) : maxLen;
+    if (sentence.length <= effectiveMax) {
       chunks.push(sentence);
       continue;
     }
 
-    const subParts = sentence.split(/(?<=[,;:])\s+/);
+    const subParts = sentence.split(/(?<=[,;:、，；：])\s*/);
     let buffer = '';
     for (const part of subParts) {
-      if ((buffer + ' ' + part).trim().length <= maxLen) {
-        buffer = (buffer + ' ' + part).trim();
+      const joiner = hasCjkChars(part) ? '' : ' ';
+      const candidate = buffer ? `${buffer}${joiner}${part}`.trim() : part;
+      if (candidate.length <= effectiveMax) {
+        buffer = candidate;
       } else {
         if (buffer) chunks.push(buffer);
-        if (part.length <= maxLen) {
+        if (part.length <= effectiveMax) {
           buffer = part;
+        } else if (hasCjkChars(part) && !part.includes(' ')) {
+          for (let i = 0; i < part.length; i += effectiveMax) {
+            chunks.push(part.slice(i, i + effectiveMax));
+          }
+          buffer = '';
         } else {
           const words = part.split(' ');
           let wordBuf = '';
           for (const w of words) {
-            if ((wordBuf + ' ' + w).trim().length <= maxLen) {
+            if ((wordBuf + ' ' + w).trim().length <= effectiveMax) {
               wordBuf = (wordBuf + ' ' + w).trim();
             } else {
               if (wordBuf) chunks.push(wordBuf);
@@ -70,14 +473,53 @@ export function splitScriptSentences(script: string, maxLen = 165): string[] {
 }
 
 export function wrapSubtitleLine(text: string, maxCharsPerLine = 26): string {
-  const words = text.trim().split(/\s+/).filter(Boolean);
+  const clean = text.trim();
+  if (!clean) return '';
+
+  if (hasCjkChars(clean) && !clean.includes(' ')) {
+    const cjkMax = Math.max(8, Math.min(maxCharsPerLine, 18));
+    if (clean.length <= cjkMax) return clean;
+    const lines: string[] = [];
+    let start = 0;
+    while (start < clean.length) {
+      let end = Math.min(clean.length, start + cjkMax);
+      if (end < clean.length) {
+        const slice = clean.slice(start, end + 2);
+        const punctIdx = Math.max(slice.lastIndexOf('、'), slice.lastIndexOf('。'), slice.lastIndexOf('，'));
+        if (punctIdx >= Math.floor(cjkMax * 0.5)) {
+          end = start + punctIdx + 1;
+        }
+      }
+      lines.push(clean.slice(start, end));
+      start = end;
+    }
+    return lines.join('\n');
+  }
+
+  const words = clean.split(/\s+/).filter(Boolean);
   if (words.length === 0) return '';
 
+  const safeLimit = Math.max(10, maxCharsPerLine);
   const lines: string[] = [];
   let current = '';
   for (const word of words) {
+    if (word.length > safeLimit) {
+      if (current) {
+        lines.push(current);
+        current = '';
+      }
+      for (let i = 0; i < word.length; i += safeLimit) {
+        const piece = word.slice(i, i + safeLimit);
+        if (i + safeLimit < word.length) {
+          lines.push(piece);
+        } else {
+          current = piece;
+        }
+      }
+      continue;
+    }
     const candidate = current ? `${current} ${word}` : word;
-    if (candidate.length <= maxCharsPerLine) {
+    if (candidate.length <= safeLimit) {
       current = candidate;
     } else {
       if (current) lines.push(current);
@@ -90,7 +532,7 @@ export function wrapSubtitleLine(text: string, maxCharsPerLine = 26): string {
 
 /**
  * Splits long sentence-level subtitle cues into snappy 1-2 line phrases timed
- * proportionally by character count so captions stay clean and non-intrusive.
+ * proportionally by character count (supporting both Latin and CJK scripts).
  */
 export function splitCueIntoShortSubCues(
   cues: SubtitleCue[],
@@ -104,7 +546,10 @@ export function splitCueIntoShortSubCues(
     const totalDur = Math.max(0.4, cue.endSec - cue.startSec);
     if (!clean) continue;
 
-    if (clean.length <= maxCharsPerCue) {
+    const isCjkNoSpace = hasCjkChars(clean) && !clean.includes(' ');
+    const effectiveLimit = isCjkNoSpace ? Math.min(maxCharsPerCue, 22) : maxCharsPerCue;
+
+    if (clean.length <= effectiveLimit) {
       result.push({
         index: nextIdx++,
         startSec: cue.startSec,
@@ -114,35 +559,57 @@ export function splitCueIntoShortSubCues(
       continue;
     }
 
-    // Break into balanced word segments near targetLen so chunks stay natural
-    const numChunks = Math.max(2, Math.ceil(clean.length / maxCharsPerCue));
-    const targetLen = Math.ceil(clean.length / numChunks);
-    const words = clean.split(' ');
     const segments: string[] = [];
-    let buf = '';
-
-    for (const w of words) {
-      const candidate = buf ? `${buf} ${w}` : w;
-      const endsWithPause = /[,;:—-]$/.test(buf);
-      if (
-        segments.length < numChunks - 1 &&
-        ((candidate.length > targetLen + 4 && buf.length >= 14) ||
-          (endsWithPause && buf.length >= 14))
-      ) {
-        if (buf) segments.push(buf);
-        buf = w;
-      } else {
-        buf = candidate;
+    if (isCjkNoSpace) {
+      const clauses = clean.split(/(?<=[、。！？，])/);
+      let buf = '';
+      for (const clause of clauses) {
+        if (!clause) continue;
+        if ((buf + clause).length <= effectiveLimit) {
+          buf += clause;
+        } else {
+          if (buf) segments.push(buf);
+          if (clause.length <= effectiveLimit) {
+            buf = clause;
+          } else {
+            const numParts = Math.ceil(clause.length / effectiveLimit);
+            const step = Math.ceil(clause.length / numParts);
+            for (let i = 0; i < clause.length; i += step) {
+              segments.push(clause.slice(i, i + step));
+            }
+            buf = '';
+          }
+        }
       }
-    }
-    if (buf) segments.push(buf);
+      if (buf) segments.push(buf);
+    } else {
+      const numChunks = Math.max(2, Math.ceil(clean.length / effectiveLimit));
+      const targetLen = Math.ceil(clean.length / numChunks);
+      const words = clean.split(' ');
+      let buf = '';
 
-    // Avoid a tiny 1-word trailing orphan by balancing the last two segments
-    if (segments.length >= 2) {
-      const last = segments[segments.length - 1];
-      const prev = segments[segments.length - 2];
-      if (last.split(' ').length <= 2 && prev.length + last.length + 1 <= maxCharsPerCue + 10) {
-        segments.splice(segments.length - 2, 2, `${prev} ${last}`);
+      for (const w of words) {
+        const candidate = buf ? `${buf} ${w}` : w;
+        const endsWithPause = /[,;:—-]$/.test(buf);
+        if (
+          segments.length < numChunks - 1 &&
+          ((candidate.length > targetLen + 4 && buf.length >= 14) ||
+            (endsWithPause && buf.length >= 14))
+        ) {
+          if (buf) segments.push(buf);
+          buf = w;
+        } else {
+          buf = candidate;
+        }
+      }
+      if (buf) segments.push(buf);
+
+      if (segments.length >= 2) {
+        const last = segments[segments.length - 1];
+        const prev = segments[segments.length - 2];
+        if (last.split(' ').length <= 2 && prev.length + last.length + 1 <= effectiveLimit + 10) {
+          segments.splice(segments.length - 2, 2, `${prev} ${last}`);
+        }
       }
     }
 
@@ -160,6 +627,7 @@ export function splitCueIntoShortSubCues(
         startSec: cursor,
         endSec: Math.max(cursor + 0.25, end),
         text: seg,
+        voiceSlot: cue.voiceSlot,
       });
       cursor = end;
     });
@@ -206,33 +674,152 @@ export function buildSrtFromCues(cues: SubtitleCue[]): string {
     .join('\n\n');
 }
 
+export function tokenizeSubtitleForEffect(text: string): string[] {
+  const clean = text.replace(/\r\n/g, '\n');
+  const lines = clean.split('\n');
+  const tokens: string[] = [];
+
+  lines.forEach((line, lineIdx) => {
+    if (lineIdx > 0) {
+      tokens.push('\n');
+    }
+    if (hasCjkChars(line) && !line.includes(' ')) {
+      // Split Japanese/CJK into natural 2-char syllable-like beats for smooth karaoke/typewriter
+      for (let i = 0; i < line.length; i += 2) {
+        tokens.push(line.slice(i, i + 2));
+      }
+    } else {
+      const words = line.split(/(\s+)/).filter((t) => t.length > 0);
+      for (let i = 0; i < words.length; i++) {
+        if (words[i].trim() === '' && tokens.length > 0) {
+          tokens[tokens.length - 1] += words[i];
+        } else if (words[i].trim() !== '') {
+          tokens.push(words[i]);
+        }
+      }
+    }
+  });
+
+  return tokens.filter((t) => t.length > 0);
+}
+
+function escapeAssText(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/\{/g, '(')
+    .replace(/\}/g, ')');
+}
+
+function formatAssCueBody(
+  wrappedText: string,
+  durationSec: number,
+  effect: SubtitleEffect
+): string {
+  if (effect === 'static') {
+    return escapeAssText(wrappedText).replace(/\n/g, '\\N');
+  }
+
+  if (effect === 'pop_zoom') {
+    const body = escapeAssText(wrappedText).replace(/\n/g, '\\N');
+    return `{\\fscx84\\fscy84\\t(0,115,\\fscx108\\fscy108)\\t(115,240,\\fscx100\\fscy100)}${body}`;
+  }
+
+  if (effect === 'fade_slide') {
+    const body = escapeAssText(wrappedText).replace(/\n/g, '\\N');
+    return `{\\fad(180,140)\\fscy90\\t(0,220,\\fscy100)}${body}`;
+  }
+
+  const tokens = tokenizeSubtitleForEffect(wrappedText);
+  const spokenTokens = tokens.filter((t) => t !== '\n');
+  if (spokenTokens.length === 0) {
+    return escapeAssText(wrappedText).replace(/\n/g, '\\N');
+  }
+
+  if (effect === 'karaoke') {
+    const totalCs = Math.max(15, Math.round(durationSec * 100));
+    const totalWeights = Math.max(
+      1,
+      spokenTokens.reduce((acc, t) => acc + Math.max(1, t.trim().length), 0)
+    );
+    let allocatedCs = 0;
+    let spokenSeen = 0;
+
+    return tokens
+      .map((token) => {
+        if (token === '\n') return '\\N';
+        spokenSeen++;
+        const isLast = spokenSeen === spokenTokens.length;
+        const weight = Math.max(1, token.trim().length);
+        const cs = isLast
+          ? Math.max(5, totalCs - allocatedCs)
+          : Math.max(5, Math.round((totalCs * weight) / totalWeights));
+        allocatedCs += cs;
+        return `{\\kf${cs}}${escapeAssText(token)}`;
+      })
+      .join('');
+  }
+
+  // Typewriter: reveal words sequentially over the first 75% of the cue duration
+  const revealWindowMs = Math.max(250, Math.round(durationSec * 750));
+  const stepMs = revealWindowMs / Math.max(1, spokenTokens.length);
+  let spokenIdx = 0;
+
+  return tokens
+    .map((token) => {
+      if (token === '\n') return '\\N';
+      const tStart = Math.round(spokenIdx * stepMs);
+      const tEnd = Math.round(tStart + Math.min(90, Math.max(30, stepMs * 0.7)));
+      spokenIdx++;
+      if (tStart === 0) {
+        return escapeAssText(token);
+      }
+      return `{\\alpha&HFF&\\t(${tStart},${tEnd},\\alpha&H00&)}${escapeAssText(token)}`;
+    })
+    .join('');
+}
+
 export function buildAssFromCues(
   cues: SubtitleCue[],
   subtitle: SubtitleConfig,
   width: number,
   height: number
 ): string {
-  const primaryColour = hexToAssBgr(subtitle.textColor);
+  const effect: SubtitleEffect = subtitle.effect ?? 'karaoke';
+  const baseColour = hexToAssBgr(subtitle.textColor);
+  const highlightColour = hexToAssBgr(subtitle.highlightColor || '#FACC15');
+  const primaryColour = effect === 'karaoke' ? highlightColour : baseColour;
+  const secondaryColour = effect === 'karaoke' ? baseColour : '&H000000FF';
+
   const outlineColour = hexToAssBgr(subtitle.strokeColor);
   const alignment =
     subtitle.position === 'top' ? 8 : subtitle.position === 'center' ? 5 : 2;
 
-  let marginV = Math.round(height * 0.11);
+  let marginV = Math.round(height * 0.135);
   if (subtitle.position === 'top') {
-    marginV = Math.round(height * 0.08);
+    marginV = Math.round(height * 0.09);
   } else if (subtitle.position === 'center') {
     marginV = 0;
   } else if (subtitle.position === 'custom') {
-    const clampedPct = Math.max(5, Math.min(95, subtitle.customPositionPct));
+    const clampedPct = Math.max(8, Math.min(90, subtitle.customPositionPct));
     marginV = Math.round(((100 - clampedPct) / 100) * height);
   }
 
-  const maxChars = width < height ? 23 : 40;
-  const scaledFontSize = Math.max(24, Math.min(72, Math.round(subtitle.fontSize)));
+  // Always keep crisp vector outline font (Noto Sans / DejaVu Sans / Liberation Sans / JetBrains Mono)
+  // so Vietnamese & English text stays sharp; fontconfig falls back per-glyph for any CJK characters.
+  const effectiveFontName = subtitle.fontName || 'Noto Sans';
+
+  const hasAnyCjk = cues.some((c) => hasCjkChars(c.text));
+  const latinBudget = getSubtitleWrapBudget(subtitle, width, height, false);
+  const cjkBudget = getSubtitleWrapBudget(subtitle, width, height, true);
+
   const isBox = subtitle.boxStyle === 'dark_box';
   const borderStyle = isBox ? 3 : 1;
-  const backColour = isBox ? '&H55000000' : '&H70000000';
-  const outlineWidth = isBox ? 6 : subtitle.strokeWidth;
+  const backColour = isBox ? '&H66000000' : '&H99000000';
+
+  const secondaryTextColour =
+    subtitle.textColor.toUpperCase() === '#FACC15' ? '&H00F8BD38' : '&H0015CCFA';
+  const secPrimary = effect === 'karaoke' ? highlightColour : secondaryTextColour;
+  const secSecondary = effect === 'karaoke' ? '&H00F8BD38' : '&H000000FF';
 
   const header = [
     '[Script Info]',
@@ -245,82 +832,153 @@ export function buildAssFromCues(
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: Default,${subtitle.fontName},${scaledFontSize},${primaryColour},&H000000FF,${isBox ? '&H55000000' : outlineColour},${backColour},-1,0,0,0,100,100,0,0,${borderStyle},${outlineWidth.toFixed(1)},${isBox ? 0 : 1.0},${alignment},40,40,${marginV},1`,
+    `Style: Default,${effectiveFontName},${latinBudget.scaledFontSize},${primaryColour},${secondaryColour},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
+    `Style: Secondary,${effectiveFontName},${latinBudget.scaledFontSize},${secPrimary},${secSecondary},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ];
 
   const events = cues.map((cue) => {
-    const wrapped = wrapSubtitleLine(cue.text, maxChars)
-      .replace(/\\/g, '\\\\')
-      .replace(/\{/g, '(')
-      .replace(/\}/g, ')')
-      .replace(/\n/g, '\\N');
-    return `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},Default,,0,0,0,,${wrapped}`;
+    const cueIsCjk = hasAnyCjk && hasCjkChars(cue.text) && !cue.text.includes(' ');
+    const wrapMax = cueIsCjk ? cjkBudget.maxCharsPerLine : latinBudget.maxCharsPerLine;
+    const wrapped = wrapSubtitleLine(cue.text, wrapMax);
+    const dur = Math.max(0.25, cue.endSec - cue.startSec);
+    const formattedBody = formatAssCueBody(wrapped, dur, effect);
+    const styleName = cue.voiceSlot === 'secondary' ? 'Secondary' : 'Default';
+    return `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},${styleName},,0,0,0,,${formattedBody}`;
   });
 
   return [...header, ...events, ''].join('\n');
 }
 
 /**
- * Builds the exact MoneyPrinterTurbo-style prompt for generating both narration script
- * and chronological per-scene visual prompts/keywords (usable in-app OR copyable to ChatGPT/Gemini Web).
+ * Builds the MoneyPrinterTurbo prompt for ChatGPT / Gemini Web or server AI:
+ * - 'all_in_one': AI selects a fascinating knowledge topic ("subject"), writes the full narration ("script"),
+ *   and supplies English stock video/image search keywords ("terms") + 1-to-1 scene prompts ("scenePrompts").
+ * - 'from_subject': Writes script + terms + scenePrompts specifically for the given subject.
  */
 export function buildMoneyPrinterPrompt(params: {
   subject: string;
-  language: 'vi' | 'en' | 'bilingual';
+  language: LanguageCode;
   scriptStyle: ScriptStyle;
   sentenceCount: number;
+  mode?: 'all_in_one' | 'from_subject';
+  verifiedFacts?: string[];
 }): string {
-  const { subject, language, scriptStyle, sentenceCount } = params;
-  const count = Math.max(3, Math.min(8, sentenceCount));
+  const { subject, language, scriptStyle, sentenceCount, mode = 'from_subject', verifiedFacts = [] } = params;
+  const count = Math.max(2, Math.min(25, Math.round(sentenceCount)));
+  const cleanSubject = subject.trim();
 
   const styleDesc: Record<ScriptStyle, string> = {
-    curious_facts: 'Mở đầu bằng câu hỏi hoặc sự thật gây tò mò cực mạnh trong 3 giây đầu, sau đó đưa ra các dữ kiện bất ngờ, cụ thể.',
-    storytelling: 'Kể chuyện mạch lạc, giàu hình ảnh, tạo cao trào cảm xúc và kết thúc đọng lại suy ngẫm.',
-    tips_howto: 'Đi thẳng vào vấn đề, liệt kê mẹo thực tế ngắn gọn, dễ áp dụng ngay.',
-    news_fast: 'Nhịp độ nhanh, súc tích, nêu thông tin đắt giá ngay câu đầu tiên.',
+    curious_facts:
+      'Mở đầu bằng câu hỏi hoặc sự thật có thực gây tò mò trong 3 giây đầu, sau đó đưa ra các dữ kiện, con số và sự thật khoa học/lịch sử chính xác.',
+    storytelling:
+      'Kể lại câu chuyện/sự kiện có thật mạch lạc, giàu hình ảnh, tôn trọng đúng mốc thời gian và nhân vật/địa danh thực tế.',
+    tips_howto: 'Đi thẳng vào vấn đề, liệt kê kiến thức hoặc mẹo thực tế có cơ sở khoa học rõ ràng, dễ áp dụng.',
+    news_fast: 'Nhịp độ nhanh, súc tích, nêu thông tin sự kiện có thật đắt giá ngay câu đầu tiên.',
+    language_challenge:
+      'Thử thách phản xạ học dịch câu kiểu Instant Translation / 瞬間英作文. BẮT BUỘC đủ 3 phần: (1) Câu Intro mở đầu giới thiệu thử thách, (2) Các cặp câu hỏi tiếng mẹ đẻ gắn [PAUSE] ở cuối + câu đáp án tự nhiên bằng ngoại ngữ (kèm tag [VI]/[JA]/[EN]), (3) Câu Outro kết thúc kêu gọi lưu video/bình luận.',
+    bilingual_dialogue:
+      'Hội thoại / Podcast 2 người đối đáp tự nhiên, mỗi lượt nói 1 dòng gắn tag [V1] hoặc [V2] (hoặc [VI]/[EN]/[JA]) để 2 giọng đọc luân phiên.',
+    quiz_riddle:
+      'Đố vui kiến thức có thực: đặt câu hỏi kèm [PAUSE] cho người xem đoán, rồi bật mí đáp án chính xác dựa trên sự thật.',
+    motivational:
+      'Truyền cảm hứng, triết lý sống sâu sắc, nhịp chậm truyền cảm, câu văn súc tích đọng lại cảm xúc.',
+    top_list:
+      'Dạng Top xếp hạng (Top 3 / Top 5) gồm các sự kiện, địa danh hoặc dữ kiện có thật từ ít bất ngờ đến gây kinh ngạc nhất.',
   };
 
-  const langDesc =
-    language === 'en'
-      ? 'Write the "script" in crisp, natural conversational English.'
-      : language === 'bilingual'
-      ? 'Write the "script" alternating Vietnamese and short natural English lines.'
-      : 'Viết phần "script" hoàn toàn bằng tiếng Việt tự nhiên để đọc thành tiếng (không dùng emoji, không hashtag, không ghi "MC:" hay "Người dẫn:").';
+  let langDesc =
+    'Viết cả "subject" và "script" 100% bằng tiếng Việt tự nhiên để đọc thành tiếng (không dùng emoji, không hashtag, không ghi "MC:" hay "Người dẫn:").';
+  if (language === 'en') {
+    langDesc =
+      'Write BOTH "subject" and "script" 100% in crisp, natural conversational English (no Vietnamese, no emojis, no hashtags, no speaker labels).';
+  } else if (language === 'ja') {
+    langDesc =
+      '「subject」と「script」は100%自然な日本語のみで書いてください（ベトナム語や絵文字・ハッシュタグ・話者ラベルは絶対に含めないでください）。1文ごとに改行してください。';
+  } else if (language === 'bilingual') {
+    langDesc =
+      'Write alternating lines in Vietnamese (tagged [VI] at line start) and natural English (tagged [EN] at line start) so dual voices read each language with native pronunciation. Add [PAUSE] at the end of question/challenge lines when helpful.';
+  } else if (language === 'vi_ja') {
+    langDesc =
+      'Write alternating lines in Vietnamese (tagged [VI] at line start) and natural Japanese (tagged [JA] at line start) so dual voices read each language with native pronunciation. Add [PAUSE] at the end of challenge lines when helpful.';
+  } else if (language === 'ja_en') {
+    langDesc =
+      'Write alternating lines in natural Japanese (tagged [JA] at line start) and natural English (tagged [EN] at line start), following the 1-minute Instant Translation (瞬間英作文) style. Add [PAUSE] at the end of the Japanese prompt line before the English answer.';
+  }
+
+  const factualRule =
+    scriptStyle === 'language_challenge' || scriptStyle === 'bilingual_dialogue'
+      ? ''
+      : '\nNGUYÊN TẮC SỰ THẬT: Chỉ trình bày kiến thức, sự kiện, số liệu và tên riêng CÓ THẬT trong lịch sử/khoa học/tin tức thực tế. Tuyệt đối KHÔNG bịa đặt hay hư cấu chi tiết giả.';
+
+  const verifiedBlock =
+    verifiedFacts.length > 0
+      ? `\nDỮ LIỆU THỰC TẾ ĐÃ XÁC MINH (Wikipedia / Tin tức thực tế — hãy ưu tiên sử dụng các dữ kiện này):\n${verifiedFacts
+          .slice(0, 10)
+          .map((f, i) => `${i + 1}. ${f}`)
+          .join('\n')}\n`
+      : '';
+
+  if (mode === 'all_in_one') {
+    const nicheHint = cleanSubject
+      ? `Hướng/lĩnh vực tham khảo (có thể mở rộng sáng tạo nếu muốn): "${cleanSubject}". Nếu từ khóa đang ở ngôn ngữ khác, hãy chuyển sang chủ đề mới thuần ngôn ngữ đích.`
+      : 'Tự chọn 1 chủ đề kiến thức, địa danh, hiện tượng khoa học hoặc sự kiện lịch sử CÓ THẬT (vũ trụ, tâm lý học, lịch sử, tự nhiên, công nghệ). Tránh chủ đề hư cấu hoặc lặp lại nhàm chán.';
+
+    return `Bạn là đạo diễn nội dung & biên kịch video ngắn (TikTok / YouTube Shorts / Reels) chuẩn MoneyPrinterTurbo.
+Nhiệm vụ trọn gói (All-in-One): Bạn hãy TỰ CHỌN CHỦ ĐỀ CÓ THẬT hấp dẫn, VIẾT KỊCH BẢN chi tiết, và ĐỀ XUẤT TỪ KHÓA TÌM ẢNH / VIDEO B-ROLL chuẩn cho từng cảnh quay.
+${nicheHint}
+Phong cách: ${styleDesc[scriptStyle]}
+${langDesc}${factualRule}${verifiedBlock}
+Yêu cầu BẮT BUỘC:
+1. "subject": Tên chủ đề thu hút bằng ngôn ngữ mục tiêu (ngắn gọn 6-14 từ, gây tò mò ngay khi đọc).
+2. "script": Gồm đúng ${count} dòng ngắn gọn đọc thành tiếng, mỗi câu/lượt nói nằm trên 1 dòng riêng biệt. Nếu là song ngữ/2 giọng, gắn tag [VI]/[EN]/[JA] hoặc [V1]/[V2] đầu dòng và dùng [PAUSE] sau câu hỏi thử thách.
+3. "terms": Mảng gồm 4-6 cụm từ khóa tìm kiếm bằng tiếng Anh ngắn gọn (2-3 từ mỗi cụm, ví dụ: "black hole galaxy", "friends talking cafe") để hệ thống tự động tìm video MP4 & ảnh thật trên kho miễn phí.
+4. "scenePrompts": Mảng gồm đúng ${count} cụm từ khóa / mô tả hình ảnh-video bằng tiếng Anh tương ứng 1-1 với từng dòng trong "script" (rõ chủ thể, bối cảnh, ánh sáng điện ảnh, không chữ trên ảnh).
+
+Chỉ trả về đúng 1 khối JSON hợp lệ theo mẫu sau (không giải thích thừa bên ngoài JSON):
+{
+  "subject": "Tiêu đề chủ đề thuần ngôn ngữ đích",
+  "script": "Dòng 1...\\nDòng 2...\\n...",
+  "terms": ["english stock keyword 1", "english stock keyword 2", "english stock keyword 3", "english stock keyword 4"],
+  "scenePrompts": [
+    "cinematic visual query for line 1, photorealistic, 8k, no text",
+    "cinematic visual query for line 2, photorealistic, 8k, no text"
+  ]
+}`;
+  }
 
   return `Bạn là biên kịch chuyên tạo video ngắn (TikTok / YouTube Shorts / Reels) chuẩn MoneyPrinterTurbo.
-Chủ đề: "${subject}"
+Chủ đề: "${cleanSubject || 'Kiến thức khoa học thú vị'}"
 Phong cách: ${styleDesc[scriptStyle]}
-${langDesc}
-
+${langDesc}${factualRule}${verifiedBlock}
 Yêu cầu BẮT BUỘC:
-1. "script": Gồm đúng ${count} câu ngắn gọn, mỗi câu nằm trên 1 dòng riêng biệt, câu đầu tiên phải giữ chân người xem ngay lập tức.
-2. "terms": Mảng gồm 3-5 cụm từ khóa tiếng Anh ngắn (2-3 từ) để tìm stock video trên kho miễn phí theo đúng trình tự nội dung.
-3. "scenePrompts": Mảng gồm đúng ${count} mô tả cảnh quay bằng tiếng Anh (mỗi mô tả tương ứng 1-1 với từng câu trong script, tả rõ chủ thể, ánh sáng, góc máy điện ảnh, không chứa chữ viết trên ảnh).
+1. "subject": Chuẩn hóa lại tên chủ đề theo đúng ngôn ngữ đã chọn.
+2. "script": Gồm đúng ${count} dòng ngắn gọn, mỗi câu/lượt nói nằm trên 1 dòng riêng biệt.
+3. "terms": Mảng gồm 3-6 cụm từ khóa tiếng Anh ngắn (2-3 từ) để tìm stock video & ảnh trên kho miễn phí theo đúng trình tự nội dung.
+4. "scenePrompts": Mảng gồm đúng ${count} mô tả cảnh quay bằng tiếng Anh (mỗi mô tả tương ứng 1-1 với từng dòng trong script, tả rõ chủ thể, ánh sáng, góc máy điện ảnh, không chứa chữ viết trên ảnh).
 
 Chỉ trả về đúng JSON hợp lệ theo mẫu sau (không giải thích thừa):
 {
-  "script": "Câu 1...\\nCâu 2...\\nCâu 3...\\nCâu 4...",
+  "subject": "${cleanSubject || 'Tiêu đề chủ đề'}",
+  "script": "Dòng 1...\\nDòng 2...\\n...",
   "terms": ["keyword one", "keyword two", "keyword three"],
   "scenePrompts": [
-    "cinematic visual description for sentence 1, photorealistic, 8k, no text",
-    "cinematic visual description for sentence 2, photorealistic, 8k, no text",
-    "cinematic visual description for sentence 3, photorealistic, 8k, no text",
-    "cinematic visual description for sentence 4, photorealistic, 8k, no text"
+    "cinematic visual description for line 1, photorealistic, 8k, no text",
+    "cinematic visual description for line 2, photorealistic, 8k, no text"
   ]
 }`;
 }
 
 /**
- * Parses either structured JSON output (from ChatGPT/Gemini Web or Pollinations AI)
+ * Parses either structured JSON output (from ChatGPT/Gemini Web, Gemini API, or Pollinations AI)
  * OR plain multi-line script pasted by the user.
  */
 export function parseAiWebOrJsonOutput(
   rawText: string,
   subject: string
-): { script: string; terms: string[]; scenePrompts: string[] } | null {
+): { subject?: string; script: string; terms: string[]; scenePrompts: string[] } | null {
   const trimmed = rawText.trim();
   if (!trimmed) return null;
 
@@ -328,17 +986,28 @@ export function parseAiWebOrJsonOutput(
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[0]) as {
+        subject?: string;
+        title?: string;
         script?: string | string[];
         terms?: string[];
         scenePrompts?: string[];
+        mediaSearchQueries?: string[];
       };
+      const parsedSubject =
+        typeof parsed.subject === 'string' && parsed.subject.trim().length > 2
+          ? parsed.subject.trim()
+          : typeof parsed.title === 'string' && parsed.title.trim().length > 2
+          ? parsed.title.trim()
+          : undefined;
+      const effectiveSubject = parsedSubject || subject;
+
       const rawScript = Array.isArray(parsed.script)
         ? parsed.script.map((s) => String(s).trim()).filter(Boolean).join('\n')
         : typeof parsed.script === 'string'
         ? parsed.script
         : '';
 
-      if (rawScript.trim().length > 10) {
+      if (rawScript.trim().length > 6) {
         const cleanScript = rawScript
           .replace(/\\n/g, '\n')
           .split('\n')
@@ -349,23 +1018,27 @@ export function parseAiWebOrJsonOutput(
         const terms =
           Array.isArray(parsed.terms) && parsed.terms.length > 0
             ? parsed.terms.map((t) => String(t).trim()).filter(Boolean)
-            : extractEnglishSearchTerms(subject, cleanScript);
-        const scenePrompts =
+            : extractEnglishSearchTerms(effectiveSubject, cleanScript);
+        const rawPrompts =
           Array.isArray(parsed.scenePrompts) && parsed.scenePrompts.length > 0
-            ? parsed.scenePrompts.map((p) => String(p).trim()).filter(Boolean)
-            : buildScenePromptsFromScript(sentences, subject, terms);
-        return { script: cleanScript, terms, scenePrompts };
+            ? parsed.scenePrompts
+            : Array.isArray(parsed.mediaSearchQueries) && parsed.mediaSearchQueries.length > 0
+            ? parsed.mediaSearchQueries
+            : null;
+        const scenePrompts = rawPrompts
+          ? rawPrompts.map((p) => String(p).trim()).filter(Boolean)
+          : buildScenePromptsFromScript(sentences, effectiveSubject, terms);
+        return { subject: parsedSubject, script: cleanScript, terms, scenePrompts };
       }
     } catch {
       // Fall through to plain-text parsing
     }
   }
 
-  // Plain-text script pasted directly from ChatGPT / Gemini Web
   const lines = trimmed
     .split('\n')
     .map((l) => l.replace(/^[-*\d.)\s]+/, '').trim())
-    .filter((l) => l.length > 4 && !l.startsWith('```'));
+    .filter((l) => l.length >= 1 && !l.startsWith('```'));
   if (lines.length === 0) return null;
 
   const cleanScript = lines.join('\n');
@@ -376,28 +1049,29 @@ export function parseAiWebOrJsonOutput(
 }
 
 const VI_KEYWORD_MAP: Array<[RegExp, string]> = [
-  [/cà phê|espresso|latte|rang xay|barista/i, 'coffee espresso barista cafe'],
-  [/máy bay|hàng không|bầu trời|bay lượn|phi công/i, 'airplane flight sky clouds'],
+  [/cà phê|espresso|latte|rang xay|barista|coffee|コーヒー|カフェ/i, 'coffee espresso barista cafe'],
+  [/máy bay|hàng không|bầu trời|bay lượn|phi công|airplane|飛行機/i, 'airplane flight sky clouds'],
   [/thành phố xanh|bền vững|năng lượng mặt trời|đô thị xanh/i, 'sustainable city green architecture'],
-  [/kim tự tháp|ai cập|pharaoh|giza|nhân sư/i, 'Egyptian pyramids desert'],
-  [/rãnh mariana|mariana|đáy biển|vực thẳm/i, 'deep sea mariana ocean'],
-  [/phát sáng|sứa biển|sinh vật biển/i, 'bioluminescent jellyfish ocean'],
+  [/kim tự tháp|ai cập|pharaoh|giza|nhân sư|pyramid|ピラミッド/i, 'Egyptian pyramids desert'],
+  [/rãnh mariana|mariana|đáy biển|vực thẳm|マリアナ海溝/i, 'deep sea mariana ocean'],
+  [/phát sáng|sứa biển|sinh vật biển|jellyfish|クラゲ/i, 'bioluminescent jellyfish ocean'],
   [/tàu ngầm|thám hiểm biển|thợ lặn/i, 'underwater coral ocean'],
-  [/đại dương|biển cả|sóng biển|san hô/i, 'ocean waves coral'],
-  [/vũ trụ|không gian|hành tinh|ngôi sao|thiên hà|hố đen/i, 'space galaxy stars'],
-  [/(?:^|[\s,.!?])mèo(?:$|[\s,.!?])|thú cưng|hộp giấy/i, 'cat pet cute'],
-  [/(?:^|[\s,.!?])chó(?:$|[\s,.!?])|chú cún/i, 'dog running happy'],
-  [/tập trung|làm việc|học tập|bàn làm việc|sáng tạo/i, 'workspace desk laptop coffee'],
-  [/thói quen|buổi sáng|đồng hồ báo thức|ngủ dậy/i, 'morning sunrise coffee'],
-  [/công nghệ|trí tuệ nhân tạo|máy tính|lập trình|robot/i, 'robotics technology future'],
-  [/núi non|leo núi|đỉnh núi|hoàng hôn/i, 'mountain landscape sunset'],
-  [/thiên nhiên|rừng xanh|cơn mưa/i, 'forest nature waterfall'],
-  [/thành phố|đường phố|đô thị|giao thông/i, 'city night timelapse'],
-  [/tài chính|tiền bạc|kinh doanh|đầu tư/i, 'business finance skyscraper'],
-  [/sức khỏe|thể thao|chạy bộ|tập gym/i, 'running fitness sunrise'],
-  [/ẩm thực|nấu ăn|món ăn/i, 'cooking kitchen food'],
-  [/lịch sử|cổ đại|đế chế|di tích/i, 'ancient architecture ruins'],
-  [/não bộ|tâm lý|giấc mơ|suy nghĩ/i, 'abstract light brain'],
+  [/đại dương|biển cả|sóng biển|san hô|ocean|海|深海/i, 'ocean waves coral'],
+  [/vũ trụ|không gian|hành tinh|ngôi sao|thiên hà|hố đen|space|universe|宇宙/i, 'space galaxy stars'],
+  [/(?:^|[\s,.!?])mèo(?:$|[\s,.!?])|thú cưng|hộp giấy|cat|猫/i, 'cat pet cute'],
+  [/(?:^|[\s,.!?])chó(?:$|[\s,.!?])|chú cún|dog|犬/i, 'dog running happy'],
+  [/tập trung|làm việc|học tập|bàn làm việc|sáng tạo|workspace|集中/i, 'workspace desk laptop coffee'],
+  [/thói quen|buổi sáng|đồng hồ báo thức|ngủ dậy|morning|朝/i, 'morning sunrise coffee'],
+  [/công nghệ|trí tuệ nhân tạo|máy tính|lập trình|robot|technology|ai|テクノロジー|ロボット/i, 'robotics technology future'],
+  [/núi non|leo núi|đỉnh núi|hoàng hôn|mountain|山|富士山/i, 'mountain landscape sunset'],
+  [/thiên nhiên|rừng xanh|cơn mưa|forest|nature|自然|森/i, 'forest nature waterfall'],
+  [/thành phố|đường phố|đô thị|giao thông|city|tokyo|東京|都市/i, 'city night timelapse'],
+  [/tài chính|tiền bạc|kinh doanh|đầu tư|business|finance/i, 'business finance skyscraper'],
+  [/sức khỏe|thể thao|chạy bộ|tập gym|fitness|health|健康/i, 'running fitness sunrise'],
+  [/ẩm thực|nấu ăn|món ăn|food|cooking|料理|グルメ/i, 'cooking kitchen food'],
+  [/lịch sử|cổ đại|đế chế|di tích|history|ancient|歴史/i, 'ancient architecture ruins'],
+  [/não bộ|tâm lý|giấc mơ|suy nghĩ|brain|psychology|脳/i, 'abstract light brain'],
+  [/nhật bản|tokyo|kyoto|hoa anh đào|sakura|japan|日本|桜/i, 'japan tokyo cherry blossom'],
 ];
 
 export function extractEnglishSearchTerms(subject: string, script: string): string[] {
@@ -426,9 +1100,6 @@ export function extractEnglishSearchTerms(subject: string, script: string): stri
   return Array.from(new Set(matched)).slice(0, 5);
 }
 
-/**
- * Generates specific, rich visual scene prompts per sentence when AI scenePrompts aren't provided.
- */
 export function buildScenePromptsFromScript(
   sentences: string[],
   subject: string,
@@ -450,13 +1121,137 @@ export function buildScenePromptsFromScript(
   });
 }
 
+function padOrSliceSentences(
+  baseSentences: string[],
+  targetCount: number,
+  topic: string,
+  language: LanguageCode,
+  scriptStyle: ScriptStyle = 'curious_facts'
+): string[] {
+  const count = Math.max(2, Math.min(25, Math.round(targetCount)));
+  if (baseSentences.length >= count) {
+    if (count === 2) {
+      return [baseSentences[0], baseSentences[baseSentences.length - 1]];
+    }
+    return [...baseSentences.slice(0, count - 1), baseSentences[baseSentences.length - 1]];
+  }
+
+  let expansionPool: string[];
+  if (scriptStyle === 'language_challenge') {
+    if (language === 'ja_en') {
+      expansionPool = [
+        '[JA] 次の問題！「ちょっと待ってね」を自然な英語で言うと？ [PAUSE]',
+        '[EN] Hold on just a second!',
+        '[JA] 「気にしないで」はどう表現しますか？ [PAUSE]',
+        '[EN] Never mind, don’t worry about it!',
+        '[JA] 「すごく助かりました」を英語にしてみましょう！ [PAUSE]',
+        '[EN] You really saved me! Thank you so much!',
+      ];
+    } else if (language === 'vi_ja') {
+      expansionPool = [
+        '[VI] Câu tiếp theo: "Xin lỗi, làm phiền bạn một chút!" nói tiếng Nhật sao? [PAUSE]',
+        '[JA] すみません、ちょっといいですか？',
+        '[VI] Còn câu "Cố lên nhé, bạn làm được mà!" trong tiếng Nhật là gì? [PAUSE]',
+        '[JA] 頑張ってね、あなたならできるよ！',
+        '[VI] Câu cuối cực hay: "Cảm ơn vì đã giúp đỡ tôi nhé!" [PAUSE]',
+        '[JA] 手伝ってくれて本当にありがとう！',
+      ];
+    } else if (language === 'ja') {
+      expansionPool = [
+        '[V1] 次の問題！この表現は正しいでしょうか？ [PAUSE]',
+        '[V2] 自然な言い回しを意識して声に出してみましょう！',
+      ];
+    } else if (language === 'en') {
+      expansionPool = [
+        '[V1] Next challenge! How would you reply politely in 3 seconds? [PAUSE]',
+        '[V2] I appreciate it, let me get right back to you!',
+      ];
+    } else {
+      expansionPool = [
+        '[VI] Câu tiếp theo: "Cho mình suy nghĩ một lát nhé" nói tiếng Anh sao? [PAUSE]',
+        '[EN] Let me think about it for a second!',
+        '[VI] Còn câu "Thật sự rất cảm ơn sự giúp đỡ của bạn!" là gì? [PAUSE]',
+        '[EN] I really appreciate your help!',
+        '[VI] Thử thêm 1 câu cực phổ biến: "Chúc bạn một ngày tốt lành!" [PAUSE]',
+        '[EN] Have a wonderful day ahead!',
+      ];
+    }
+  } else {
+    expansionPool =
+      language === 'ja'
+        ? [
+            `${topic}については、時代とともに新しい発見や研究結果が次々と報告されています。`,
+            `一見するとシンプルに見える仕組みの裏側には、驚くほど精巧なバランスが隠されています。`,
+            `世界の専門家たちは、${topic}が私たちの日常や未来に与える影響に注目しています。`,
+            `実際に観察してみると、小さな変化が大きな違いを生み出していることが分かります。`,
+            `歴史的な背景を振り返ることで、${topic}の本当の魅力がさらに深く見えてきます。`,
+            `最新のデータや記録からも、これまで知られていなかった事実が次々と明らかになっています。`,
+            `こうした知識を少し意識するだけで、いつもの景色がまったく違って見えるはずです。`,
+            `さらに詳しく見ていくと、多くの人が見落としがちな重要なポイントが浮かび上がります。`,
+          ]
+        : language === 'en'
+        ? [
+            `Looking closer at ${topic}, every small detail reveals a surprisingly intricate pattern.`,
+            `Researchers and creators continue to uncover overlooked angles behind ${topic}.`,
+            `Historical records show how ${topic} evolved far beyond what most people imagine.`,
+            `In real-world conditions, subtle shifts create massive long-term impact.`,
+            `Comparing multiple perspectives makes the hidden logic of ${topic} crystal clear.`,
+            `Modern technology is now helping us observe ${topic} in unprecedented resolution.`,
+            `What seems ordinary on the surface often holds the most compelling story underneath.`,
+            `Understanding this core principle changes how you notice ${topic} every day.`,
+          ]
+        : language === 'bilingual'
+        ? [
+            `[EN] Let's practice one more real-life expression together.`,
+            `[VI] Hãy thử lặp lại câu vừa rồi thật to và tự nhiên nhé!`,
+            `[EN] Native speakers use this short phrase every single day.`,
+            `[VI] Ghi nhớ cụm từ này sẽ giúp bạn phản xạ giao tiếp nhanh hơn hẳn.`,
+          ]
+        : language === 'vi_ja'
+        ? [
+            `[JA] もう一度ゆっくり聞いてみましょう。`,
+            `[VI] Bạn đã nghe rõ ngữ điệu tự nhiên của người Nhật chưa nào? [PAUSE]`,
+            `[JA] 毎日少しずつ練習すれば、必ず話せるようになります。`,
+            `[VI] Hãy lưu lại câu mẫu này để luyện phản xạ tiếng Nhật mỗi ngày nhé!`,
+          ]
+        : language === 'ja_en'
+        ? [
+            `[JA] 次のフレーズにも挑戦してみましょう！ [PAUSE]`,
+            `[EN] Let's try speaking it out loud one more time.`,
+            `[JA] ネイティブは日常会話でとてもよくこの表現を使います。`,
+            `[EN] Keep practicing every day and it will become automatic.`,
+          ]
+        : [
+            `Khi quan sát kỹ hơn về ${topic}, từng chi tiết nhỏ đều phản ánh một quy luật vô cùng thú vị.`,
+            `Các nhà nghiên cứu đã ghi nhận nhiều dữ kiện bất ngờ làm thay đổi cách chúng ta hiểu về ${topic}.`,
+            `Không chỉ dừng lại ở bề nổi, câu chuyện đằng sau ${topic} còn gắn liền với nhiều yếu tố thực tế ít người biết.`,
+            `Nếu đặt trong bối cảnh rộng lớn hơn, vai trò của ${topic} càng trở nên rõ nét và đáng suy ngẫm.`,
+            `Nhiều bằng chứng thực nghiệm gần đây tiếp tục hé lộ những khía cạnh hoàn toàn mới mẻ.`,
+            `Điều khiến nhiều người bất ngờ nhất chính là sự kết nối chặt chẽ giữa các chi tiết tưởng chừng rời rạc.`,
+            `Khi hiểu đúng bản chất của ${topic}, bạn sẽ nhìn thấy những giá trị sâu sắc hơn trong đời sống hằng ngày.`,
+            `Những câu chuyện thực tế xoay quanh chủ đề này luôn mang lại nguồn cảm hứng bất tận cho người khám phá.`,
+          ];
+  }
+
+  const head = baseSentences.slice(0, Math.max(1, baseSentences.length - 1));
+  const tail = baseSentences[baseSentences.length - 1];
+  const combined = [...head];
+  let idx = 0;
+  while (combined.length < count - 1) {
+    combined.push(expansionPool[idx % expansionPool.length]);
+    idx++;
+  }
+  combined.push(tail);
+  return combined.slice(0, count);
+}
+
 /**
- * Builds a clean, fluent Vietnamese short-video script from factual Wikipedia excerpts
- * or structured topic templates matching the selected style and sentence count.
+ * Builds a clean, fluent short-video script from factual Wikipedia excerpts
+ * or structured topic templates matching the selected language, style, and flexible length (2..25).
  */
 export function buildSmartVietnameseScriptFromFacts(params: {
   subject: string;
-  language: 'vi' | 'en' | 'bilingual';
+  language: LanguageCode;
   scriptStyle: ScriptStyle;
   sentenceCount: number;
   wikiTitle?: string;
@@ -464,54 +1259,247 @@ export function buildSmartVietnameseScriptFromFacts(params: {
   englishTerms?: string[];
 }): { script: string; terms: string[]; scenePrompts: string[] } {
   const topic = params.subject.trim() || 'Những bí ẩn kỳ diệu quanh ta';
-  const count = Math.max(3, Math.min(8, params.sentenceCount));
+  const count = Math.max(2, Math.min(25, Math.round(params.sentenceCount)));
   const terms =
     params.englishTerms && params.englishTerms.length > 0
       ? params.englishTerms
       : extractEnglishSearchTerms(topic, '');
 
-  if (params.language === 'vi' && params.wikiSentences && params.wikiSentences.length >= 2) {
-    const hookMap: Record<ScriptStyle, string> = {
-      curious_facts: `Bạn có biết những sự thật cực kỳ bất ngờ về ${params.wikiTitle || topic} chưa?`,
-      storytelling: `Ít ai biết câu chuyện đằng sau ${params.wikiTitle || topic} lại ẩn chứa nhiều điều kỳ vĩ đến vậy.`,
-      tips_howto: `Hãy cùng điểm qua những thông tin quan trọng nhất về ${params.wikiTitle || topic} chỉ trong vài giây!`,
-      news_fast: `Sự thật về ${params.wikiTitle || topic} mà rất nhiều người vẫn chưa từng nghe tới.`,
-    };
-    const outro =
-      'Theo dõi kênh để cùng khám phá thêm nhiều kiến thức thú vị mỗi ngày nhé!';
+  const isDualMode =
+    isBilingualLanguage(params.language) ||
+    params.scriptStyle === 'language_challenge' ||
+    params.scriptStyle === 'bilingual_dialogue' ||
+    params.scriptStyle === 'quiz_riddle';
+
+  if (params.wikiSentences && params.wikiSentences.length >= 2 && !isDualMode) {
+    const title = params.wikiTitle || topic;
+    let hook = `Bạn có biết những sự thật cực kỳ bất ngờ về ${title} chưa?`;
+    let outro = 'Theo dõi kênh để cùng khám phá thêm nhiều kiến thức thú vị mỗi ngày nhé!';
+
+    if (params.language === 'ja') {
+      const jaHooks: Record<string, string> = {
+        curious_facts: `${title}について、意外と知られていない驚きの事実をご存じですか？`,
+        storytelling: `${title}の裏側には、あまり語られない魅力的な物語が隠されています。`,
+        tips_howto: `${title}の重要なポイントを、数秒で分かりやすくまとめました。`,
+        news_fast: `今あらためて注目されている${title}の核心を短くお伝えします。`,
+        motivational: `${title}から学べる、人生を少し前向きにする大切なヒントがあります。`,
+        top_list: `${title}にまつわる驚くべきポイントを順番に見ていきましょう。`,
+      };
+      hook = jaHooks[params.scriptStyle] ?? jaHooks.curious_facts;
+      outro = '毎日新しい発見をお届けしますので、ぜひフォローしてチェックしてください！';
+    } else if (params.language === 'en') {
+      const enHooks: Record<string, string> = {
+        curious_facts: `Did you know these surprising facts about ${title}?`,
+        storytelling: `Behind ${title} lies a remarkable story most people never hear.`,
+        tips_howto: `Here are the essential takeaways about ${title} in just seconds.`,
+        news_fast: `Here is what makes ${title} stand out right now.`,
+        motivational: `Here is one powerful lesson from ${title} that changes how we think.`,
+        top_list: `Let's count down the most fascinating facts about ${title}.`,
+      };
+      hook = enHooks[params.scriptStyle] ?? enHooks.curious_facts;
+      outro = 'Follow for more bite-sized discoveries every single day!';
+    } else {
+      const viHooks: Record<string, string> = {
+        curious_facts: `Bạn có biết những sự thật cực kỳ bất ngờ về ${title} chưa?`,
+        storytelling: `Ít ai biết câu chuyện đằng sau ${title} lại ẩn chứa nhiều điều kỳ vĩ đến vậy.`,
+        tips_howto: `Hãy cùng điểm qua những thông tin quan trọng nhất về ${title} chỉ trong vài giây!`,
+        news_fast: `Sự thật về ${title} mà rất nhiều người vẫn chưa từng nghe tới.`,
+        motivational: `Bài học truyền cảm hứng sâu sắc từ ${title} dành cho bạn hôm nay.`,
+        top_list: `Cùng điểm danh những sự thật thú vị nhất về ${title} ngay sau đây.`,
+      };
+      hook = viHooks[params.scriptStyle] ?? viHooks.curious_facts;
+    }
 
     const bodyLimit = Math.max(1, count - 2);
     const body = params.wikiSentences
       .map((s) => s.replace(/\s+/g, ' ').trim())
-      .filter((s) => s.length >= 18 && s.length <= 180)
+      .filter((s) => s.length >= 12 && s.length <= 185)
       .slice(0, bodyLimit);
 
-    const assembled = [hookMap[params.scriptStyle], ...body, outro].slice(0, count);
-    const scenePrompts = buildScenePromptsFromScript(assembled, topic, terms);
+    const rawAssembled = [hook, ...body, outro];
+    const finalSentences = padOrSliceSentences(rawAssembled, count, topic, params.language);
+    const scenePrompts = buildScenePromptsFromScript(finalSentences, topic, terms);
     return {
-      script: assembled.join('\n'),
+      script: finalSentences.join('\n'),
       terms,
       scenePrompts,
     };
   }
 
-  return generateOfflineVietnameseScript(topic, params.language, count, terms);
+  return generateOfflineVietnameseScript(
+    topic,
+    params.language,
+    count,
+    terms,
+    params.scriptStyle
+  );
 }
 
 export function generateOfflineVietnameseScript(
   subject: string,
-  language: 'vi' | 'en' | 'bilingual',
+  language: LanguageCode,
   sentenceCount = 4,
-  overrideTerms?: string[]
+  overrideTerms?: string[],
+  scriptStyle: ScriptStyle = 'curious_facts'
 ): { script: string; terms: string[]; scenePrompts: string[] } {
   const topic = subject.trim() || 'Những bí ẩn kỳ diệu quanh ta';
+  const count = Math.max(2, Math.min(25, Math.round(sentenceCount)));
   const terms =
     overrideTerms && overrideTerms.length > 0
       ? overrideTerms
       : extractEnglishSearchTerms(topic, '');
 
   let sentences: string[];
-  if (language === 'en') {
+  if (
+    scriptStyle === 'language_challenge' ||
+    ((language === 'vi_ja' || language === 'ja_en') &&
+      scriptStyle !== 'bilingual_dialogue' &&
+      scriptStyle !== 'quiz_riddle')
+  ) {
+    if (language === 'ja_en') {
+      sentences = [
+        '[JA] 1分瞬間英作文チャレンジ！今から出す日本語を3秒で英語にしてみましょう！',
+        '[JA] 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+        '[EN] Watch out for her!',
+        '[JA] 続いて「無理しないでね」はどう言いますか？ [PAUSE]',
+        '[EN] Take it easy and don’t push yourself too hard!',
+        '[JA] いくつ言えましたか？気に入ったら保存して、毎日声に出して練習しましょう！',
+      ];
+    } else if (language === 'vi_ja') {
+      sentences = [
+        '[VI] Thử thách phản xạ dịch câu tiếng Nhật trong 3 giây! Bạn sẵn sàng chưa?',
+        '[VI] Câu đầu tiên: "Hôm nay bạn vất vả rồi" nói tiếng Nhật thế nào? [PAUSE]',
+        '[JA] 今日もお疲れ様でした！',
+        '[VI] Câu thứ 2: "Đừng lo lắng quá nhé" trong tiếng Nhật là gì? [PAUSE]',
+        '[JA] あまり心配しないでくださいね！',
+        '[VI] Bạn dịch đúng hết chứ? Lưu video lại và bình luận câu bạn muốn học tiếp nhé!',
+      ];
+    } else if (language === 'ja') {
+      sentences = [
+        `[V1] 3秒チャレンジ！${topic}の重要フレーズに挑戦しましょう！`,
+        `[V1] 質問です。${topic}について正しいのはどちらでしょうか？ [PAUSE]`,
+        `[V2] 正解は、多くの人が見落としがちな小さな仕組みに隠されています。`,
+        `[V1] いくつ正解できましたか？保存して毎日のトレーニングに役立ててくださいね！`,
+      ];
+    } else if (language === 'en') {
+      sentences = [
+        `[V1] Welcome to the 3-second speaking challenge on ${topic}! Ready?`,
+        `[V1] Question 1: How do native speakers react smoothly in this situation? [PAUSE]`,
+        `[V2] Keep it natural, concise, and confident!`,
+        `[V1] How many did you get right? Save this video and practice out loud every day!`,
+      ];
+    } else {
+      sentences = [
+        '[VI] Chào mừng bạn đến với thử thách phản xạ dịch câu tiếng Anh trong 3 giây! Sẵn sàng chưa nào?',
+        '[VI] Câu 1: "Hãy cẩn thận với cô ấy!" bạn nói tiếng Anh thế nào? [PAUSE]',
+        '[EN] Watch out for her!',
+        '[VI] Câu 2: "Cứ từ từ, đừng vội nhé!" dịch sang tiếng Anh là gì? [PAUSE]',
+        '[EN] Take your time, there is no rush!',
+        '[VI] Bạn dịch đúng được mấy câu? Lưu video và bình luận đáp án bên dưới nhé!',
+      ];
+    }
+  } else if (scriptStyle === 'bilingual_dialogue') {
+    if (language === 'vi_ja') {
+      sentences = [
+        '[VI] Này, bạn biết cách chào hỏi tự nhiên khi vào quán ăn Nhật không?',
+        '[JA] もちろん！笑顔で「すみません」と声をかければバッチリですよ。',
+        '[VI] Quá hay! Thế còn khi ăn xong muốn cảm ơn đầu bếp thì sao?',
+        '[JA] 「ごちそうさまでした！」と言うと、お店の方もすごく喜んでくれます。',
+      ];
+    } else if (language === 'ja_en') {
+      sentences = [
+        '[JA] カフェで自然に英語で注文するフレーズを教えて！',
+        '[EN] Sure! Just say, "Could I get an iced latte to go, please?"',
+        '[JA] すごくシンプルで使いやすいですね！',
+        '[EN] Yes, polite and super natural anywhere in the world!',
+      ];
+    } else if (language === 'bilingual') {
+      sentences = [
+        `[VI] Hôm nay cùng tìm hiểu chủ đề "${topic}" qua hội thoại hai giọng nhé!`,
+        `[EN] That sounds awesome—let’s break down the key insight in just a few seconds.`,
+        `[VI] Điều quan trọng nhất là lắng nghe cách ngắt nhịp và dùng từ tự nhiên.`,
+        `[EN] Practice out loud with us every day and save this clip for later!`,
+      ];
+    } else {
+      sentences = [
+        `[V1] Này bạn, hôm nay chúng ta bàn nhanh về "${topic}" nhé!`,
+        `[V2] Quá tuyệt! Điều bất ngờ nhất ở chủ đề này là gì thế?`,
+        `[V1] Chính là những chi tiết nhỏ mà hầu hết mọi người đều bỏ qua mỗi ngày.`,
+        `[V2] Đúng vậy, thử để ý một chút là thấy cuộc sống thú vị hơn hẳn luôn!`,
+      ];
+    }
+  } else if (scriptStyle === 'quiz_riddle') {
+    sentences =
+      language === 'ja'
+        ? [
+            `[V1] 3秒クイズ！${topic}にまつわる驚きの答えが分かりますか？ [PAUSE]`,
+            `[V2] 正解は、一見すると逆に見える自然の法則にありました！`,
+            `[V1] あなたの予想は当たりましたか？コメントで教えてくださいね！`,
+          ]
+        : language === 'en'
+        ? [
+            `[V1] Quick 3-second riddle about ${topic}: can you guess the real answer? [PAUSE]`,
+            `[V2] Surprise! The answer lies in a tiny detail most people overlook.`,
+            `[V1] Did you get it right? Save this and challenge a friend!`,
+          ]
+        : [
+            `[V1] Đố bạn trong 3 giây về ${topic}: đâu là sự thật ít người đoán trúng? [PAUSE]`,
+            `[V2] Đáp án bất ngờ nằm ngay ở chi tiết tưởng như ngược đời nhất!`,
+            `[V1] Bạn có đoán đúng không? Chia sẻ cho bạn bè cùng thử sức nhé!`,
+          ];
+  } else if (scriptStyle === 'motivational') {
+    sentences =
+      language === 'ja'
+        ? [
+            `今日、少しだけ立ち止まって${topic}について考えてみませんか。`,
+            `大きな変化はいつも、誰にも見えない静かな一歩から始まります。`,
+            `昨日の自分より1%だけ前に進むことが、やがて大きな自信に変わります。`,
+            `焦らなくて大丈夫。今日のあなたの歩みを心から応援しています！`,
+          ]
+        : language === 'en'
+        ? [
+            `Take a quiet breath and think about ${topic} for just ten seconds.`,
+            `Every meaningful breakthrough begins with small, unseen consistency.`,
+            `You do not need perfection today—just one honest step forward.`,
+            `Save this reminder for whenever you need a calm reset.`,
+          ]
+        : [
+            `Dành ra 10 giây hôm nay để suy ngẫm về ${topic} bạn nhé.`,
+            `Mọi bứt phá lớn lao đều bắt đầu từ những bước nhỏ âm thầm mỗi ngày.`,
+            `Bạn không cần phải hoàn hảo ngay lập tức, chỉ cần kiên trì hơn hôm qua một chút.`,
+            `Lưu lại video này làm động lực cho hành trình rực rỡ phía trước nhé!`,
+          ];
+  } else if (scriptStyle === 'top_list') {
+    sentences =
+      language === 'ja'
+        ? [
+            `${topic}について、今すぐ知っておきたい注目ポイントを3つ厳選しました。`,
+            `第3位は、日常の小さな習慣が大きな差を生むという事実です。`,
+            `第2位は、プロほど基本を徹底しているというシンプルな原則です。`,
+            `そして第1位は、今日から誰でもすぐ実践できるシンプルな工夫でした！`,
+          ]
+        : language === 'en'
+        ? [
+            `Here are the top 3 eye-opening insights about ${topic}.`,
+            `Number three: subtle daily details quietly shape the biggest outcomes.`,
+            `Number two: experts rely on simple fundamentals more than complex tricks.`,
+            `And number one: you can start applying this immediately today!`,
+          ]
+        : [
+            `Top 3 điều bất ngờ nhất về ${topic} mà ai cũng nên biết một lần.`,
+            `Số 3: Những thói quen nhỏ hằng ngày quyết định tới 80% kết quả lâu dài.`,
+            `Số 2: Người giỏi nhất luôn tập trung vào những nguyên lý cơ bản nhất.`,
+            `Và số 1: Bạn hoàn toàn có thể áp dụng bí quyết này ngay từ hôm nay!`,
+          ];
+  } else if (language === 'ja') {
+    sentences = [
+      `ちょっと待ってください、${topic}には多くの人が知らない驚きの秘密があります。`,
+      `一見すると普通の光景に見えても、その背景には緻密な仕組みや歴史が隠れています。`,
+      `最新の調査や観察によって、${topic}の意外な側面が次々と明らかになってきました。`,
+      `小さな視点の違いに気づくだけで、毎日の見方が大きく変わるはずです。`,
+      `気になる方は保存して、次回のショート動画もぜひフォローしてくださいね！`,
+    ];
+  } else if (language === 'en') {
     sentences = [
       `Stop scrolling—what you are about to learn about ${topic} will completely surprise you.`,
       `Even today, scientists and explorers are still uncovering hidden mechanisms behind ${topic}.`,
@@ -521,10 +1509,10 @@ export function generateOfflineVietnameseScript(
     ];
   } else if (language === 'bilingual') {
     sentences = [
-      `Bạn có biết sự thật gây kinh ngạc đằng sau ${topic} chưa?`,
-      `Most people miss the most fascinating detail hidden inside ${topic}.`,
-      `Khi quan sát cận cảnh, từng chi tiết nhỏ đều ẩn chứa quy luật đầy bất ngờ.`,
-      `Lưu lại video này và chia sẻ cho bạn bè cùng khám phá nhé.`,
+      `[VI] Bạn có biết sự thật gây kinh ngạc đằng sau ${topic} chưa?`,
+      `[EN] Most people miss the most fascinating detail hidden inside ${topic}.`,
+      `[VI] Khi quan sát cận cảnh, từng chi tiết nhỏ đều ẩn chứa quy luật đầy bất ngờ.`,
+      `[EN] Save this video and follow for more bilingual insights every day!`,
     ];
   } else if (/kim tự tháp|ai cập|pharaoh/i.test(topic)) {
     sentences = [
@@ -563,10 +1551,10 @@ export function generateOfflineVietnameseScript(
     ];
   }
 
-  const sliced = sentences.slice(0, Math.max(3, Math.min(6, sentenceCount)));
-  const scenePrompts = buildScenePromptsFromScript(sliced, topic, terms);
+  const finalSentences = padOrSliceSentences(sentences, count, topic, language, scriptStyle);
+  const scenePrompts = buildScenePromptsFromScript(finalSentences, topic, terms);
   return {
-    script: sliced.join('\n'),
+    script: finalSentences.join('\n'),
     terms,
     scenePrompts,
   };

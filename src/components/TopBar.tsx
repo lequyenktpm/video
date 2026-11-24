@@ -1,11 +1,6 @@
 import React from 'react';
-import { Upload } from 'lucide-react';
 
-interface TopBarProps {
-  onTriggerUpload: () => void;
-}
-
-export const TopBar: React.FC<TopBarProps> = ({ onTriggerUpload }) => {
+export const TopBar: React.FC = () => {
   const anchorLinks = [
     { href: '#sec-script', label: '1. Kịch bản' },
     { href: '#sec-visuals', label: '2. Cảnh quay' },
@@ -22,29 +17,17 @@ export const TopBar: React.FC<TopBarProps> = ({ onTriggerUpload }) => {
           MoneyPrinterTurbo VN
         </a>
 
-        <nav aria-label="Điều hướng bước tạo video" className="hidden md:flex items-center gap-6">
+        <nav aria-label="Điều hướng bước tạo video" className="flex items-center gap-5 sm:gap-7">
           {anchorLinks.map((link) => (
             <a
               key={link.href}
               href={link.href}
-              className="py-2 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
+              className="py-2 text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
             >
               {link.label}
             </a>
           ))}
         </nav>
-
-        <div className="flex items-center shrink-0">
-          <button
-            type="button"
-            onClick={onTriggerUpload}
-            className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
-          >
-            <Upload className="w-4 h-4" aria-hidden="true" />
-            <span className="sm:hidden">Tải tệp</span>
-            <span className="hidden sm:inline">Tải video / nhạc lên</span>
-          </button>
-        </div>
       </div>
     </header>
   );

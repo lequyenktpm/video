@@ -1,14 +1,27 @@
-export type LlmProvider = 'pollinations' | 'ollama' | 'offline_vi';
+export type LanguageCode = 'vi' | 'en' | 'ja' | 'bilingual' | 'vi_ja' | 'ja_en';
 
-export type ScriptStyle = 'curious_facts' | 'storytelling' | 'tips_howto' | 'news_fast';
+export type LlmProvider = 'gemini_search' | 'pollinations' | 'ollama' | 'offline_vi';
 
-export type TtsProvider = 'google_free' | 'edge_auto';
+export type ScriptStyle =
+  | 'curious_facts'
+  | 'storytelling'
+  | 'tips_howto'
+  | 'news_fast'
+  | 'language_challenge'
+  | 'bilingual_dialogue'
+  | 'quiz_riddle'
+  | 'motivational'
+  | 'top_list';
+
+export type TtsProvider = 'google_free' | 'edge_auto' | 'elevenlabs';
 
 export type VoiceOptionId =
   | 'vi-VN-HoaiMyNeural'
   | 'vi-VN-NamMinhNeural'
   | 'en-US-JennyNeural'
-  | 'en-US-GuyNeural';
+  | 'en-US-GuyNeural'
+  | 'ja-JP-NanamiNeural'
+  | 'ja-JP-KeitaNeural';
 
 export type MaterialSource =
   | 'mixkit_video'
@@ -19,15 +32,19 @@ export type MaterialSource =
 
 export type VideoAspectRatio = '9:16' | '16:9' | '1:1';
 
+export type VideoQuality = '480p' | '720p' | '1080p';
+
 export type VideoConcatMode = 'sequential' | 'random';
 
 export type VideoTransitionMode = 'fade' | 'slide' | 'none';
 
 export type SubtitlePosition = 'bottom' | 'center' | 'top' | 'custom';
 
-export type SubtitleFont = 'DejaVu Sans' | 'Liberation Sans' | 'JetBrains Mono';
+export type SubtitleFont = 'DejaVu Sans' | 'Liberation Sans' | 'JetBrains Mono' | 'Noto Sans';
 
 export type SubtitleBoxStyle = 'outline' | 'dark_box';
+
+export type SubtitleEffect = 'karaoke' | 'pop_zoom' | 'fade_slide' | 'typewriter' | 'static';
 
 export type BgmPreset = 'none' | 'lofi_chill' | 'tech_upbeat' | 'cinema_ambient' | 'custom';
 
@@ -36,6 +53,7 @@ export interface SubtitleCue {
   startSec: number;
   endSec: number;
   text: string;
+  voiceSlot?: 'primary' | 'secondary';
 }
 
 export interface SubtitleConfig {
@@ -45,9 +63,23 @@ export interface SubtitleConfig {
   customPositionPct: number;
   fontSize: number;
   textColor: string;
+  highlightColor: string;
   strokeColor: string;
   strokeWidth: number;
   boxStyle: SubtitleBoxStyle;
+  effect: SubtitleEffect;
+}
+
+export interface TopicSuggestion {
+  title: string;
+  angle: string;
+  sourceType: 'ai' | 'google_search';
+  sourceUrl?: string;
+}
+
+export interface GroundingSource {
+  title: string;
+  url: string;
 }
 
 export interface ScenePreviewItem {
@@ -62,7 +94,7 @@ export interface ScenePreviewItem {
 
 export interface RenderJobConfig {
   subject: string;
-  language: 'vi' | 'en' | 'bilingual';
+  language: LanguageCode;
   scriptStyle: ScriptStyle;
   sentenceCount: number;
   llmProvider: LlmProvider;
@@ -71,12 +103,17 @@ export interface RenderJobConfig {
   scenePrompts: string[];
   materialSource: MaterialSource;
   selectedMediaIds: string[];
+  customScenes?: ScenePreviewItem[];
   aspectRatio: VideoAspectRatio;
+  videoQuality?: VideoQuality;
   concatMode: VideoConcatMode;
   transitionMode: VideoTransitionMode;
   clipDurationSec: number;
   ttsProvider: TtsProvider;
   voiceId: VoiceOptionId;
+  dualVoiceEnabled?: boolean;
+  secondaryVoiceId?: VoiceOptionId;
+  pauseBetweenLinesSec?: number;
   voiceRate: number;
   voiceVolume: number;
   bgmPreset: BgmPreset;

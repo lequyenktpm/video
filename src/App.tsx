@@ -7,6 +7,7 @@ import {
 } from './shared/types';
 import { TopBar } from './components/TopBar';
 import { VideoStudioView } from './components/VideoStudioView';
+import { safeParseJsonResponse } from './shared/mptEngine';
 
 const HISTORY_STORAGE_KEY = 'mpt_vn_history_v1';
 
@@ -32,25 +33,31 @@ const DEFAULT_CONFIG: RenderJobConfig = {
   materialSource: 'mixkit_video',
   selectedMediaIds: [],
   aspectRatio: '9:16',
+  videoQuality: '720p',
   concatMode: 'sequential',
   transitionMode: 'fade',
   clipDurationSec: 3,
   ttsProvider: 'google_free',
   voiceId: 'vi-VN-HoaiMyNeural',
+  dualVoiceEnabled: false,
+  secondaryVoiceId: 'en-US-JennyNeural',
+  pauseBetweenLinesSec: 0,
   voiceRate: 1.05,
   voiceVolume: 1.0,
   bgmPreset: 'lofi_chill',
   bgmVolume: 0.22,
   subtitle: {
     enabled: true,
-    fontName: 'DejaVu Sans',
+    fontName: 'Noto Sans',
     position: 'bottom',
     customPositionPct: 84,
-    fontSize: 42,
+    fontSize: 38,
     textColor: '#FFFFFF',
+    highlightColor: '#FACC15',
     strokeColor: '#000000',
-    strokeWidth: 2.2,
+    strokeWidth: 2.0,
     boxStyle: 'outline',
+    effect: 'karaoke',
   },
 };
 
@@ -86,10 +93,10 @@ export default function App() {
     try {
       const res = await fetch('/api/media/list');
       if (res.ok) {
-        const data = (await res.json()) as {
+        const data = await safeParseJsonResponse<{
           uploaded: MediaAssetItem[];
           builtinBgm: MediaAssetItem[];
-        };
+        }>(res, 'Lỗi đọc thư viện tư liệu.');
         setUploadedMedia(data.uploaded);
         setBuiltinBgm(data.builtinBgm);
       }
@@ -111,7 +118,10 @@ export default function App() {
       try {
         const res = await fetch(`/api/render-status/${renderJob.jobId}`);
         if (!res.ok) return;
-        const latest = (await res.json()) as RenderJobStatus;
+        const latest = await safeParseJsonResponse<RenderJobStatus>(
+          res,
+          'Không đọc được trạng thái render.'
+        );
         setRenderJob(latest);
 
         if (latest.status === 'done' || latest.status === 'error') {
@@ -150,7 +160,10 @@ export default function App() {
         method: 'POST',
         body: form,
       });
-      const data = (await res.json()) as { item?: MediaAssetItem; error?: string };
+      const data = await safeParseJsonResponse<{ item?: MediaAssetItem; error?: string }>(
+        res,
+        'Tải tệp lên thất bại.'
+      );
       if (!res.ok || !data.item) {
         throw new Error(data.error || 'Tải tệp lên thất bại.');
       }
@@ -186,11 +199,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
       });
-      const data = (await res.json()) as {
+      const data = await safeParseJsonResponse<{
         jobId?: string;
         status?: RenderJobStatus;
         error?: string;
-      };
+      }>(res, 'Không thể khởi tạo tác vụ dựng video.');
       if (!res.ok || !data.status) {
         throw new Error(data.error || 'Không thể khởi tạo tác vụ dựng video.');
       }
@@ -226,7 +239,7 @@ export default function App() {
         }}
       />
 
-      <TopBar onTriggerUpload={() => fileInputRef.current?.click()} />
+      <TopBar />
 
       <main className="flex-1 max-w-[1360px] w-full mx-auto px-4 sm:px-6 py-6 space-y-5">
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-3">
