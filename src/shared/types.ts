@@ -27,12 +27,15 @@ export type VoiceOptionId =
 
 export type MaterialSource =
   | 'studio_2411'
+  | 'curated_preset'
   | 'mixkit_video'
   | 'hybrid_real'
   | 'neutral_css_bg'
   | 'pollinations_scene'
   | 'stock_free'
   | 'local_upload';
+
+export type CuratedBackgroundCategory = 'all' | 'study' | 'interview' | 'life';
 
 export type Studio2411ThemeId =
   | 'cards_pastel'
@@ -52,7 +55,10 @@ export type Studio2411ComponentVariant =
   | 'bs-alert-callout'
   | 'css-browser-mockup'
   | 'gauge-tone'
-  | 'staircase-3d';
+  | 'staircase-3d'
+  | 'friends-chat'
+  | 'avatar-speech'
+  | 'dialogue-upgrade';
 
 export type Studio2411AnimationIn = 'pop-up' | 'slide-up' | 'drop-in' | 'fade-scale';
 
@@ -64,6 +70,8 @@ export interface Studio2411SceneComponentOverride {
   labels?: string[];
   highlightWord?: string;
   formula?: string;
+  speechText?: string;
+  reactionText?: string;
   accentColor?: string;
   progressPct?: number;
 }
@@ -201,6 +209,8 @@ export interface RenderJobConfig {
   materialSource: MaterialSource;
   neutralBgTheme?: NeutralBgTheme;
   studio2411Theme?: Studio2411ThemeId;
+  curatedBgCategory?: CuratedBackgroundCategory;
+  curatedBgId?: string;
   mediaTypeFilter?: MediaTypeFilter;
   visualMood?: VisualMood;
   selectedMediaIds: string[];

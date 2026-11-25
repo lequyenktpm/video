@@ -32,21 +32,29 @@ import {
   normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
   planNarrationSegments,
+  planXfadeMergeBatches,
   RawSegmentTiming,
   resolveXfadeTransition,
   slugifyOutputFilename,
   splitCueIntoShortSubCues,
   splitScriptSentences,
+  splitTtsTextChunks,
   stripNarrationTags,
   validateRenderConfig,
 } from './src/shared/mptEngine';
 import {
   build2411CardSpecForLine,
   build2411CardSvg,
+  buildContextualSceneComponentsForScript,
   getStudio2411ThemeMeta,
 } from './src/shared/studioComponents2411';
 import {
+  CURATED_BACKGROUNDS,
+  selectCuratedBackgroundsForConfig,
+} from './src/shared/curatedBackgrounds';
+import {
   BgmPreset,
+  CuratedBackgroundCategory,
   GroundingSource,
   LanguageCode,
   MaterialSource,
@@ -57,6 +65,8 @@ import {
   RenderJobStatus,
   ScenePreviewItem,
   ScriptStyle,
+  Studio2411ComponentVariant,
+  Studio2411SceneComponentOverride,
   Studio2411ThemeId,
   SubtitleCue,
   TopicSuggestion,
@@ -90,8 +100,9 @@ const PROJECT_OUTPUT_ROOT = path.join(ROOT_DIR, 'output');
 const CACHE_DIR = path.join(DATA_DIR, 'cache');
 const BGM_DIR = path.join(DATA_DIR, 'bgm');
 const FONTS_DIR = path.join(ROOT_DIR, 'assets', 'fonts');
+const CURATED_BG_DIR = path.join(ROOT_DIR, 'assets', 'curated');
 
-for (const dir of [DATA_DIR, UPLOADS_DIR, OUTPUTS_DIR, PROJECT_OUTPUT_ROOT, CACHE_DIR, BGM_DIR, FONTS_DIR]) {
+for (const dir of [DATA_DIR, UPLOADS_DIR, OUTPUTS_DIR, PROJECT_OUTPUT_ROOT, CACHE_DIR, BGM_DIR, FONTS_DIR, CURATED_BG_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -151,8 +162,8 @@ function allocateUniqueBaseName(absDir: string, rawBase: string): string {
   return `${base} (${Date.now()})`;
 }
 
-async function runFfmpeg(args: string[], timeoutMs = 90000): Promise<void> {
-  await execFileAsync('ffmpeg', args, { timeout: timeoutMs, maxBuffer: 12 * 1024 * 1024 });
+async function runFfmpeg(args: string[], timeoutMs = 120000): Promise<void> {
+  await execFileAsync('ffmpeg', args, { timeout: timeoutMs, maxBuffer: 48 * 1024 * 1024 });
 }
 
 async function probeDurationSec(filePath: string): Promise<number> {
@@ -252,8 +263,9 @@ async function synthesizeWithEdgeTts(
     await tts.setMetadata(voiceId, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
     const { audioStream } = tts.toStream(text);
     const chunks: Buffer[] = [];
+    const edgeTimeoutMs = Math.max(12000, text.length * 90);
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Edge-TTS timeout')), 4500);
+      const timer = setTimeout(() => reject(new Error('Edge-TTS timeout')), edgeTimeoutMs);
       audioStream.on('data', (chunk: Buffer) => chunks.push(chunk));
       audioStream.on('end', () => {
         clearTimeout(timer);
@@ -282,20 +294,44 @@ async function synthesizeWithGoogleFreeTts(
   const isMale =
     voiceId.includes('NamMinh') || voiceId.includes('Guy') || voiceId.includes('Keita');
   const rawPath = `${outPath}.raw.mp3`;
+  const tempChunks: string[] = [];
+  const concatTxtPath = `${outPath}.chunks.txt`;
 
   try {
-    const encoded = encodeURIComponent(text);
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${lang}&client=tw-ob&q=${encoded}`;
-    const res = await fetchWithTimeout(
-      url,
-      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } },
-      8000
-    );
-    if (!res.ok) return false;
-    const arrayBuf = await res.arrayBuffer();
-    const buf = Buffer.from(arrayBuf);
-    if (buf.length < 400) return false;
-    fs.writeFileSync(rawPath, buf);
+    const textChunks = splitTtsTextChunks(text, 170);
+    if (textChunks.length === 0) return false;
+
+    for (let ci = 0; ci < textChunks.length; ci++) {
+      const encoded = encodeURIComponent(textChunks[ci]);
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${lang}&client=tw-ob&q=${encoded}`;
+      const res = await fetchWithTimeout(
+        url,
+        { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } },
+        10000
+      );
+      if (!res.ok) return false;
+      const arrayBuf = await res.arrayBuffer();
+      const buf = Buffer.from(arrayBuf);
+      if (buf.length < 300) return false;
+      const chunkFile = `${outPath}.part_${ci}.mp3`;
+      fs.writeFileSync(chunkFile, buf);
+      tempChunks.push(chunkFile);
+    }
+
+    if (tempChunks.length === 1) {
+      fs.renameSync(tempChunks[0], rawPath);
+      tempChunks.length = 0;
+    } else {
+      fs.writeFileSync(
+        concatTxtPath,
+        tempChunks.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'),
+        'utf-8'
+      );
+      await runFfmpeg(
+        ['-y', '-f', 'concat', '-safe', '0', '-i', concatTxtPath, '-c:a', 'libmp3lame', '-b:a', '96k', rawPath],
+        Math.max(25000, tempChunks.length * 4000)
+      );
+    }
 
     if (isMale) {
       await runFfmpeg(
@@ -311,7 +347,7 @@ async function synthesizeWithGoogleFreeTts(
           '96k',
           outPath,
         ],
-        15000
+        Math.max(25000, textChunks.length * 4000)
       );
       fs.rmSync(rawPath, { force: true });
     } else {
@@ -319,8 +355,13 @@ async function synthesizeWithGoogleFreeTts(
     }
     return true;
   } catch {
-    fs.rmSync(rawPath, { force: true });
     return false;
+  } finally {
+    fs.rmSync(rawPath, { force: true });
+    fs.rmSync(concatTxtPath, { force: true });
+    for (const f of tempChunks) {
+      fs.rmSync(f, { force: true });
+    }
   }
 }
 
@@ -1463,6 +1504,7 @@ interface ResolvedSceneAsset {
   previewUrl: string;
   thumbUrl?: string;
   sourceLabel: string;
+  componentSpec?: Studio2411SceneComponentOverride;
 }
 
 function getMoodPromptSuffix(mood: VisualMood = 'auto'): string {
@@ -1691,9 +1733,12 @@ function getSceneCacheKey(params: {
   sentences: string[];
   terms: string[];
   scenePrompts: string[];
+  sceneComponents?: Studio2411SceneComponentOverride[];
   materialSource: MaterialSource;
   neutralBgTheme?: NeutralBgTheme;
   studio2411Theme?: Studio2411ThemeId;
+  curatedBgCategory?: CuratedBackgroundCategory;
+  curatedBgId?: string;
   scriptStyle?: ScriptStyle;
   pauseBetweenLinesSec?: number;
   mediaTypeFilter: MediaTypeFilter;
@@ -1705,9 +1750,12 @@ function getSceneCacheKey(params: {
     s: params.sentences,
     t: params.terms,
     p: params.scenePrompts,
+    sc: params.sceneComponents ?? [],
     m: params.materialSource,
     nbt: params.neutralBgTheme ?? 'slate_studio',
     s2411: params.studio2411Theme ?? 'cards_pastel',
+    cbc: params.curatedBgCategory ?? 'all',
+    cbi: params.curatedBgId ?? 'auto',
     ss: params.scriptStyle ?? 'curious_facts',
     pb: params.pauseBetweenLinesSec ?? 5,
     mt: params.mediaTypeFilter,
@@ -1715,7 +1763,7 @@ function getSceneCacheKey(params: {
     a: params.aspectRatio,
     sel: params.selectedMediaIds,
     subj: params.subject,
-    v: 2,
+    v: 3,
   });
   return `scenes_${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12)}`;
 }
@@ -1725,9 +1773,12 @@ async function resolveSceneAssets(params: {
   script: string;
   terms: string[];
   scenePrompts: string[];
+  sceneComponents?: Studio2411SceneComponentOverride[];
   materialSource: MaterialSource;
   neutralBgTheme?: NeutralBgTheme;
   studio2411Theme?: Studio2411ThemeId;
+  curatedBgCategory?: CuratedBackgroundCategory;
+  curatedBgId?: string;
   scriptStyle?: ScriptStyle;
   pauseBetweenLinesSec?: number;
   mediaTypeFilter?: MediaTypeFilter;
@@ -1804,9 +1855,12 @@ async function resolveSceneAssets(params: {
     sentences: effectiveSentences,
     terms: searchTerms,
     scenePrompts: effectivePrompts,
+    sceneComponents: params.sceneComponents,
     materialSource: params.materialSource,
     neutralBgTheme: params.neutralBgTheme,
     studio2411Theme: params.studio2411Theme,
+    curatedBgCategory: params.curatedBgCategory,
+    curatedBgId: params.curatedBgId,
     scriptStyle: params.scriptStyle,
     pauseBetweenLinesSec: params.pauseBetweenLinesSec,
     mediaTypeFilter,
@@ -1822,12 +1876,112 @@ async function resolveSceneAssets(params: {
     params.videoQuality ?? '720p'
   );
 
-  // Component 2411 Study Card option: generates crisp vector flashcard & infographic PNGs/MP4s per line
+  // Curated Local Background Library (Study / Interview / Everyday Knowledge — Zero AI/Network latency)
+  if (params.materialSource === 'curated_preset') {
+    const selectedPool = selectCuratedBackgroundsForConfig({
+      category: params.curatedBgCategory,
+      bgId: params.curatedBgId,
+      subject: params.subject,
+      script: params.script,
+      scriptStyle: params.scriptStyle,
+      count: effectiveSentences.length,
+    });
+
+    const curatedAssets: ResolvedSceneAsset[] = [];
+    for (let idx = 0; idx < effectiveSentences.length; idx++) {
+      const sentence = effectiveSentences[idx];
+      const preset = selectedPool[idx] ?? CURATED_BACKGROUNDS[0];
+      const diskPath = path.join(CURATED_BG_DIR, preset.filename);
+      let imgLocalPath = diskPath;
+      let imgPreviewUrl = preset.previewUrl;
+
+      if (!fs.existsSync(imgLocalPath)) {
+        const fallbackFile = `curated_${preset.id}.jpg`;
+        const fallbackPath = path.join(sceneCacheDir, fallbackFile);
+        if (!fs.existsSync(fallbackPath)) {
+          await runFfmpeg(
+            [
+              '-y',
+              '-f',
+              'lavfi',
+              '-i',
+              `color=c=0x${preset.palette.midHex.replace('#', '')}:s=${width}x${height}:d=1`,
+              '-frames:v',
+              '1',
+              fallbackPath,
+            ],
+            10000
+          );
+        }
+        imgLocalPath = fallbackPath;
+        imgPreviewUrl = `/files/cache/${cacheKey}/${fallbackFile}`;
+      }
+
+      if (mediaTypeFilter === 'video_only') {
+        const mp4File = `curated_${preset.id}.mp4`;
+        const mp4Path = path.join(sceneCacheDir, mp4File);
+        if (!fs.existsSync(mp4Path)) {
+          await runFfmpeg(
+            [
+              '-y',
+              '-loop',
+              '1',
+              '-framerate',
+              '30',
+              '-i',
+              imgLocalPath,
+              '-vf',
+              `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=30,format=yuv420p`,
+              '-t',
+              '3',
+              '-c:v',
+              'libx264',
+              '-preset',
+              'ultrafast',
+              '-pix_fmt',
+              'yuv420p',
+              mp4Path,
+            ],
+            20000
+          );
+        }
+        curatedAssets.push({
+          index: idx,
+          sentence,
+          prompt: `${preset.categoryLabel} · ${preset.title}`,
+          kind: 'video',
+          localPath: mp4Path,
+          previewUrl: `/files/cache/${cacheKey}/${mp4File}`,
+          thumbUrl: imgPreviewUrl,
+          sourceLabel: `Nền sẵn: ${preset.title}`,
+        });
+      } else {
+        curatedAssets.push({
+          index: idx,
+          sentence,
+          prompt: `${preset.categoryLabel} · ${preset.title}`,
+          kind: 'image',
+          localPath: imgLocalPath,
+          previewUrl: imgPreviewUrl,
+          thumbUrl: imgPreviewUrl,
+          sourceLabel: `Nền sẵn: ${preset.title}`,
+        });
+      }
+    }
+
+    params.onLog?.(
+      `Đã nạp nhanh ${curatedAssets.length} nền học tập/phỏng vấn/đời sống có sẵn (0ms, không cần AI).`
+    );
+    return { cacheKey, assets: curatedAssets };
+  }
+
+  // Component 2411 Study Card option: generates crisp vector flashcard & infographic PNGs/MP4s per line (supporting all 11 variants)
   if (params.materialSource === 'studio_2411') {
     const themeMeta = getStudio2411ThemeMeta(params.studio2411Theme);
     const jpFontPath = path.join(FONTS_DIR, 'MPLUS1p-Bold.ttf');
     const fontFilePath = fs.existsSync(jpFontPath) ? jpFontPath : undefined;
     const assets2411: ResolvedSceneAsset[] = [];
+    let prevVariant: Studio2411ComponentVariant | undefined;
 
     for (let idx = 0; idx < effectiveSentences.length; idx++) {
       const sentence = effectiveSentences[idx];
@@ -1835,6 +1989,8 @@ async function resolveSceneAssets(params: {
       const linePres = analyzeScriptLinePresentation(rawLine, {
         scriptStyle: params.scriptStyle,
       });
+      const customComp = params.customScenes?.[idx]?.componentSpec;
+      const lineOverride = customComp ?? params.sceneComponents?.[idx];
       const spec = build2411CardSpecForLine({
         rawLine,
         lineIndex: idx,
@@ -1844,15 +2000,32 @@ async function resolveSceneAssets(params: {
         scriptStyle: params.scriptStyle,
         themeId: themeMeta.id,
         defaultPauseSec: params.pauseBetweenLinesSec ?? 5,
+        override: lineOverride,
+        prevVariant,
       });
+      prevVariant = spec.variant;
 
-      const svgPath = path.join(sceneCacheDir, `card2411_${idx}.svg`);
-      const pngPath = path.join(sceneCacheDir, `card2411_${idx}.png`);
+      const resolvedCompSpec: Studio2411SceneComponentOverride = {
+        variant: spec.variant,
+        animationIn: spec.animationIn,
+        title: spec.title,
+        subtitle: spec.subtitle,
+        labels: spec.labels,
+        highlightWord: spec.highlightWord,
+        formula: spec.formula,
+        speechText: spec.speechText,
+        reactionText: spec.reactionText,
+        progressPct: spec.progressPct,
+        ...(spec.accentOverrideHex ? { accentColor: spec.accentOverrideHex } : {}),
+      };
+
+      const svgPath = path.join(sceneCacheDir, `card2411_${idx}_${spec.variant}.svg`);
+      const pngPath = path.join(sceneCacheDir, `card2411_${idx}_${spec.variant}.png`);
       if (!fs.existsSync(pngPath)) {
         const svgContent = build2411CardSvg({ spec, width, height, fontFilePath });
         fs.writeFileSync(svgPath, svgContent, 'utf-8');
         try {
-          await runFfmpeg(['-y', '-i', svgPath, '-frames:v', '1', pngPath], 12000);
+          await runFfmpeg(['-y', '-i', svgPath, '-frames:v', '1', pngPath], 15000);
         } catch {
           const bgHex = themeMeta.bgBottomHex.replace('#', '');
           const cardHex = themeMeta.cardBgHex.replace('#', '');
@@ -1875,13 +2048,13 @@ async function resolveSceneAssets(params: {
               '1',
               pngPath,
             ],
-            12000
+            15000
           );
         }
       }
 
       if (mediaTypeFilter === 'video_only') {
-        const mp4Path = path.join(sceneCacheDir, `card2411_${idx}.mp4`);
+        const mp4Path = path.join(sceneCacheDir, `card2411_${idx}_${spec.variant}.mp4`);
         if (!fs.existsSync(mp4Path)) {
           await runFfmpeg(
             [
@@ -1902,35 +2075,37 @@ async function resolveSceneAssets(params: {
               'yuv420p',
               mp4Path,
             ],
-            12000
+            15000
           );
         }
         assets2411.push({
           index: idx,
           sentence,
-          prompt: `Component 2411 (${themeMeta.label}) · ${spec.contextLabel}`,
+          prompt: `2411 ${spec.variant} (${themeMeta.label}) · ${spec.contextLabel}`,
           kind: 'video',
           localPath: mp4Path,
-          previewUrl: `/files/cache/${cacheKey}/card2411_${idx}.mp4`,
-          thumbUrl: `/files/cache/${cacheKey}/card2411_${idx}.png`,
-          sourceLabel: `2411: ${themeMeta.label}`,
+          previewUrl: `/files/cache/${cacheKey}/card2411_${idx}_${spec.variant}.mp4`,
+          thumbUrl: `/files/cache/${cacheKey}/card2411_${idx}_${spec.variant}.png`,
+          sourceLabel: `2411 · ${spec.variant}`,
+          componentSpec: resolvedCompSpec,
         });
       } else {
         assets2411.push({
           index: idx,
           sentence,
-          prompt: `Component 2411 (${themeMeta.label}) · ${spec.contextLabel}`,
+          prompt: `2411 ${spec.variant} (${themeMeta.label}) · ${spec.contextLabel}`,
           kind: 'image',
           localPath: pngPath,
-          previewUrl: `/files/cache/${cacheKey}/card2411_${idx}.png`,
-          thumbUrl: `/files/cache/${cacheKey}/card2411_${idx}.png`,
-          sourceLabel: `2411: ${themeMeta.label}`,
+          previewUrl: `/files/cache/${cacheKey}/card2411_${idx}_${spec.variant}.png`,
+          thumbUrl: `/files/cache/${cacheKey}/card2411_${idx}_${spec.variant}.png`,
+          sourceLabel: `2411 · ${spec.variant}`,
+          componentSpec: resolvedCompSpec,
         });
       }
     }
 
     params.onLog?.(
-      `Đã dựng ${assets2411.length} thẻ học Component 2411 (${themeMeta.label}) sắc nét.`
+      `Đã dựng ${assets2411.length} thẻ Component 2411 (${themeMeta.label}) đa dạng phong cách.`
     );
     return { cacheKey, assets: assets2411 };
   }
@@ -2652,10 +2827,10 @@ async function normalizeMediaToClip(params: {
     width,
     height,
     durationSec,
-    motionVariant,
     visualMood = 'auto',
   } = params;
   const safeDur = Math.max(1.2, durationSec);
+  const clipTimeoutMs = Math.max(60000, Math.round(safeDur * 5000) + 25000);
   const colorGrade = getVisualMoodGradeFilter(visualMood);
 
   try {
@@ -2683,20 +2858,18 @@ async function normalizeMediaToClip(params: {
           'yuv420p',
           outPath,
         ],
-        25000
+        clipTimeoutMs
       );
-      return true;
+      return fs.existsSync(outPath) && fs.statSync(outPath).size > 8000;
     }
 
-    // Fast HTTP range clip directly from Mixkit 720p CDN URL
-    if (remoteUrl) {
-      for (const seekSec of [1.2, 0.2]) {
+    if (remoteUrl && (!sourcePath || !fs.existsSync(sourcePath))) {
+      for (const seekSec of [0.8, 0.0]) {
         try {
           await runFfmpeg(
             [
               '-y',
-              '-ss',
-              seekSec.toFixed(1),
+              ...(seekSec > 0 ? ['-ss', seekSec.toFixed(1)] : []),
               '-stream_loop',
               '-1',
               '-i',
@@ -2714,7 +2887,7 @@ async function normalizeMediaToClip(params: {
               'yuv420p',
               outPath,
             ],
-            25000
+            clipTimeoutMs
           );
           if (fs.existsSync(outPath) && fs.statSync(outPath).size > 20000) {
             return true;
@@ -2727,7 +2900,7 @@ async function normalizeMediaToClip(params: {
     }
 
     const rawVidDur = await probeDurationSec(sourcePath);
-    const seekSec = rawVidDur > 12 ? 4.0 : rawVidDur > 5 ? 1.2 : 0;
+    const seekSec = rawVidDur > safeDur + 5 ? 3.2 : rawVidDur > 6 ? 1.0 : 0;
 
     await runFfmpeg(
       [
@@ -2750,9 +2923,9 @@ async function normalizeMediaToClip(params: {
         'yuv420p',
         outPath,
       ],
-      30000
+      clipTimeoutMs
     );
-    return true;
+    return fs.existsSync(outPath) && fs.statSync(outPath).size > 10000;
   } catch {
     return false;
   }
@@ -2803,25 +2976,35 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       const seg = segments[i];
       const partMp3Path = path.join(workDir, `tts_${i}.mp3`);
       const partWavPath = path.join(workDir, `tts_${i}.wav`);
-      const ttsRes = await synthesizeChunkWithFallback({
-        text: seg.text,
-        voiceId: seg.voiceId,
-        ttsProvider: config.ttsProvider,
-        voiceRate: config.voiceRate,
-        outPath: partMp3Path,
-      });
+      try {
+        const ttsRes = await synthesizeChunkWithFallback({
+          text: seg.text,
+          voiceId: seg.voiceId,
+          ttsProvider: config.ttsProvider,
+          voiceRate: config.voiceRate,
+          outPath: partMp3Path,
+        });
 
-      if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
-        loggedRecovery = true;
+        if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
+          loggedRecovery = true;
+          updateJob(
+            jobId,
+            {},
+            ttsRes.fallbackNote ??
+              'Đã phát hiện lỗi Edge-TTS (Microsoft 403) -> tự chuyển sang Google TTS Miễn phí.'
+          );
+        }
+
+        await normalizeSpeechAudioToWav(partMp3Path, partWavPath);
+      } catch {
+        const safeEstDur = Math.min(8, Math.max(1.8, seg.text.length * 0.055));
+        await createSilenceWav(safeEstDur, partWavPath);
         updateJob(
           jobId,
           {},
-          ttsRes.fallbackNote ??
-            'Đã phát hiện lỗi Edge-TTS (Microsoft 403) -> tự chuyển sang Google TTS Miễn phí.'
+          `Cảnh báo: Không tổng hợp được giọng đọc đoạn ${i + 1}/${segments.length} -> giữ nhịp chờ ${safeEstDur.toFixed(1)}s.`
         );
       }
-
-      await normalizeSpeechAudioToWav(partMp3Path, partWavPath);
       const dur = await probeDurationSec(partWavPath);
       const segStartSec = cursorSec;
       const segEndSec = cursorSec + dur;
@@ -2906,13 +3089,13 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         'pcm_s16le',
         voiceAllPath,
       ],
-      30000
+      Math.max(60000, audioParts.length * 1500)
     );
 
     const totalVoiceSec = Math.max(3, await probeDurationSec(voiceAllPath));
     updateJob(
       jobId,
-      { progressPct: 32, stepLabel: 'Đang tìm video & ảnh AI khớp từng câu lời thoại...' },
+      { progressPct: 32, stepLabel: 'Đang chuẩn bị cảnh nền & tư liệu từng câu...' },
       `Đã hoàn tất giọng đọc (${totalVoiceSec.toFixed(1)}s, ${segments.length} nhịp đọc, ${usedVoices.length} giọng).`
     );
 
@@ -2922,9 +3105,12 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       script: config.script,
       terms: config.terms,
       scenePrompts: config.scenePrompts ?? [],
+      sceneComponents: config.sceneComponents,
       materialSource: config.materialSource,
       neutralBgTheme: config.neutralBgTheme,
       studio2411Theme: config.studio2411Theme,
+      curatedBgCategory: config.curatedBgCategory,
+      curatedBgId: config.curatedBgId,
       scriptStyle: config.scriptStyle,
       pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
       mediaTypeFilter: config.mediaTypeFilter ?? 'all',
@@ -2944,6 +3130,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       previewUrl: a.previewUrl,
       thumbUrl: a.thumbUrl,
       sourceLabel: a.sourceLabel,
+      ...(a.componentSpec ? { componentSpec: a.componentSpec } : {}),
     }));
 
     updateJob(
@@ -3019,41 +3206,96 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       });
     }
 
+    // Pre-download each unique remote video ONCE to local disk so long multi-beat renders never saturate remote CDN connections
+    const localRemoteVideoCache = new Map<string, string>();
+    for (const a of assets) {
+      if (a.kind === 'video' && a.remoteUrl && (!a.localPath || !fs.existsSync(a.localPath)) && !localRemoteVideoCache.has(a.remoteUrl)) {
+        const dlPath = path.join(workDir, `remote_src_${crypto.createHash('sha1').update(a.remoteUrl).digest('hex').slice(0, 10)}.mp4`);
+        const dlOk = await downloadRemoteMedia(a.remoteUrl, 'video', dlPath);
+        if (dlOk) {
+          localRemoteVideoCache.set(a.remoteUrl, dlPath);
+        }
+      }
+    }
+    for (const a of assets) {
+      if (a.remoteUrl && localRemoteVideoCache.has(a.remoteUrl)) {
+        a.localPath = localRemoteVideoCache.get(a.remoteUrl)!;
+        a.remoteUrl = undefined;
+      }
+    }
+
     const normalizedClips: Array<{ path: string; baseDur: number }> = [];
+    const normalizedClipCache = new Map<string, string>();
+
     for (let i = 0; i < plannedEntries.length; i++) {
       const entry = plannedEntries[i];
       const normPath = path.join(workDir, `clip_norm_${i}.mp4`);
-      const ok = await normalizeMediaToClip({
-        sourcePath: entry.asset.localPath,
-        remoteUrl: entry.asset.remoteUrl,
-        kind: entry.asset.kind,
-        outPath: normPath,
-        width,
-        height,
-        durationSec: entry.renderDur,
-        motionVariant: i,
-        visualMood: config.visualMood ?? 'auto',
-      });
+      const dedupKey = `${entry.asset.localPath || entry.asset.remoteUrl || entry.asset.index}_${entry.renderDur.toFixed(1)}_${width}x${height}_${config.visualMood ?? 'auto'}`;
+      const cachedNorm = normalizedClipCache.get(dedupKey);
 
-      if (ok) {
-        normalizedClips.push({ path: normPath, baseDur: entry.baseDur });
+      let ok = false;
+      if (cachedNorm && fs.existsSync(cachedNorm)) {
+        fs.copyFileSync(cachedNorm, normPath);
+        ok = true;
       } else {
-        // Retry with another verified asset in the pool
-        const altAsset = assets[(i + 1) % assets.length];
-        const retryOk = await normalizeMediaToClip({
-          sourcePath: altAsset.localPath,
-          remoteUrl: altAsset.remoteUrl,
-          kind: altAsset.kind,
+        ok = await normalizeMediaToClip({
+          sourcePath: entry.asset.localPath,
+          remoteUrl: entry.asset.remoteUrl,
+          kind: entry.asset.kind,
           outPath: normPath,
           width,
           height,
           durationSec: entry.renderDur,
-          motionVariant: i + 1,
+          motionVariant: i,
           visualMood: config.visualMood ?? 'auto',
         });
-        if (retryOk) {
-          normalizedClips.push({ path: normPath, baseDur: entry.baseDur });
+
+        if (!ok) {
+          const altAsset = assets[(i + 1) % assets.length];
+          ok = await normalizeMediaToClip({
+            sourcePath: altAsset.localPath,
+            remoteUrl: altAsset.remoteUrl,
+            kind: altAsset.kind,
+            outPath: normPath,
+            width,
+            height,
+            durationSec: entry.renderDur,
+            motionVariant: i + 1,
+            visualMood: config.visualMood ?? 'auto',
+          });
         }
+
+        // Guaranteed local fallback clip so long videos never drop beats or go out of sync with audio
+        if (!ok) {
+          await runFfmpeg(
+            [
+              '-y',
+              '-f',
+              'lavfi',
+              '-i',
+              `color=c=0x0f172a:s=${width}x${height}:r=30:d=${Math.max(1.2, entry.renderDur).toFixed(2)}`,
+              '-vf',
+              'drawgrid=width=64:height=64:thickness=1:color=0x38bdf8@0.18,format=yuv420p',
+              '-c:v',
+              'libx264',
+              '-preset',
+              'ultrafast',
+              '-pix_fmt',
+              'yuv420p',
+              normPath,
+            ],
+            30000
+          );
+          ok = fs.existsSync(normPath);
+        }
+
+        if (ok) {
+          normalizedClipCache.set(dedupKey, normPath);
+        }
+      }
+
+      if (ok) {
+        normalizedClips.push({ path: normPath, baseDur: entry.baseDur });
       }
 
       const pct = 55 + Math.round(((i + 1) / plannedEntries.length) * 18);
@@ -3064,51 +3306,9 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       throw new Error('Không thể chuẩn hóa các đoạn cảnh quay thành MP4.');
     }
 
-    // 4. Concatenate / xfade clips smoothly (supporting random & expanded xfade effects)
+    // 4. Chunked xfade merge (batches of <= 6 clips) with guaranteed concat fallback for long videos
     const visualTrackPath = path.join(workDir, 'visual_merged.mp4');
-    if (config.transitionMode !== 'none' && normalizedClips.length > 1 && normalizedClips.length <= 24) {
-      const xfadeSeed = Date.now() % 10000;
-      const inputs: string[] = [];
-      normalizedClips.forEach((c) => {
-        inputs.push('-i', c.path);
-      });
-
-      const filterParts: string[] = [];
-      let prevLabel = '[0:v]';
-      let currentOffset = normalizedClips[0].baseDur;
-
-      for (let i = 1; i < normalizedClips.length; i++) {
-        const xfadeType = resolveXfadeTransition(config.transitionMode, i - 1, xfadeSeed);
-        const nextLabel = `[v${i}]`;
-        const outLabel = i === normalizedClips.length - 1 ? '[vout]' : nextLabel;
-        filterParts.push(
-          `${prevLabel}[${i}:v]xfade=transition=${xfadeType}:duration=${fadeDur.toFixed(2)}:offset=${currentOffset.toFixed(2)}${outLabel}`
-        );
-        prevLabel = nextLabel;
-        currentOffset += normalizedClips[i].baseDur;
-      }
-
-      await runFfmpeg(
-        [
-          '-y',
-          ...inputs,
-          '-filter_complex',
-          filterParts.join(';'),
-          '-map',
-          '[vout]',
-          '-t',
-          totalVoiceSec.toFixed(2),
-          '-c:v',
-          'libx264',
-          '-preset',
-          'veryfast',
-          '-pix_fmt',
-          'yuv420p',
-          visualTrackPath,
-        ],
-        75000
-      );
-    } else {
+    const writeConcatFallback = async () => {
       const concatListPath = path.join(workDir, 'video_concat.txt');
       fs.writeFileSync(
         concatListPath,
@@ -3130,8 +3330,114 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           'copy',
           visualTrackPath,
         ],
-        30000
+        Math.max(90000, normalizedClips.length * 2500)
       );
+    };
+
+    if (config.transitionMode !== 'none' && normalizedClips.length > 1) {
+      try {
+        const xfadeSeed = Date.now() % 10000;
+        const probedClips = await Promise.all(
+          normalizedClips.map(async (c) => ({
+            ...c,
+            actualDur: await probeDurationSec(c.path),
+          }))
+        );
+        const batches = planXfadeMergeBatches(probedClips, 6);
+        const batchOutputs: string[] = [];
+
+        for (let bi = 0; bi < batches.length; bi++) {
+          const batch = batches[bi];
+          const batchOutPath =
+            batches.length === 1
+              ? visualTrackPath
+              : path.join(workDir, `visual_batch_${bi}.mp4`);
+
+          if (batch.length === 1) {
+            fs.copyFileSync(batch[0].path, batchOutPath);
+            batchOutputs.push(batchOutPath);
+            continue;
+          }
+
+          const inputs: string[] = [];
+          batch.forEach((c) => {
+            inputs.push('-i', c.path);
+          });
+
+          const filterParts: string[] = [];
+          let prevLabel = '[0:v]';
+          let currentOffset = Math.max(0.5, Math.min(batch[0].baseDur, batch[0].actualDur - fadeDur - 0.08));
+
+          for (let i = 1; i < batch.length; i++) {
+            const xfadeType = resolveXfadeTransition(config.transitionMode, bi * 6 + i - 1, xfadeSeed);
+            const nextLabel = `[v${i}]`;
+            const outLabel = i === batch.length - 1 ? '[vout]' : nextLabel;
+            const safeStepFade = Math.max(0.15, Math.min(fadeDur, batch[i].actualDur * 0.35));
+            filterParts.push(
+              `${prevLabel}[${i}:v]xfade=transition=${xfadeType}:duration=${safeStepFade.toFixed(2)}:offset=${currentOffset.toFixed(2)}${outLabel}`
+            );
+            prevLabel = nextLabel;
+            currentOffset += Math.max(0.5, Math.min(batch[i].baseDur, batch[i].actualDur - safeStepFade - 0.05));
+          }
+
+          const batchTotalDur = batch.reduce((sum, c) => sum + c.baseDur, 0) + 0.35;
+          await runFfmpeg(
+            [
+              '-y',
+              ...inputs,
+              '-filter_complex',
+              filterParts.join(';'),
+              '-map',
+              '[vout]',
+              ...(batches.length === 1 ? ['-t', totalVoiceSec.toFixed(2)] : []),
+              '-c:v',
+              'libx264',
+              '-preset',
+              'veryfast',
+              '-pix_fmt',
+              'yuv420p',
+              batchOutPath,
+            ],
+            Math.max(120000, Math.round(batchTotalDur * 5000))
+          );
+          batchOutputs.push(batchOutPath);
+        }
+
+        if (batchOutputs.length > 1) {
+          const batchConcatList = path.join(workDir, 'visual_batches_concat.txt');
+          fs.writeFileSync(
+            batchConcatList,
+            batchOutputs.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'),
+            'utf-8'
+          );
+          await runFfmpeg(
+            [
+              '-y',
+              '-f',
+              'concat',
+              '-safe',
+              '0',
+              '-i',
+              batchConcatList,
+              '-t',
+              totalVoiceSec.toFixed(2),
+              '-c',
+              'copy',
+              visualTrackPath,
+            ],
+            Math.max(90000, batchOutputs.length * 10000)
+          );
+        }
+      } catch (xfadeErr) {
+        updateJob(
+          jobId,
+          {},
+          `Chuyển sang ghép nối nhanh (-c copy) cho video dài (${xfadeErr instanceof Error ? xfadeErr.message.slice(0, 80) : 'xfade fallback'}).`
+        );
+        await writeConcatFallback();
+      }
+    } else {
+      await writeConcatFallback();
     }
 
     // 5. Split long cues into punchy 1-2 line subtitles & mix voiceover + BGM
@@ -3237,13 +3543,16 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       finalArgs.push('-af', `volume=${voiceVol.toFixed(2)}`, '-map', '0:v', '-map', '1:a');
     }
 
+    const finalPreset = totalVoiceSec > 75 || width >= 1080 ? 'veryfast' : 'fast';
+    const finalTimeoutMs = Math.max(480000, Math.round(totalVoiceSec * 6000) + 120000);
+
     finalArgs.push(
       '-t',
       totalVoiceSec.toFixed(2),
       '-c:v',
       'libx264',
       '-preset',
-      'fast',
+      finalPreset,
       '-profile:v',
       'main',
       '-level',
@@ -3265,7 +3574,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       mp4OutPath
     );
 
-    await runFfmpeg(finalArgs, 180000);
+    await runFfmpeg(finalArgs, finalTimeoutMs);
 
     const stat = fs.statSync(mp4OutPath);
     const finalDur = await probeDurationSec(mp4OutPath);
@@ -3364,6 +3673,7 @@ async function startServer() {
   app.use('/files/uploads', express.static(UPLOADS_DIR));
   app.use('/files/bgm', express.static(BGM_DIR));
   app.use('/files/cache', express.static(CACHE_DIR));
+  app.use('/files/curated', express.static(CURATED_BG_DIR));
 
   // List & create project output folders inside ./output
   app.get('/api/outputs/folders', (_req, res) => {
@@ -3756,6 +4066,10 @@ async function startServer() {
         script: out.script,
         terms: out.terms,
         scenePrompts: out.scenePrompts,
+        sceneComponents: buildContextualSceneComponentsForScript({
+          script: out.script,
+          scriptStyle,
+        }),
         groundingSources: verifiedSources,
         promptText,
         providerUsed:
@@ -3795,6 +4109,11 @@ async function startServer() {
               script: parsed.script,
               terms: parsed.terms.length > 0 ? parsed.terms : accurateEnglishTerms,
               scenePrompts: parsed.scenePrompts,
+              sceneComponents: buildContextualSceneComponentsForScript({
+                script: parsed.script,
+                scriptStyle,
+                existingOverrides: parsed.sceneComponents,
+              }),
               groundingSources,
               promptText,
               providerUsed: 'Gemini AI + Google Search Grounding',
@@ -3829,6 +4148,11 @@ async function startServer() {
           if (parsed) {
             res.json({
               ...parsed,
+              sceneComponents: buildContextualSceneComponentsForScript({
+                script: parsed.script,
+                scriptStyle,
+                existingOverrides: parsed.sceneComponents,
+              }),
               groundingSources: verifiedSources,
               promptText,
               providerUsed: 'Ollama Local (Miễn phí trên máy)',
@@ -3888,6 +4212,11 @@ async function startServer() {
               script: parsed.script,
               terms: cleanTerms,
               scenePrompts: parsed.scenePrompts,
+              sceneComponents: buildContextualSceneComponentsForScript({
+                script: parsed.script,
+                scriptStyle,
+                existingOverrides: parsed.sceneComponents,
+              }),
               groundingSources: verifiedSources,
               promptText,
               providerUsed:
@@ -3935,6 +4264,10 @@ async function startServer() {
       script: smartOut.script,
       terms: accurateEnglishTerms,
       scenePrompts: translatedPrompts,
+      sceneComponents: buildContextualSceneComponentsForScript({
+        script: smartOut.script,
+        scriptStyle,
+      }),
       groundingSources: verifiedSources,
       promptText,
       providerUsed:
@@ -3955,9 +4288,14 @@ async function startServer() {
     const scenePrompts = Array.isArray(req.body?.scenePrompts)
       ? req.body.scenePrompts.map(String)
       : [];
+    const sceneComponents = Array.isArray(req.body?.sceneComponents)
+      ? (req.body.sceneComponents as Studio2411SceneComponentOverride[])
+      : undefined;
     const materialSource = (req.body?.materialSource ?? 'hybrid_real') as MaterialSource;
     const neutralBgTheme = req.body?.neutralBgTheme as NeutralBgTheme | undefined;
     const studio2411Theme = req.body?.studio2411Theme as Studio2411ThemeId | undefined;
+    const curatedBgCategory = req.body?.curatedBgCategory as CuratedBackgroundCategory | undefined;
+    const curatedBgId = typeof req.body?.curatedBgId === 'string' ? req.body.curatedBgId : undefined;
     const scriptStyle = req.body?.scriptStyle as ScriptStyle | undefined;
     const pauseBetweenLinesSec =
       typeof req.body?.pauseBetweenLinesSec === 'number' ? req.body.pauseBetweenLinesSec : 5;
@@ -3980,9 +4318,12 @@ async function startServer() {
         script: script || subject,
         terms,
         scenePrompts,
+        sceneComponents,
         materialSource,
         neutralBgTheme,
         studio2411Theme,
+        curatedBgCategory,
+        curatedBgId,
         scriptStyle,
         pauseBetweenLinesSec,
         mediaTypeFilter,
@@ -4000,6 +4341,7 @@ async function startServer() {
         previewUrl: a.previewUrl,
         thumbUrl: a.thumbUrl,
         sourceLabel: a.sourceLabel,
+        ...(a.componentSpec ? { componentSpec: a.componentSpec } : {}),
       }));
       res.json({ scenes });
     } catch (err) {

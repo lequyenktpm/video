@@ -30,6 +30,7 @@ import {
 import {
   BgmPreset,
   CompletedVideoRecord,
+  CuratedBackgroundCategory,
   FullAnswerRecapMode,
   GroundingSource,
   LanguageCode,
@@ -42,6 +43,9 @@ import {
   RenderJobStatus,
   ScenePreviewItem,
   ScriptStyle,
+  Studio2411AnimationIn,
+  Studio2411ComponentVariant,
+  Studio2411SceneComponentOverride,
   Studio2411ThemeId,
   StudioTab,
   SubtitleBoxStyle,
@@ -84,9 +88,18 @@ import {
   updateScriptLinePreservingTag,
 } from '../shared/mptEngine';
 import {
+  build2411CardSpecForLine,
+  buildContextualSceneComponentsForScript,
   getStudio2411ThemeMeta,
+  STUDIO_2411_ANIMATION_OPTIONS,
   STUDIO_2411_THEMES,
+  STUDIO_2411_VARIANT_OPTIONS,
 } from '../shared/studioComponents2411';
+import {
+  CURATED_BACKGROUNDS,
+  CURATED_CATEGORY_LABELS,
+  selectCuratedBackgroundsForConfig,
+} from '../shared/curatedBackgrounds';
 import { TopicDiscoveryBar } from './TopicDiscoveryBar';
 import { SubtitlePreviewCaption } from './SubtitlePreviewCaption';
 import { PresentationIcon } from './PresentationIcon';
@@ -486,6 +499,36 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const activeIsIntroOrOutro = Boolean(activeSegMeta?.isIntroOrOutro);
   const activeNeutralMeta = getNeutralBgThemeMeta(config.neutralBgTheme);
   const active2411Meta = getStudio2411ThemeMeta(config.studio2411Theme);
+  const active2411Override =
+    activeScene?.componentSpec ?? config.sceneComponents?.[safeActiveIdx];
+  const active2411Spec = build2411CardSpecForLine({
+    rawLine: activeRawLine,
+    lineIndex: safeActiveIdx,
+    totalLines: Math.max(1, totalPreviewItems),
+    isSecondarySlot: activeIsSecondarySlot,
+    isIntroOrOutro: activeIsIntroOrOutro,
+    scriptStyle: config.scriptStyle,
+    themeId: config.studio2411Theme,
+    defaultPauseSec: config.pauseBetweenLinesSec ?? 5,
+    override: active2411Override,
+  });
+  const activeCuratedBgs = selectCuratedBackgroundsForConfig({
+    subject: config.subject,
+    script: config.script,
+    scriptStyle: config.scriptStyle,
+    category: config.curatedBgCategory,
+    bgId: config.curatedBgId,
+    count: Math.max(1, totalPreviewItems),
+  });
+  const activeCuratedBg =
+    activeCuratedBgs[safeActiveIdx % Math.max(1, activeCuratedBgs.length)] ??
+    CURATED_BACKGROUNDS[0];
+  const activeCuratedCategory: CuratedBackgroundCategory =
+    config.curatedBgCategory ?? 'all';
+  const filteredCuratedBackgrounds =
+    activeCuratedCategory === 'all'
+      ? CURATED_BACKGROUNDS
+      : CURATED_BACKGROUNDS.filter((bg) => bg.category === activeCuratedCategory);
   const isLightNeutralBg =
     (config.materialSource === 'neutral_css_bg' && activeNeutralMeta.isLight) ||
     (config.materialSource === 'studio_2411' && active2411Meta.isLight);
@@ -573,6 +616,14 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       setAiWebPromptMode('from_user_script');
     }
 
+    const nextSceneComponents = buildContextualSceneComponentsForScript({
+      script: parsed.script,
+      scriptStyle: config.scriptStyle,
+      pauseBetweenLinesSec:
+        autoLangPatch.pauseBetweenLinesSec ?? config.pauseBetweenLinesSec ?? 5,
+      existingOverrides: parsed.sceneComponents,
+    });
+
     setTermsInput(parsed.terms.join(', '));
     setScriptSources([]);
     setPreviewScenes([]);
@@ -584,6 +635,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       script: parsed.script,
       terms: parsed.terms,
       scenePrompts: parsed.scenePrompts,
+      sceneComponents: nextSceneComponents,
       customScenes: undefined,
     });
     setScriptNote(
@@ -597,6 +649,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         script: parsed.script,
         terms: parsed.terms,
         scenePrompts: parsed.scenePrompts,
+        sceneComponents: nextSceneComponents,
       });
     }
     return true;
@@ -647,6 +700,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         script?: string;
         terms?: string[];
         scenePrompts?: string[];
+        sceneComponents?: Studio2411SceneComponentOverride[];
         providerUsed?: string;
         groundingSources?: GroundingSource[];
         error?: string;
@@ -661,6 +715,13 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           ? data.scenePrompts
           : buildScenePromptsFromScript(nextLines, config.subject, nextTerms);
 
+      const nextSceneComponents = buildContextualSceneComponentsForScript({
+        script: data.script,
+        scriptStyle: config.scriptStyle,
+        pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
+        existingOverrides: data.sceneComponents,
+      });
+
       setTermsInput(nextTerms.join(', '));
       setScriptSources(Array.isArray(data.groundingSources) ? data.groundingSources : []);
       setPreviewScenes([]);
@@ -669,6 +730,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         script: data.script,
         terms: nextTerms,
         scenePrompts: nextScenePrompts,
+        sceneComponents: nextSceneComponents,
         customScenes: undefined,
       });
       setScriptNote(
@@ -696,6 +758,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     script?: string;
     terms?: string[];
     scenePrompts?: string[];
+    sceneComponents?: Studio2411SceneComponentOverride[];
   }) => {
     setScenesError(null);
     setIsLoadingScenes(true);
@@ -718,9 +781,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           script: effScript,
           terms: effTerms,
           scenePrompts: nextScenePrompts,
+          sceneComponents: override?.sceneComponents ?? config.sceneComponents,
           materialSource: config.materialSource,
           neutralBgTheme: config.neutralBgTheme ?? 'slate_studio',
           studio2411Theme: config.studio2411Theme ?? 'cards_pastel',
+          curatedBgCategory: config.curatedBgCategory ?? 'all',
+          curatedBgId: config.curatedBgId ?? 'auto',
           scriptStyle: config.scriptStyle,
           pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
           mediaTypeFilter: config.mediaTypeFilter ?? 'all',
@@ -1041,7 +1107,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
               >
                 <option value="mixkit_video">Video B-roll HD chuyển động mượt (Mixkit Free)</option>
-                <option value="studio_2411">Thẻ học tập Component 2411 (Flashcard &amp; Infographic)</option>
+                <option value="curated_preset">
+                  Kho nền có sẵn (Học tập · Phỏng vấn · Đời sống — Không cần AI)
+                </option>
+                <option value="studio_2411">
+                  Thẻ học tập Component 2411 (14 layout: Hội thoại, Flashcard, Roadmap, Gauge, 3D...)
+                </option>
                 <option value="hybrid_real">B-roll HD + Cảnh minh họa chọn lọc</option>
                 <option value="neutral_css_bg">Nền Trung Tính Studio (CSS Tối giản — Chữ siêu nét)</option>
                 <option value="stock_free">Kho Video &amp; Ảnh Archive / Wikimedia</option>
@@ -1050,23 +1121,161 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </option>
               </select>
               <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                Chọn <strong>Thẻ học tập Component 2411</strong> hoặc <strong>Nền Trung Tính Studio</strong> để hiển thị Flashcard + vector biểu tượng học tập sắc nét, hoặc chọn <strong>Mixkit / B-roll</strong> khi cần video cảnh thật phù hợp ngữ cảnh.
+                Chọn <strong>Kho nền có sẵn</strong> khi không muốn dùng AI tìm ảnh, <strong>Component 2411</strong> để hiển thị 14 mẫu thẻ thông minh (có nhân vật hội thoại), hoặc <strong>Mixkit / B-roll</strong> khi cần video cảnh thật.
               </p>
             </div>
+
+            {config.materialSource === 'curated_preset' && (
+              <div
+                data-testid="curated-bg-picker"
+                className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                    <ImageIcon className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
+                    <span>Kho Background có sẵn (Offline · Không cần AI)</span>
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    9 cảnh dựng sẵn · Xuất MP4 cực nhanh
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-1.5" role="group" aria-label="Nhóm chủ đề background có sẵn">
+                  {(['all', 'study', 'interview', 'life'] as CuratedBackgroundCategory[]).map((cat) => {
+                    const selected = activeCuratedCategory === cat;
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        data-testid={`curated-cat-${cat}`}
+                        onClick={() => {
+                          setPreviewScenes([]);
+                          onChangeConfig({
+                            curatedBgCategory: cat,
+                            curatedBgId: 'auto',
+                            customScenes: undefined,
+                          });
+                        }}
+                        className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
+                          selected
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400'
+                        }`}
+                      >
+                        {CURATED_CATEGORY_LABELS[cat]}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <button
+                    type="button"
+                    data-testid="curated-bg-auto"
+                    onClick={() => {
+                      setPreviewScenes([]);
+                      onChangeConfig({
+                        curatedBgId: 'auto',
+                        customScenes: undefined,
+                      });
+                    }}
+                    className={`p-2 rounded-lg border text-left transition-all flex flex-col ${
+                      !config.curatedBgId || config.curatedBgId === 'auto'
+                        ? 'border-indigo-600 ring-2 ring-indigo-200 bg-white'
+                        : 'border-slate-200 bg-white/80 hover:border-slate-400'
+                    }`}
+                  >
+                    <div className="w-full h-16 rounded overflow-hidden grid grid-cols-3 gap-0.5 bg-slate-900 mb-1.5">
+                      {filteredCuratedBackgrounds.slice(0, 3).map((item) => (
+                        <img
+                          key={item.id}
+                          src={item.previewUrl}
+                          alt=""
+                          className="w-full h-full object-cover"
+                        />
+                      ))}
+                    </div>
+                    <div className="text-[11px] font-semibold text-slate-900 leading-tight line-clamp-2">
+                      Xoay vòng tự động
+                    </div>
+                    <div className="text-[10px] text-slate-500 truncate mt-auto pt-0.5">
+                      Đổi nền mượt mỗi câu
+                    </div>
+                  </button>
+
+                  {filteredCuratedBackgrounds.map((bg) => {
+                    const selected = config.curatedBgId === bg.id;
+                    return (
+                      <button
+                        key={bg.id}
+                        type="button"
+                        data-testid={`curated-bg-${bg.id}`}
+                        onClick={() => {
+                          setPreviewScenes([]);
+                          onChangeConfig({
+                            curatedBgId: bg.id,
+                            customScenes: undefined,
+                          });
+                        }}
+                        className={`p-2 rounded-lg border text-left transition-all flex flex-col ${
+                          selected
+                            ? 'border-indigo-600 ring-2 ring-indigo-200 bg-white'
+                            : 'border-slate-200 bg-white/80 hover:border-slate-400'
+                        }`}
+                      >
+                        <img
+                          src={bg.previewUrl}
+                          alt={bg.title}
+                          className="w-full h-16 object-cover rounded border border-black/10 mb-1.5 bg-slate-900"
+                        />
+                        <div className="text-[11px] font-semibold text-slate-900 leading-tight line-clamp-2">
+                          {bg.title}
+                        </div>
+                        <div className="text-[10px] text-slate-500 truncate mt-auto pt-0.5">
+                          {bg.categoryLabel}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {config.materialSource === 'studio_2411' && (
               <div
                 data-testid="studio-2411-theme-picker"
-                className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2"
+                className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-3"
               >
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800">
                     <Layers className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
                     <span>Chọn giao diện thẻ học Component 2411</span>
                   </span>
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    Đồng bộ SVG/PNG khi xuất MP4
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      14 layout (gồm Hội thoại 2 nhân vật)
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="studio-2411-auto-plan"
+                      onClick={() => {
+                        const autoPlanned = buildContextualSceneComponentsForScript({
+                          script: config.script,
+                          scriptStyle: config.scriptStyle,
+                          pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
+                        });
+                        setPreviewScenes([]);
+                        setCaptionReplayNonce((n) => n + 1);
+                        onChangeConfig({
+                          sceneComponents: autoPlanned,
+                          customScenes: undefined,
+                        });
+                      }}
+                      className="px-2 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md hover:bg-indigo-100 whitespace-nowrap"
+                    >
+                      Phối tự động AI
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   {STUDIO_2411_THEMES.map((theme) => {
@@ -1115,6 +1324,157 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     );
                   })}
                 </div>
+
+                <div className="pt-2 border-t border-slate-200/80 grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-end">
+                  <div>
+                    <label
+                      htmlFor="mpt-2411-scene-variant"
+                      className="block text-[11px] font-medium text-slate-700 mb-1"
+                    >
+                      Kiểu Component 2411 cho câu đang xem (#{safeActiveIdx + 1})
+                    </label>
+                    <select
+                      id="mpt-2411-scene-variant"
+                      value={active2411Spec.variant}
+                      onChange={(e) => {
+                        const nextVariant = e.target.value as Studio2411ComponentVariant;
+                        const nextList = [...(config.sceneComponents ?? [])];
+                        nextList[safeActiveIdx] = {
+                          ...(nextList[safeActiveIdx] ?? {}),
+                          variant: nextVariant,
+                        };
+                        setPreviewScenes([]);
+                        setCaptionReplayNonce((n) => n + 1);
+                        onChangeConfig({
+                          sceneComponents: nextList,
+                          customScenes: undefined,
+                        });
+                      }}
+                      className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
+                    >
+                      {STUDIO_2411_VARIANT_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label} — {opt.hint}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1">
+                      <label
+                        htmlFor="mpt-2411-scene-anim"
+                        className="block text-[11px] font-medium text-slate-700 mb-1"
+                      >
+                        Hiệu ứng xuất hiện thẻ
+                      </label>
+                      <select
+                        id="mpt-2411-scene-anim"
+                        value={active2411Spec.animationIn}
+                        onChange={(e) => {
+                          const nextAnim = e.target.value as Studio2411AnimationIn;
+                          const nextList = [...(config.sceneComponents ?? [])];
+                          nextList[safeActiveIdx] = {
+                            ...(nextList[safeActiveIdx] ?? {}),
+                            animationIn: nextAnim,
+                          };
+                          setPreviewScenes([]);
+                          setCaptionReplayNonce((n) => n + 1);
+                          onChangeConfig({
+                            sceneComponents: nextList,
+                            customScenes: undefined,
+                          });
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
+                      >
+                        {STUDIO_2411_ANIMATION_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {config.sceneComponents?.[safeActiveIdx] && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextList = [...(config.sceneComponents ?? [])];
+                          delete nextList[safeActiveIdx];
+                          setPreviewScenes([]);
+                          setCaptionReplayNonce((n) => n + 1);
+                          onChangeConfig({
+                            sceneComponents: nextList,
+                            customScenes: undefined,
+                          });
+                        }}
+                        className="px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded-md hover:bg-slate-100 whitespace-nowrap shrink-0"
+                      >
+                        Tự động
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {(active2411Spec.variant === 'friends-chat' ||
+                  active2411Spec.variant === 'avatar-speech' ||
+                  active2411Spec.variant === 'dialogue-upgrade') && (
+                  <div className="pt-2 border-t border-slate-200/80 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label
+                        htmlFor="mpt-2411-speech-text"
+                        className="block text-[11px] font-medium text-slate-700 mb-1"
+                      >
+                        Lời thoại bóng thoại (#{safeActiveIdx + 1})
+                      </label>
+                      <input
+                        id="mpt-2411-speech-text"
+                        type="text"
+                        value={config.sceneComponents?.[safeActiveIdx]?.speechText ?? active2411Spec.speechText}
+                        onChange={(e) => {
+                          const nextList = [...(config.sceneComponents ?? [])];
+                          nextList[safeActiveIdx] = {
+                            ...(nextList[safeActiveIdx] ?? {}),
+                            variant: active2411Spec.variant,
+                            speechText: e.target.value,
+                          };
+                          setPreviewScenes([]);
+                          onChangeConfig({
+                            sceneComponents: nextList,
+                            customScenes: undefined,
+                          });
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="mpt-2411-reaction-text"
+                        className="block text-[11px] font-medium text-slate-700 mb-1"
+                      >
+                        Nhãn phản hồi / Sắc thái
+                      </label>
+                      <input
+                        id="mpt-2411-reaction-text"
+                        type="text"
+                        value={config.sceneComponents?.[safeActiveIdx]?.reactionText ?? active2411Spec.reactionText}
+                        onChange={(e) => {
+                          const nextList = [...(config.sceneComponents ?? [])];
+                          nextList[safeActiveIdx] = {
+                            ...(nextList[safeActiveIdx] ?? {}),
+                            variant: active2411Spec.variant,
+                            reactionText: e.target.value,
+                          };
+                          setPreviewScenes([]);
+                          onChangeConfig({
+                            sceneComponents: nextList,
+                            customScenes: undefined,
+                          });
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2804,6 +3164,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 )
               ) : config.materialSource === 'studio_2411' ? (
                 <Studio2411StageCard
+                  key={`${safeActiveIdx}_${active2411Spec.variant}_${active2411Spec.animationIn}_${captionReplayNonce}`}
                   rawLine={activeRawLine}
                   lineIndex={safeActiveIdx}
                   totalLines={Math.max(1, totalPreviewItems)}
@@ -2814,7 +3175,19 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   pauseBetweenLinesSec={config.pauseBetweenLinesSec ?? 5}
                   aspectRatio={config.aspectRatio}
                   countdownActive={previewCountdown !== null}
+                  override={active2411Override}
                 />
+              ) : config.materialSource === 'curated_preset' ? (
+                <>
+                  <img
+                    key={activeCuratedBg.id}
+                    src={activeCuratedBg.previewUrl}
+                    alt={activeCuratedBg.title}
+                    data-testid="curated-stage-preview-img"
+                    className="animate-mpt-scene-fade absolute inset-0 w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-b from-black/25 via-transparent to-black/45 pointer-events-none" />
+                </>
               ) : config.materialSource === 'neutral_css_bg' ? (
                 <div
                   data-testid="studio-neutral-bg-overlay"
@@ -2841,13 +3214,15 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </div>
               )}
 
-              <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1.5 text-[10px] text-white font-mono drop-shadow">
+              <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1.5 text-[10px] text-white font-mono drop-shadow pointer-events-none">
                 <span className="px-1.5 py-0.5 rounded bg-black/55 whitespace-nowrap shrink-0">
                   {config.aspectRatio} · {config.videoQuality ?? '720p'}
                 </span>
-                <span className="px-1.5 py-0.5 rounded bg-black/55 truncate max-w-[130px]">
+                <span className="px-1.5 py-0.5 rounded bg-black/55 truncate max-w-[155px]">
                   {activeScene
                     ? activeScene.sourceLabel
+                    : config.materialSource === 'curated_preset'
+                    ? activeCuratedBg.title
                     : config.materialSource === 'studio_2411'
                     ? active2411Meta.label
                     : config.materialSource === 'neutral_css_bg'

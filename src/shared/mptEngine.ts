@@ -323,11 +323,18 @@ const ROLE_LABELS_BY_LANG: Record<
   { vi: string; en: string; ja: string }
 > = {
   title: { vi: 'Mở đầu', en: 'Intro', ja: '導入' },
-  outro: { vi: 'Kết thúc', en: 'Closing', ja: 'まとめ' },
+  outro: { vi: 'Kết bài', en: 'Closing', ja: 'まとめ' },
   question: { vi: 'Người hỏi', en: 'Question', ja: '質問' },
   answer: { vi: 'Người trả lời', en: 'Answer', ja: '解答' },
   narration: { vi: 'Nội dung', en: 'Insight', ja: 'ポイント' },
 };
+
+export function getLocalizedRoleLabel(
+  roleKind: ScriptRoleKind,
+  lang: 'vi' | 'en' | 'ja' = 'vi'
+): string {
+  return ROLE_LABELS_BY_LANG[roleKind][lang] ?? ROLE_LABELS_BY_LANG[roleKind].vi;
+}
 
 export function detectLineContextVisual(
   cleanText: string,
@@ -432,7 +439,7 @@ export function analyzeScriptLinePresentation(
     cleanText,
     detectedLang,
     roleKind,
-    roleLabel: ROLE_LABELS_BY_LANG[roleKind][detectedLang],
+    roleLabel: ROLE_LABELS_BY_LANG[roleKind].vi,
     roleIconKey,
     roleTone,
     contextIconKey: ctx.contextIconKey,
@@ -541,12 +548,15 @@ export function splitMixedLanguageRuns(
     }
 
     let pieceLang: 'vi' | 'en' | 'ja' = defaultLang;
+    const isShortUppercaseAcronym = /^[A-Z0-9]{1,4}$/.test(piece);
     if (hasCjk) {
       pieceLang = 'ja';
     } else if (hasVi) {
       pieceLang = 'vi';
     } else if (hasAsciiWord) {
-      if (primaryLang === 'en' || secondaryLang === 'en') {
+      if (isShortUppercaseAcronym && (defaultLang === 'ja' || defaultLang === 'vi')) {
+        pieceLang = defaultLang;
+      } else if (primaryLang === 'en' || secondaryLang === 'en') {
         pieceLang = 'en';
       } else {
         pieceLang = detectLineLanguage(piece, defaultLang === 'ja' ? 'en' : defaultLang);
@@ -676,8 +686,8 @@ export function buildVideoEndingSummary(params: {
   return {
     voiceLang: 'vi',
     text: coreFact
-      ? `Tóm tắt nhanh: ${coreFact.slice(0, 70)}.`
-      : `Tóm tắt nhanh: điểm cốt lõi về ${topicLabel}.`,
+      ? `Tóm tắt kiến thức hôm nay: ${coreFact.slice(0, 70)}.`
+      : `Tóm tắt kiến thức hôm nay: điểm cốt lõi về ${topicLabel}.`,
   };
 }
 
@@ -748,9 +758,7 @@ export function planNarrationSegments(
     Math.min(5, Number(config.targetRepeatPauseSec ?? 2.0))
   );
   const fullAnswerRecapMode: FullAnswerRecapMode = config.fullAnswerRecapMode ?? 'off';
-  const isVeryShortVideo = rawLines.length <= 5;
-  // Short videos (<= 5 lines) skip summary bloat & keep closing minimal
-  const summarizeAtEnd = Boolean(config.summarizeAtEnd) && !isVeryShortVideo;
+  const summarizeAtEnd = Boolean(config.summarizeAtEnd);
 
   const segments: PlannedNarrationSegment[] = [];
   const collectedQuestions: string[] = [];
@@ -2455,6 +2463,46 @@ export function buildMoneyPrinterPrompt(params: {
   const cleanSubject = subject.trim();
   const cleanUserScript = rawScript.trim();
 
+  const styleDesc: Record<ScriptStyle, string> = {
+    curious_facts: 'Sự thật bất ngờ, câu mở đầu gây tò mò mạnh ngay 3 giây đầu',
+    storytelling: 'Kể chuyện điện ảnh có mở nút, cao trào và kết thúc sâu lắng',
+    tips_howto: 'Mẹo thực tế ngắn gọn, đánh số rõ ràng từng ý dễ nhớ',
+    news_fast: 'Tin tức nhanh súc tích, nêu thẳng trọng tâm',
+    motivational: 'Truyền cảm hứng nhẹ nhàng, triết lý sâu sắc',
+    top_list: 'Liệt kê Top / Thứ hạng hấp dẫn từ cuối lên đầu',
+    language_challenge:
+      'Học ngoại ngữ phản xạ 5 giây / Phỏng vấn Q&A (đọc câu nguồn -> chờ 5s [PAUSE] -> đọc đáp án đích)',
+    bilingual_dialogue: 'Hội thoại 2 giọng thực tế tự nhiên theo ngữ cảnh đời sống / công sở',
+    quiz_riddle: 'Đố vui tương tác 5 giây suy nghĩ [PAUSE] rồi bật mí đáp án bất ngờ',
+  };
+
+  const langDescMap: Record<LanguageCode, string> = {
+    vi: 'Ngôn ngữ viết kịch bản: 100% Tiếng Việt tự nhiên, súc tích.',
+    en: 'Ngôn ngữ viết kịch bản: 100% Natural English (clear, spoken rhythm).',
+    ja: 'Ngôn ngữ viết kịch bản: 100%自然な日本語 (natural spoken Japanese, NO Vietnamese/English filler).',
+    bilingual:
+      'Ngôn ngữ song ngữ Việt – Anh: mỗi câu Việt ([VI] hoặc Q:) đi kèm câu dịch tiếng Anh (English: hoặc [EN]) ngay bên dưới.',
+    vi_ja:
+      'Ngôn ngữ song ngữ Việt – Nhật: mỗi câu Việt ([VI] hoặc Q:) đi kèm câu tiếng Nhật ([JA]) ngay bên dưới.',
+    ja_en:
+      'Ngôn ngữ song ngữ Nhật – Anh: câu tiếng Nhật ([JA] hoặc Q:/A:) đi kèm câu tiếng Anh (English: hoặc [EN]) ngay bên dưới.',
+  };
+  const langDesc = langDescMap[language];
+
+  const factualRule =
+    '- NGUYÊN TẮC SỰ THẬT: Chỉ sử dụng kiến thức, số liệu chính xác có thật; tuyệt đối không bịa đặt thông tin.\n';
+
+  const verifiedBlock =
+    verifiedFacts.length > 0
+      ? `\nDỮ KIỆN XÁC THỰC THAM KHẢO:\n${verifiedFacts.map((f) => `- ${f}`).join('\n')}\n`
+      : '';
+
+  const configContextBlock = `
+TÙY CHỌN STUDIO ĐANG ĐỒNG BỘ:
+- "aspectRatio": "${aspectRatio}", "mediaTypeFilter": "${mediaTypeFilter}", "visualMood": "${visualMood}"
+- Giọng đọc: ${dualVoiceEnabled ? '2 giọng luân phiên' : '1 giọng'}, Đếm ngược suy nghĩ: ${pauseBetweenLinesSec}s, Lặp câu đích: ${targetRepeatCount}x
+- Đọc lại cả đoạn câu trả lời: "${fullAnswerRecapMode}", Tóm tắt cuối bài: ${summarizeAtEnd}, Ghim câu gốc dưới đích: ${stickyDualSubtitle}, Hiệu ứng phụ đề: "${subtitleEffect}"`;
+
   const shortLengthRule =
     count <= 5
       ? `QUY TẮC ĐỘ DÀI NGẮN (<= ${count} dòng): Video rất ngắn nên KHÔNG viết Outro dài dòng hay tóm tắt rườm rà; câu kết CHỈ cần 1 lời cảm ơn cực ngắn đúng ngôn ngữ bài ("Thank you!", "ありがとうございます！", hoặc "Cảm ơn bạn!").`
@@ -2462,16 +2510,19 @@ export function buildMoneyPrinterPrompt(params: {
 
   const componentCreativeGuide = `
 6. TẠO "sceneComponents" (Kiến trúc KineticSub 2411 — sáng tạo từng cảnh, 1-1 với từng dòng script):
-   - Mỗi dòng script có 1 object { "variant", "animationIn", "title", "subtitle", "labels", "highlightWord", "formula" }.
+   - Mỗi dòng script có 1 object { "variant", "animationIn", "title", "subtitle", "labels", "highlightWord", "formula", "speechText", "reactionText" }.
    - SÁNG TẠO & KHÔNG LẶP LẠI: Luôn đa dạng hóa "variant" giữa các câu liên tiếp (tuyệt đối KHÔNG lặp 1 variant 2 lần liền nhau):
      * "css-browser-mockup" | "bs-card-header": hợp câu mở đầu / chủ đề chính
-     * "css-flashcard" | "gauge-tone": hợp câu hỏi / thử thách dịch [PAUSE]
+     * "friends-chat": CẢNH HỘI THOẠI 2 NHÂN VẬT (phỏng vấn Q&A, [V1]/[V2], đồng nghiệp/bạn bè nói chuyện — truyền "labels": ["Tên người A", "Tên người B"], "speechText": "câu thoại ngắn", "reactionText": "nhãn phản hồi")
+     * "avatar-speech": NHÂN VẬT & BÓNG THOẠI (1 người nói câu giao tiếp tự nhiên kèm "speechText": "câu thoại", "reactionText": "Polite! / Tự nhiên!")
+     * "dialogue-upgrade": NÂNG CẤP HỘI THOẠI (so sánh cách nói thô/cơ bản → tự nhiên/lịch sự — truyền "labels": ["Cách nói cơ bản", "Cách nói tự nhiên"], "speechText": "câu cơ bản", "highlightWord": "cụm nâng cấp", "reactionText": "Natural!")
+     * "css-flashcard" | "gauge-tone": hợp câu hỏi / thử thách dịch [PAUSE] hoặc đo sắc thái lịch sự/thân thiện
      * "css-compare" | "css-equation": hợp câu đáp án / đối chiếu cấu trúc ngữ pháp (VD labels: ["Ngữ cảnh", "Mẫu câu chuẩn"], formula: "S + V + O")
      * "css-roadmap" | "staircase-3d" | "bs-progress-meter": hợp các bước / số liệu / thứ hạng
      * "bs-alert-callout": hợp câu cảnh báo / lưu ý quan trọng
      * "css-glass-quote": hợp triết lý / trích dẫn / lời cảm ơn kết thúc
    - "animationIn": chọn luân phiên từ ["pop-up", "slide-up", "drop-in", "fade-scale"].
-   - RÀNG BUỘC NGÔN NGỮ TUYỆT ĐỐI: Mọi "title", "subtitle", "labels", "highlightWord" PHẢI viết 100% bằng ĐÚNG NGÔN NGỮ của câu đó (nếu câu là tiếng Anh thì 100% tiếng Anh; tiếng Nhật thì 100% tiếng Nhật; TUYỆT ĐỐI KHÔNG trộn nhãn tiếng Việt vào câu tiếng Anh/Nhật!).`;
+   - RÀNG BUỘC NGÔN NGỮ TUYỆT ĐỐI: Mọi "title", "subtitle", "labels", "highlightWord", "speechText", "reactionText" PHẢI viết 100% bằng ĐÚNG NGÔN NGỮ của câu đó (nếu câu là tiếng Anh thì 100% tiếng Anh; tiếng Nhật thì 100% tiếng Nhật; TUYỆT ĐỐI KHÔNG trộn nhãn tiếng Việt vào câu tiếng Anh/Nhật!).`;
 
   const strictFileContract = `
 QUY TẮC XUẤT FILE BẮT BUỘC (STRICT FILE OUTPUT):
@@ -2603,6 +2654,9 @@ const VALID_2411_VARIANTS: ReadonlySet<string> = new Set([
   'css-browser-mockup',
   'gauge-tone',
   'staircase-3d',
+  'friends-chat',
+  'avatar-speech',
+  'dialogue-upgrade',
 ]);
 
 const VALID_2411_ANIMATIONS: ReadonlySet<string> = new Set([
@@ -2647,6 +2701,12 @@ export function sanitizeSceneComponentsList(
         : {}),
       ...(typeof obj.formula === 'string' && obj.formula.trim()
         ? { formula: obj.formula.trim().slice(0, 72) }
+        : {}),
+      ...(typeof obj.speechText === 'string' && obj.speechText.trim()
+        ? { speechText: obj.speechText.trim().slice(0, 110) }
+        : {}),
+      ...(typeof obj.reactionText === 'string' && obj.reactionText.trim()
+        ? { reactionText: obj.reactionText.trim().slice(0, 36) }
         : {}),
       ...(typeof obj.accentColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(obj.accentColor.trim())
         ? { accentColor: obj.accentColor.trim() }
@@ -3159,7 +3219,7 @@ export function generateOfflineVietnameseScript(
         'English: Take it easy and don’t push yourself too hard!',
         isShort
           ? 'Outro: ありがとうございました！'
-          : 'Outro: お疲れ様でした！また練習しましょう！',
+          : 'Outro: お疲れ様でした！保存して練習しましょう！',
       ];
     } else if (language === 'vi_ja') {
       sentences = [
@@ -3170,7 +3230,7 @@ export function generateOfflineVietnameseScript(
         '[JA] あまり心配しないでくださいね！',
         isShort
           ? 'Outro: Cảm ơn bạn đã luyện tập!'
-          : 'Outro: Cảm ơn bạn, hẹn gặp lại ở bài luyện tiếp theo!',
+          : 'Outro: Lưu video lại để luyện phản xạ mỗi ngày nhé!',
       ];
     } else if (language === 'ja') {
       sentences = [
@@ -3195,7 +3255,7 @@ export function generateOfflineVietnameseScript(
         'English: Take your time, there is no rush!',
         isShort
           ? 'Outro: Cảm ơn bạn!'
-          : 'Outro: Cảm ơn bạn đã luyện phản xạ hôm nay!',
+          : 'Outro: Lưu video lại để luyện phản xạ tiếng Anh mỗi ngày nhé!',
       ];
     }
   } else if (scriptStyle === 'bilingual_dialogue') {
@@ -3370,8 +3430,8 @@ export function validateRenderConfig(config: RenderJobConfig): string | null {
   if (config.voiceRate < 0.75 || config.voiceRate > 1.6) {
     return 'Tốc độ giọng đọc hợp lệ từ 0.75x đến 1.6x.';
   }
-  if (config.subtitle.fontSize < 24 || config.subtitle.fontSize > 80) {
-    return 'Cỡ chữ phụ đề hợp lệ từ 24px đến 80px.';
+  if (config.subtitle.fontSize < 20 || config.subtitle.fontSize > 96) {
+    return 'Cỡ chữ phụ đề hợp lệ từ 20px đến 96px.';
   }
   return null;
 }
@@ -3404,6 +3464,110 @@ export function resolveXfadeTransition(
     return RANDOM_XFADE_POOL[idx];
   }
   return mode;
+}
+
+/**
+ * Splits long TTS paragraphs (e.g., full answer recaps / end summaries) into <= maxLen
+ * character chunks along natural sentence/clause boundaries so Google TTS never returns HTTP 400/413.
+ */
+export function splitTtsTextChunks(text: string, maxLen = 170): string[] {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  if (clean.length <= maxLen) return [clean];
+
+  const sentenceUnits = clean
+    .split(/(?<=[。！？.!?;；])\s*/u)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+  let buffer = '';
+
+  const flushBuffer = () => {
+    if (buffer.trim()) {
+      chunks.push(buffer.trim());
+      buffer = '';
+    }
+  };
+
+  for (const unit of sentenceUnits) {
+    if (unit.length > maxLen) {
+      flushBuffer();
+      const subUnits = unit
+        .split(/(?<=[,、，])\s*/u)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (const sub of subUnits) {
+        if (sub.length <= maxLen) {
+          if (!buffer) {
+            buffer = sub;
+          } else if (`${buffer} ${sub}`.length <= maxLen) {
+            buffer = `${buffer} ${sub}`;
+          } else {
+            flushBuffer();
+            buffer = sub;
+          }
+        } else {
+          flushBuffer();
+          const words = sub.split(/\s+/);
+          if (words.length > 1) {
+            for (const w of words) {
+              if (!buffer) {
+                buffer = w;
+              } else if (`${buffer} ${w}`.length <= maxLen) {
+                buffer = `${buffer} ${w}`;
+              } else {
+                flushBuffer();
+                buffer = w;
+              }
+            }
+          } else {
+            for (let i = 0; i < sub.length; i += maxLen) {
+              chunks.push(sub.slice(i, i + maxLen));
+            }
+          }
+        }
+      }
+      flushBuffer();
+      continue;
+    }
+
+    if (!buffer) {
+      buffer = unit;
+    } else if (`${buffer} ${unit}`.length <= maxLen) {
+      buffer = `${buffer} ${unit}`;
+    } else {
+      flushBuffer();
+      buffer = unit;
+    }
+  }
+  flushBuffer();
+  return chunks.length > 0 ? chunks : [clean.slice(0, maxLen)];
+}
+
+/**
+ * Splits a long list of clips into memory-safe batches for FFmpeg xfade processing
+ * so long videos (30–120+ clips) never exceed open decoder / memory / timeout limits.
+ */
+export function planXfadeMergeBatches<T>(items: T[], maxBatchSize = 6): T[][] {
+  if (items.length === 0) return [];
+  const safeSize = Math.max(2, Math.floor(maxBatchSize));
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += safeSize) {
+    const slice = items.slice(i, i + safeSize);
+    if (slice.length === 1 && batches.length > 0) {
+      const prev = batches[batches.length - 1];
+      if (prev.length >= 3) {
+        const borrowed = prev.pop()!;
+        batches.push([borrowed, slice[0]]);
+      } else {
+        prev.push(slice[0]);
+      }
+    } else {
+      batches.push(slice);
+    }
+  }
+  return batches;
 }
 
 const STUDY_ENERGY_FALLBACK_EMOJIS = ['🔥', '🚀', '⚡', '💡', '🎯'] as const;
@@ -3470,8 +3634,8 @@ export function slugifyOutputFilename(
   }
 
   const trimmed =
-    raw.length > 58
-      ? raw.slice(0, 58).replace(/\s+\S*$/, '').trim() || raw.slice(0, 58).trim()
+    raw.length > 52
+      ? raw.slice(0, 52).replace(/\s+\S*$/, '').trim() || raw.slice(0, 52).trim()
       : raw;
 
   const alreadyHasEmoji = /^[\p{Extended_Pictographic}]/u.test(trimmed);

@@ -35,13 +35,16 @@ import {
   parseAiWebOrJsonOutput,
   pickStudyEnergyEmoji,
   planNarrationSegments,
+  planXfadeMergeBatches,
   RANDOM_XFADE_POOL,
   resolveCountdownCenterY,
   resolveXfadeTransition,
   safeParseJsonResponse,
+  sanitizeSceneComponentsList,
   slugifyOutputFilename,
   splitCueIntoShortSubCues,
   splitScriptSentences,
+  splitTtsTextChunks,
   stripNarrationTags,
   tokenizeSubtitleForEffect,
   updateScriptLinePreservingTag,
@@ -52,9 +55,18 @@ import {
 import {
   build2411CardSpecForLine,
   build2411CardSvg,
+  buildContextualSceneComponentsForScript,
+  STUDIO_2411_ANIMATION_OPTIONS,
   STUDIO_2411_THEMES,
+  STUDIO_2411_VARIANT_OPTIONS,
 } from './studioComponents2411';
-import { RenderJobConfig, SubtitleConfig } from './types';
+import {
+  buildCuratedBackgroundSvg,
+  CURATED_BACKGROUNDS,
+  detectCuratedCategoryFromTopic,
+  selectCuratedBackgroundsForConfig,
+} from './curatedBackgrounds';
+import { RenderJobConfig, Studio2411AnimationIn, SubtitleConfig } from './types';
 
 test('getCanvasDimensions and getQualityEncodingParams support 480p, 720p, and 1080p', () => {
   assert.deepEqual(getCanvasDimensions('9:16'), { width: 720, height: 1280 });
@@ -1227,10 +1239,170 @@ test('STUDIO_2411_THEMES, build2411CardSpecForLine, and build2411CardSvg build c
   });
   assert.ok(svg.startsWith('<svg '));
   assert.ok(svg.includes('LISTEN &amp; TRANSLATE'));
-  assert.ok(svg.includes('THINK TIME · 5S'));
+  assert.ok(svg.includes('思考タイム · 5s'));
   assert.ok(svg.includes('#F5F3FF'));
   assert.equal(svg.includes('undefined'), false);
 });
+
+test('splitTtsTextChunks and planXfadeMergeBatches safely scale long videos', () => {
+  const longRecap =
+    'My strength is my proactive nature. During my student days, I actively participated in speech contests and club presentation events. My weakness is that I also demand proactiveness from those around me, so I learned to listen carefully first.';
+  const chunks = splitTtsTextChunks(longRecap, 95);
+  assert.ok(chunks.length >= 3);
+  for (const ch of chunks) {
+    assert.ok(ch.length <= 95, `Chunk too long: ${ch.length}`);
+  }
+  assert.equal(chunks.join(' '), longRecap);
+
+  const jaLong =
+    '私の長所は積極性です。学生時代、スピーチ大会やサークルの成果発表会にも積極的に参加しました。短所は周りの人にも積極性を求めるところです。ですから、先に相手の都合や希望を聞いて調整するように気をつけていました。';
+  const jaChunks = splitTtsTextChunks(jaLong, 60);
+  assert.ok(jaChunks.length >= 2);
+  for (const ch of jaChunks) {
+    assert.ok(ch.length <= 60);
+  }
+
+  assert.deepEqual(planXfadeMergeBatches(['a']), [['a']]);
+  assert.deepEqual(planXfadeMergeBatches(['a', 'b', 'c', 'd', 'e', 'f']), [
+    ['a', 'b', 'c', 'd', 'e', 'f'],
+  ]);
+  const sevenBatches = planXfadeMergeBatches(['1', '2', '3', '4', '5', '6', '7'], 6);
+  assert.equal(sevenBatches.length, 2);
+  assert.ok(sevenBatches.every((b) => b.length >= 2), 'Must avoid orphan 1-clip xfade batch');
+
+  const thirtyClips = Array.from({ length: 30 }, (_, i) => `clip_${i}.mp4`);
+  const batches30 = planXfadeMergeBatches(thirtyClips, 6);
+  assert.equal(batches30.length, 5);
+  assert.equal(batches30.flat().length, 30);
+});
+
+test('all 14 Studio 2411 variants (including dialogue avatars) render distinct SVGs and AI planner avoids repetition', () => {
+  assert.equal(STUDIO_2411_VARIANT_OPTIONS.length, 14);
+  assert.equal(STUDIO_2411_ANIMATION_OPTIONS.length, 4);
+
+  const svgsByVariant = new Set<string>();
+  const animChoices: Studio2411AnimationIn[] = STUDIO_2411_ANIMATION_OPTIONS.map((o) => o.id);
+  for (let i = 0; i < STUDIO_2411_VARIANT_OPTIONS.length; i++) {
+    const v = STUDIO_2411_VARIANT_OPTIONS[i].id;
+    const anim: Studio2411AnimationIn = animChoices[i % animChoices.length];
+    const spec = build2411CardSpecForLine({
+      rawLine: 'A: 私の長所は積極性です。 [PAUSE]',
+      lineIndex: i,
+      totalLines: 14,
+      scriptStyle: 'language_challenge',
+      themeId: i % 2 === 0 ? 'cards_pastel' : 'word_reveal_dark',
+      defaultPauseSec: 5,
+      override: {
+        variant: v,
+        animationIn: anim,
+        title: `Tiêu đề ${v}`,
+        labels: ['Interviewer', 'Candidate', 'Follow-up'],
+        highlightWord: 'Proactive',
+        formula: 'Subject + Verb',
+        speechText: 'What is your biggest strength?',
+        reactionText: 'Natural!',
+        progressPct: 72,
+      },
+    });
+    assert.equal(spec.variant, v);
+    assert.equal(spec.animationIn, anim);
+    assert.equal(spec.speechText, 'What is your biggest strength?');
+    assert.equal(spec.reactionText, 'Natural!');
+
+    const svg = build2411CardSvg({ spec, width: 720, height: 1280 });
+    assert.ok(svg.startsWith('<svg '));
+    assert.equal(svg.includes('undefined'), false);
+    assert.equal(svg.includes('NaN'), false);
+    svgsByVariant.add(svg);
+  }
+  assert.equal(svgsByVariant.size, 14, 'All 14 variants must produce distinct SVG visuals');
+
+  const dialogueScript = [
+    'Tiêu đề: Phỏng vấn tiếng Nhật - Anh [PAUSE]',
+    'Q: あなたの長所と短所を教えてください。 [PAUSE]',
+    'English: Please tell me your strengths and weaknesses.',
+    'A: 私の長所は積極性です。',
+    'English: Instead of very good, say proactive!',
+    'Outro: ありがとうございました！',
+  ].join('\n');
+
+  const planned = buildContextualSceneComponentsForScript({
+    script: dialogueScript,
+    scriptStyle: 'bilingual_dialogue',
+    pauseBetweenLinesSec: 5,
+  });
+  assert.equal(planned.length, 6);
+  for (let i = 1; i < planned.length; i++) {
+    assert.notEqual(planned[i].variant, planned[i - 1].variant, 'Planner avoids consecutive duplicate variants');
+  }
+  const usedVariants = new Set(planned.map((p) => p.variant));
+  assert.ok(
+    usedVariants.has('friends-chat') || usedVariants.has('avatar-speech') || usedVariants.has('dialogue-upgrade'),
+    'Dialogue/interview script automatically selects character dialogue variants'
+  );
+
+  const sanitized = sanitizeSceneComponentsList([
+    {
+      variant: 'friends-chat',
+      animationIn: 'pop-up',
+      labels: ['Alex', 'Mia'],
+      speechText: 'Could I get an iced latte?',
+      reactionText: 'Polite!',
+    },
+    {
+      variant: 'dialogue-upgrade',
+      speechText: 'Very good',
+      highlightWord: 'Outstanding',
+      reactionText: 'Natural!',
+    },
+  ]);
+  assert.ok(sanitized && sanitized.length === 2);
+  assert.equal(sanitized[0].variant, 'friends-chat');
+  assert.equal(sanitized[0].speechText, 'Could I get an iced latte?');
+  assert.equal(sanitized[0].reactionText, 'Polite!');
+  assert.equal(sanitized[1].variant, 'dialogue-upgrade');
+});
+
+test('curated background library categorizes study, interview, and life topics without AI', () => {
+  assert.equal(CURATED_BACKGROUNDS.length, 9);
+  assert.equal(detectCuratedCategoryFromTopic('Phỏng vấn việc làm Nhật - Anh', 'language_challenge'), 'interview');
+  assert.equal(detectCuratedCategoryFromTopic('Bí ẩn vũ trụ và đại dương', 'curious_facts'), 'life');
+  assert.equal(detectCuratedCategoryFromTopic('Phản xạ từ vựng N3 mỗi ngày', 'language_challenge'), 'study');
+
+  const interviewBgs = selectCuratedBackgroundsForConfig({
+    subject: 'Phỏng vấn điểm mạnh điểm yếu',
+    scriptStyle: 'language_challenge',
+    category: 'all',
+    bgId: 'auto',
+    count: 5,
+  });
+  assert.equal(interviewBgs.length, 5);
+  assert.ok(interviewBgs.slice(0, 3).every((b) => b.category === 'interview'));
+
+  const strictInterviewBgs = selectCuratedBackgroundsForConfig({
+    subject: 'Anything',
+    category: 'interview',
+    bgId: 'auto',
+    count: 5,
+  });
+  assert.equal(strictInterviewBgs.length, 5);
+  assert.ok(strictInterviewBgs.every((b) => b.category === 'interview'));
+
+  const lockedBg = selectCuratedBackgroundsForConfig({
+    subject: 'Anything',
+    category: 'study',
+    bgId: 'life_twilight_cosmos',
+    count: 3,
+  });
+  assert.equal(lockedBg.length, 3);
+  assert.ok(lockedBg.every((b) => b.id === 'life_twilight_cosmos'));
+
+  const bgSvg = buildCuratedBackgroundSvg(CURATED_BACKGROUNDS[0].id, 1080, 1920);
+  assert.ok(bgSvg.startsWith('<svg '));
+  assert.ok(bgSvg.includes('viewBox="0 0 1080 1920"'));
+  assert.equal(bgSvg.includes('undefined'), false);
+});
+
 
 
 

@@ -206,3 +206,38 @@
 .animate-mpt-scene-fade {
   animation: mptSceneFadeIn 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+@keyframes mpt2411PopUp {
+  0% { opacity: 0; transform: scale(0.86) translateY(12px); }
+  70% { opacity: 1; transform: scale(1.02) translateY(-1px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes mpt2411SlideUp {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes mpt2411DropIn {
+  0% { opacity: 0; transform: translateY(-18px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes mpt2411FadeScale {
+  0% { opacity: 0; transform: scale(1.05); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.animate-2411-pop-up {
+  animation: mpt2411PopUp 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.animate-2411-slide-up {
+  animation: mpt2411SlideUp 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.animate-2411-drop-in {
+  animation: mpt2411DropIn 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.animate-2411-fade-scale {
+  animation: mpt2411FadeScale 0.4s ease-out both;
+}
+
