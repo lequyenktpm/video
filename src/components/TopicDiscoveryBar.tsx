@@ -130,8 +130,8 @@ export const TopicDiscoveryBar: React.FC<TopicDiscoveryBarProps> = ({
                       : 'bg-white border-slate-200 hover:border-slate-400 text-slate-800'
                   }`}
                 >
-                  <div className="text-xs font-medium line-clamp-2">{topic.title}</div>
-                  <div className="text-[11px] text-slate-500 mt-0.5 truncate">{topic.angle}</div>
+                  <div className="text-xs font-medium leading-snug break-words">{topic.title}</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5 leading-snug break-words">{topic.angle}</div>
                 </button>
               );
             })}
@@ -145,9 +145,9 @@ export const TopicDiscoveryBar: React.FC<TopicDiscoveryBarProps> = ({
                   href={src.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-indigo-700 hover:underline truncate max-w-[200px]"
+                  className="inline-flex items-center gap-1 text-indigo-700 hover:underline break-words"
                 >
-                  <span className="truncate">{src.title}</span>
+                  <span>{src.title}</span>
                   <ExternalLink className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
                 </a>
               ))}

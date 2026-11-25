@@ -6,6 +6,7 @@ import {
   computeAnimeRigStates,
   DEFAULT_ANIME_DIALOGUE_SCRIPT,
   detectRoomFromCue,
+  getAnimeCharacterVisualDetail,
   interpolateRigStates,
   parseAnimeDialogueScript,
   renderAnimeBeatSvgFrame,
@@ -369,3 +370,51 @@ test('interpolateRigStates, computeAnimeCameraState, audioAmplitude visemes, and
   assert.equal(khoa?.gender, 'male');
   assert.ok(khoa?.hairStyle === 'spiky' || khoa?.hairStyle === 'tousled');
 });
+
+test('inline [check_fridge_panic] tag sets emotionTag and action cleanly without polluting speech bubble actingNote', () => {
+  const story = parseAnimeDialogueScript([
+    'Minh: [check_fridge_panic] Ủa tủ lạnh trống trơn rồi kìa!',
+    'Lan:（小声で）[whisper] Chắc hôm qua ăn hết rồi.',
+  ].join('\n'));
+
+  const b0 = story.beats[0];
+  assert.equal(b0.spokenText, 'Ủa tủ lạnh trống trơn rồi kìa!');
+  assert.equal(b0.emotionTag, 'check_fridge_panic');
+  assert.equal(b0.action, 'check_fridge_panic');
+  assert.equal(b0.actingNote, undefined);
+
+  const b1 = story.beats[1];
+  assert.equal(b1.spokenText, 'Chắc hôm qua ăn hết rồi.');
+  assert.equal(b1.actingNote, '小声で');
+  assert.equal(b1.emotionTag, 'whisper');
+  assert.equal(b1.emotion, 'whisper');
+});
+
+test('getAnimeCharacterVisualDetail and renderAnimeBeatSvgFrame emit multi-layer iris, hair sheen, and accessories cleanly', () => {
+  const story = parseAnimeDialogueScript(DEFAULT_ANIME_DIALOGUE_SCRIPT);
+  const houran = story.characters.find((c) => c.id === '芳蘭')!;
+  const senpai = story.characters.find((c) => c.id === '先輩')!;
+  const houranDet = getAnimeCharacterVisualDetail(houran);
+  const senpaiDet = getAnimeCharacterVisualDetail(senpai);
+
+  assert.equal(houranDet.hasSideBow, true);
+  assert.equal(senpaiDet.hasSideBow, false);
+  assert.ok(houranDet.irisMainHex !== '#1E293B');
+
+  const calmBeat = story.beats.find((b) => !b.isStageCue && b.emotion === 'calm')!;
+  const svg = renderAnimeBeatSvgFrame({
+    story,
+    beat: calmBeat,
+    timeSec: 0.3,
+    beatProgress: 0.4,
+    width: 720,
+    height: 1280,
+    isPlayingSpeech: true,
+  });
+
+  assert.ok(svg.includes(houranDet.irisMainHex), 'Expected multi-layer colored iris in SVG');
+  assert.ok(svg.includes(houranDet.hairHighlightHex), 'Expected glossy hair highlight arc in SVG');
+  assert.equal(svg.includes('NaN'), false);
+  assert.equal(svg.includes('undefined'), false);
+});
+

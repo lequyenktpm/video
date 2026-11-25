@@ -167,7 +167,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   // Preview card CSS widths: 9:16 -> 245px, 1:1 -> 300px, 16:9 -> ~458px
   const previewScale =
     aspectRatio === '1:1' ? 300 / 720 : aspectRatio === '16:9' ? 450 / 1280 : 245 / 720;
-  const previewFontPx = Math.max(11, Math.min(24, Math.round(budget.scaledFontSize * previewScale)));
+  const previewFontPx = Math.max(11, Math.min(30, Math.round(budget.scaledFontSize * previewScale)));
   const countdownFontPx = Math.max(28, Math.min(54, Math.round(previewFontPx * 2.15)));
 
   const resolveFontCss = (sampleText: string): string => {
@@ -262,7 +262,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
 
   const stickyFontPx = Math.max(
     10,
-    Math.min(24, Math.round(srcBudget.scaledFontSize * previewScale))
+    Math.min(26, Math.round(srcBudget.scaledFontSize * previewScale))
   );
   const stickyFontCss = resolveFontCss(pinnedSourceText ?? '');
   const stickyStyle: React.CSSProperties = {

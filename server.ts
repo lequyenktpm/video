@@ -339,25 +339,60 @@ async function fetchWithTimeout(
   }
 }
 
+function resolveEmotionProsody(params?: {
+  emotion?: string;
+  action?: string;
+  emotionTag?: string;
+}): { pitch?: string; rate?: number; volume?: string | number } | undefined {
+  const key = [params?.emotionTag, params?.action, params?.emotion]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (!key) return undefined;
+  if (/panic|shock|check_fridge_panic|gasp|surpris/.test(key)) {
+    return { pitch: '+18Hz', rate: 1.12, volume: 100 };
+  }
+  if (/angry|confront|lean_confront|frustrat|shout/.test(key)) {
+    return { pitch: '+10Hz', rate: 1.09, volume: '+10%' };
+  }
+  if (/happy|excit|cheer|joy/.test(key)) {
+    return { pitch: '+12Hz', rate: 1.06, volume: 100 };
+  }
+  if (/whisper|lean_whisper|secret/.test(key)) {
+    return { pitch: '-8Hz', rate: 0.9, volume: '-25%' };
+  }
+  if (/sad|apolog|bow_deep|wry_smile|sigh/.test(key)) {
+    return { pitch: '-10Hz', rate: 0.92, volume: '-8%' };
+  }
+  if (/shy|embarrass|nervous/.test(key)) {
+    return { pitch: '+8Hz', rate: 0.95, volume: '-10%' };
+  }
+  return undefined;
+}
+
 async function synthesizeWithEdgeTts(
   text: string,
   voiceId: VoiceOptionId,
-  outPath: string
+  outPath: string,
+  emotionMeta?: { emotion?: string; action?: string; emotionTag?: string }
 ): Promise<boolean> {
   const catalogItem = getVoiceCatalogItem(voiceId);
   const edgeVoice =
     catalogItem?.edgeVoiceName ??
     (isElevenLabsVoiceId(voiceId)
-      ? catalogItem?.gender === 'male'
-        ? 'vi-VN-NamMinhNeural'
-        : 'vi-VN-HoaiMyNeural'
+      ? hasCjkChars(text)
+        ? 'ja-JP-NanamiNeural'
+        : hasVietnameseDiacritics(text)
+        ? 'vi-VN-HoaiMyNeural'
+        : 'en-US-JennyNeural'
       : voiceId);
   const rawEdgePath = `${outPath}.edge.mp3`;
+  const prosody = resolveEmotionProsody(emotionMeta);
 
-  try {
+  const runEdgeOnce = async (useProsody: boolean): Promise<Buffer> => {
     const tts = new MsEdgeTTS();
     await tts.setMetadata(edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    const { audioStream } = tts.toStream(text);
+    const { audioStream } = useProsody && prosody ? tts.toStream(text, prosody) : tts.toStream(text);
     const chunks: Buffer[] = [];
     const edgeTimeoutMs = Math.max(12000, text.length * 90);
     await new Promise<void>((resolve, reject) => {
@@ -372,7 +407,21 @@ async function synthesizeWithEdgeTts(
         reject(err);
       });
     });
-    const combined = Buffer.concat(chunks);
+    return Buffer.concat(chunks);
+  };
+
+  try {
+    let combined: Buffer = Buffer.alloc(0);
+    if (prosody) {
+      try {
+        combined = await runEdgeOnce(true);
+      } catch {
+        combined = Buffer.alloc(0);
+      }
+    }
+    if (combined.length < 400) {
+      combined = await runEdgeOnce(false);
+    }
     if (combined.length < 400) return false;
 
     const shift = catalogItem?.pitchShiftFactor;
@@ -505,13 +554,6 @@ async function synthesizeWithGoogleFreeTts(
       fs.rmSync(f, { force: true });
     }
   }
-}
-
-function getElevenLabsVoiceId(voiceId: VoiceOptionId): string {
-  if (voiceId.startsWith('el-custom:')) {
-    return voiceId.slice('el-custom:'.length).trim() || '21m00Tcm4TlvDq8ikWAM';
-  }
-  return getVoiceCatalogItem(voiceId)?.elevenLabsVoiceId ?? '21m00Tcm4TlvDq8ikWAM';
 }
 
 async function createSilenceMp3(durationSec: number, outPath: string): Promise<void> {
@@ -669,108 +711,15 @@ async function createDoorSlideFxWav(durationSec: number, outWavPath: string): Pr
   );
 }
 
-function normalizeElevenLabsApiKey(raw?: string): string {
-  if (typeof raw !== 'string') return '';
-  return raw
-    .trim()
-    .replace(/^Bearer\s+/i, '')
-    .replace(/^["']|["']$/g, '')
-    .trim();
-}
-
-async function synthesizeWithElevenLabs(
-  text: string,
-  voiceId: VoiceOptionId,
-  outPath: string,
-  apiKeyOverride?: string
-): Promise<{ ok: boolean; reason?: 'missing_key' | 'api_error'; detail?: string }> {
-  const apiKey =
-    normalizeElevenLabsApiKey(apiKeyOverride) ||
-    normalizeElevenLabsApiKey(process.env.ELEVENLABS_API_KEY);
-  if (!apiKey) {
-    return {
-      ok: false,
-      reason: 'missing_key',
-      detail: 'Chưa nhập ELEVENLABS_API_KEY trên app hoặc biến môi trường server.',
-    };
-  }
-
-  const elevenVoiceId = getElevenLabsVoiceId(voiceId);
-  try {
-    const res = await fetchWithTimeout(
-      `https://api.elevenlabs.io/v1/text-to-speech/${elevenVoiceId}`,
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': apiKey,
-          'Content-Type': 'application/json',
-          Accept: 'audio/mpeg',
-        },
-        body: JSON.stringify({
-          text,
-          model_id: 'eleven_multilingual_v2',
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-          },
-        }),
-      },
-      20000
-    );
-
-    if (!res.ok) {
-      let apiMsg = '';
-      try {
-        const rawBody = await res.text();
-        try {
-          const parsed = JSON.parse(rawBody) as {
-            detail?: { message?: string; status?: string } | string;
-            message?: string;
-          };
-          if (typeof parsed.detail === 'string') {
-            apiMsg = parsed.detail;
-          } else if (parsed.detail && typeof parsed.detail === 'object') {
-            apiMsg = parsed.detail.message || parsed.detail.status || '';
-          } else if (parsed.message) {
-            apiMsg = parsed.message;
-          }
-        } catch {
-          apiMsg = rawBody.slice(0, 140).trim();
-        }
-      } catch {
-        // Ignore body parse failure
-      }
-      return {
-        ok: false,
-        reason: 'api_error',
-        detail: apiMsg
-          ? `ElevenLabs lỗi HTTP ${res.status}: ${apiMsg}`
-          : `ElevenLabs trả về HTTP ${res.status}`,
-      };
-    }
-
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 400) {
-      return { ok: false, reason: 'api_error', detail: 'Dữ liệu âm thanh ElevenLabs rỗng.' };
-    }
-    fs.writeFileSync(outPath, buf);
-    return { ok: true };
-  } catch (err) {
-    return {
-      ok: false,
-      reason: 'api_error',
-      detail: err instanceof Error ? err.message : 'Lỗi kết nối ElevenLabs',
-    };
-  }
-}
-
 async function synthesizeChunkWithFallback(params: {
   text: string;
   voiceId: VoiceOptionId;
   ttsProvider: TtsProvider;
   voiceRate: number;
   outPath: string;
-  elevenLabsApiKey?: string;
+  emotion?: string;
+  action?: string;
+  emotionTag?: string;
 }): Promise<{
   engineUsed: string;
   recoveredFromEdgeError: boolean;
@@ -782,30 +731,17 @@ async function synthesizeChunkWithFallback(params: {
   let fallbackNote: string | undefined;
   let ok = false;
 
-  const preferElevenLabs =
-    params.ttsProvider === 'elevenlabs' || isElevenLabsVoiceId(params.voiceId);
-
-  if (preferElevenLabs) {
-    const elRes = await synthesizeWithElevenLabs(
-      params.text,
-      params.voiceId,
-      tempPath,
-      params.elevenLabsApiKey
-    );
-    if (elRes.ok) {
-      ok = true;
-      engineUsed = 'ElevenLabs Multilingual v2';
-    } else {
-      fallbackNote = `${elRes.detail ?? 'ElevenLabs chưa sẵn sàng'} -> Tự chuyển sang Google TTS Miễn phí.`;
-      ok = await synthesizeWithGoogleFreeTts(params.text, params.voiceId, tempPath);
-    }
-  } else if (params.ttsProvider === 'edge_auto') {
-    ok = await synthesizeWithEdgeTts(params.text, params.voiceId, tempPath);
+  if (params.ttsProvider !== 'google_free') {
+    ok = await synthesizeWithEdgeTts(params.text, params.voiceId, tempPath, {
+      emotion: params.emotion,
+      action: params.action,
+      emotionTag: params.emotionTag,
+    });
     if (ok) {
       engineUsed = 'Microsoft Edge Neural TTS';
     } else {
       recoveredFromEdgeError = true;
-      fallbackNote = 'Edge-TTS bị Microsoft chặn 403 -> Đã tự chuyển sang Google TTS Miễn phí.';
+      fallbackNote = 'Edge-TTS tạm gián đoạn -> Đã tự chuyển sang Google TTS Miễn phí.';
       ok = await synthesizeWithGoogleFreeTts(params.text, params.voiceId, tempPath);
     }
   } else {
@@ -3296,13 +3232,13 @@ async function normalizeMediaToClip(params: {
     durationSec,
     visualMood = 'auto',
   } = params;
-  const safeDur = Math.max(1.2, durationSec);
+  const safeDur = Math.max(1 / 30, Math.round(durationSec * 30) / 30);
   const clipTimeoutMs = Math.max(60000, Math.round(safeDur * 5000) + 25000);
   const colorGrade = getVisualMoodGradeFilter(visualMood);
 
   try {
     if (kind === 'image') {
-      const durStr = safeDur.toFixed(2);
+      const durStr = safeDur.toFixed(4);
       await runFfmpeg(
         [
           '-y',
@@ -3327,7 +3263,7 @@ async function normalizeMediaToClip(params: {
         ],
         clipTimeoutMs
       );
-      return fs.existsSync(outPath) && fs.statSync(outPath).size > 8000;
+      return fs.existsSync(outPath) && fs.statSync(outPath).size > 1000;
     }
 
     if (remoteUrl && (!sourcePath || !fs.existsSync(sourcePath))) {
@@ -3342,7 +3278,7 @@ async function normalizeMediaToClip(params: {
               '-i',
               remoteUrl,
               '-t',
-              safeDur.toFixed(2),
+              safeDur.toFixed(4),
               '-vf',
               `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},${colorGrade},fps=30,format=yuv420p`,
               '-an',
@@ -3356,7 +3292,7 @@ async function normalizeMediaToClip(params: {
             ],
             clipTimeoutMs
           );
-          if (fs.existsSync(outPath) && fs.statSync(outPath).size > 20000) {
+          if (fs.existsSync(outPath) && fs.statSync(outPath).size > 2000) {
             return true;
           }
         } catch {
@@ -3378,7 +3314,7 @@ async function normalizeMediaToClip(params: {
         '-i',
         sourcePath,
         '-t',
-        safeDur.toFixed(2),
+        safeDur.toFixed(4),
         '-vf',
         `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},${colorGrade},fps=30,format=yuv420p`,
         '-an',
@@ -3392,7 +3328,7 @@ async function normalizeMediaToClip(params: {
       ],
       clipTimeoutMs
     );
-    return fs.existsSync(outPath) && fs.statSync(outPath).size > 10000;
+    return fs.existsSync(outPath) && fs.statSync(outPath).size > 1000;
   } catch {
     return false;
   }
@@ -3501,7 +3437,9 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
               ttsProvider: config.ttsProvider,
               voiceRate: config.voiceRate,
               outPath: partMp3Path,
-              elevenLabsApiKey: config.elevenLabsApiKey,
+              emotion: beat.emotion,
+              action: beat.action,
+              emotionTag: beat.emotionTag || beat.action,
             });
             if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
               loggedRecovery = true;
@@ -3522,20 +3460,19 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
             const voiceShareCount = Array.from(resolvedCastVoiceMap.values()).filter(
               (v) => v === resolvedVoiceId
             ).length;
-            const keepPureElevenLabs =
-              ttsRes.engineUsed.includes('ElevenLabs') && voiceShareCount <= 1;
             const isGooglePitchedMale =
               ttsRes.engineUsed.includes('Google') &&
               (voiceMeta?.gender === 'male' ||
                 resolvedVoiceId.includes('Keita') ||
                 resolvedVoiceId.includes('NamMinh') ||
                 resolvedVoiceId.includes('Guy'));
-            const relFactor = keepPureElevenLabs
-              ? 1.0
-              : Math.max(
-                  0.84,
-                  Math.min(1.28, isGooglePitchedMale ? targetPitch / 0.9 : targetPitch)
-                );
+            const relFactor =
+              voiceShareCount <= 1 && !ttsRes.engineUsed.includes('Google')
+                ? 1.0
+                : Math.max(
+                    0.84,
+                    Math.min(1.28, isGooglePitchedMale ? targetPitch / 0.9 : targetPitch)
+                  );
             if (Math.abs(relFactor - 1.0) > 0.03) {
               await runFfmpeg(
                 [
@@ -3733,11 +3670,23 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       );
       const uniqueBaseName = allocateUniqueBaseName(targetAbsDir, rawBaseName);
 
+      const burnedAssCues: SubtitleCue[] = beatTimings.map((t, idx) => ({
+        index: idx + 1,
+        startSec: t.startSec,
+        endSec: t.endSec,
+        animDurationSec: t.voiceDur > 0 ? t.voiceDur : t.dur,
+        text: t.beat.isStageCue
+          ? t.beat.sceneTitle || t.beat.rawText
+          : `${t.beat.speakerName}: ${t.beat.spokenText}`,
+      }));
       const srtCues: SubtitleCue[] = beatTimings.map((t, idx) => ({
         index: idx + 1,
         startSec: t.startSec,
         endSec: t.endSec,
         animDurationSec: t.voiceDur > 0 ? t.voiceDur : t.dur,
+        emotionTag: !t.beat.isStageCue
+          ? t.beat.emotionTag || t.beat.action || t.beat.emotion
+          : undefined,
         text: t.beat.isStageCue
           ? t.beat.sceneTitle || t.beat.rawText
           : `${t.beat.speakerName}: ${t.beat.spokenText}`,
@@ -3768,7 +3717,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       let assFilterExpr: string | null = null;
       if (config.subtitle.enabled) {
         const assPath = path.join(workDir, 'anime_subtitles.ass');
-        const assContent = buildAssFromCues(srtCues, config.subtitle, width, height, {
+        const assContent = buildAssFromCues(burnedAssCues, config.subtitle, width, height, {
           isLightBackground: true,
         });
         fs.writeFileSync(assPath, assContent, 'utf-8');
@@ -3851,6 +3800,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           scenes: [],
           videoUrl: `${urlPrefix}/${encodeURIComponent(mp4Filename)}`,
           srtUrl: `${urlPrefix}/${encodeURIComponent(srtFilename)}`,
+          srtContent,
           savedOutputPath,
           savedSrtPath,
           outputFilename: mp4Filename,
@@ -3896,7 +3846,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           ttsProvider: config.ttsProvider,
           voiceRate: config.voiceRate,
           outPath: partMp3Path,
-          elevenLabsApiKey: config.elevenLabsApiKey,
+          emotionTag: seg.emotionTag,
         });
 
         if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
@@ -3973,6 +3923,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         roleKind: seg.roleKind,
         roleLabel: seg.roleLabel,
         contextLabel: seg.contextLabel,
+        emotionTag: seg.emotionTag,
       });
 
       const pct = 8 + Math.round(((i + 1) / segments.length) * 20);
@@ -4121,6 +4072,13 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         stateKey: string;
       }> = [];
 
+      let visualCursorSec = 0;
+      const quantizeToEndSec = (targetEndSec: number): number => {
+        const dur = Math.max(1 / 30, Math.round((targetEndSec - visualCursorSec) * 30) / 30);
+        visualCursorSec += dur;
+        return dur;
+      };
+
       for (let idx = 0; idx < rawSegmentTimings.length; idx++) {
         const rec = rawSegmentTimings[idx];
         const isRecIntroOrOutro = Boolean(rec.isIntroOrOutro || rec.segmentKind === 'summary');
@@ -4172,19 +4130,18 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
             });
         }
 
-        const totalRecDur = Math.max(
-          0.8,
-          (rec.countdownEndSec ?? rec.endSec + (rec.pauseAfterSec ?? 0)) - rec.startSec
-        );
+        const prevBeatVariant = rawBeats[rawBeats.length - 1]?.cardSpec.variant;
+        const isFriendsChatContinuation =
+          prevBeatVariant === 'friends-chat' && cardSpec.variant === 'friends-chat';
         const hasCdWindow =
           rec.countdownStartSec !== undefined &&
           rec.countdownEndSec !== undefined &&
           rec.countdownEndSec > rec.countdownStartSec + 0.25 &&
-          rec.countdownStartSec > rec.startSec + 0.25;
+          rec.countdownStartSec > rec.startSec + 0.1;
 
         if (hasCdWindow) {
-          const speechDur = Math.max(0.45, rec.countdownStartSec! - rec.startSec);
-          const thinkDur = Math.max(0.5, rec.countdownEndSec! - rec.countdownStartSec!);
+          const speechDur = quantizeToEndSec(rec.countdownStartSec!);
+          const thinkDur = quantizeToEndSec(rec.countdownEndSec!);
           const talkA: 'talking' | 'idle' = isSecondaryRec ? 'idle' : 'talking';
           const talkB: 'talking' | 'idle' = isSecondaryRec ? 'talking' : 'idle';
           rawBeats.push({
@@ -4194,7 +4151,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
             speakerAPose: talkA,
             speakerBPose: talkB,
             countdownActive: false,
-            sameCardContinuation: false,
+            sameCardContinuation: isFriendsChatContinuation,
             stateKey: `b${matchedAsset.index}_${rec.segmentKind ?? 's'}_${talkA}_${talkB}_0`,
           });
           rawBeats.push({
@@ -4207,27 +4164,59 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
             sameCardContinuation: true,
             stateKey: `b${matchedAsset.index}_${rec.segmentKind ?? 's'}_idle_thinking_1`,
           });
-        } else {
+        } else if ((rec.pauseAfterSec ?? 0) >= 0.14) {
+          const speechDur = quantizeToEndSec(rec.endSec);
+          const silenceTailDur = quantizeToEndSec(rec.endSec + (rec.pauseAfterSec ?? 0));
           const poseA: 'talking' | 'idle' = isSecondaryRec ? 'idle' : 'talking';
           const poseB: 'talking' | 'idle' = isSecondaryRec ? 'talking' : 'idle';
           rawBeats.push({
             baseAsset: matchedAsset,
             cardSpec,
-            baseDur: totalRecDur,
+            baseDur: speechDur,
             speakerAPose: poseA,
             speakerBPose: poseB,
             countdownActive: false,
-            sameCardContinuation: false,
+            sameCardContinuation: isFriendsChatContinuation,
+            stateKey: `b${matchedAsset.index}_${rec.segmentKind ?? 's'}_${poseA}_${poseB}_0`,
+          });
+          rawBeats.push({
+            baseAsset: matchedAsset,
+            cardSpec,
+            baseDur: silenceTailDur,
+            speakerAPose: 'idle',
+            speakerBPose: 'idle',
+            countdownActive: false,
+            sameCardContinuation: true,
+            stateKey: `b${matchedAsset.index}_${rec.segmentKind ?? 's'}_idle_idle_gap`,
+          });
+        } else {
+          const targetEnd = rec.countdownEndSec ?? rec.endSec + (rec.pauseAfterSec ?? 0);
+          const beatDur = quantizeToEndSec(targetEnd);
+          const poseA: 'talking' | 'idle' = isSecondaryRec ? 'idle' : 'talking';
+          const poseB: 'talking' | 'idle' = isSecondaryRec ? 'talking' : 'idle';
+          rawBeats.push({
+            baseAsset: matchedAsset,
+            cardSpec,
+            baseDur: beatDur,
+            speakerAPose: poseA,
+            speakerBPose: poseB,
+            countdownActive: false,
+            sameCardContinuation: isFriendsChatContinuation,
             stateKey: `b${matchedAsset.index}_${rec.segmentKind ?? 's'}_${poseA}_${poseB}_0`,
           });
         }
       }
 
+      const useExactStationaryConcat =
+        rawBeats.length > 0 && rawBeats.every((b) => b.cardSpec.variant === 'friends-chat');
+
       for (let bi = 0; bi < rawBeats.length; bi++) {
         assertNotCancelled(jobId);
         const beat = rawBeats[bi];
         const nextBeat = rawBeats[bi + 1];
-        const outFade = !nextBeat
+        const outFade = useExactStationaryConcat
+          ? 0
+          : !nextBeat
           ? 0.3
           : nextBeat.sameCardContinuation
           ? 0.05
@@ -4446,7 +4435,12 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       );
     };
 
-    if (config.transitionMode !== 'none' && normalizedClips.length > 1) {
+    const bypassXfadeForContinuousCards =
+      isStudio2411Export &&
+      normalizedClips.length > 1 &&
+      normalizedClips.slice(1).every((c) => c.sameCardContinuation);
+
+    if (config.transitionMode !== 'none' && !bypassXfadeForContinuousCards && normalizedClips.length > 1) {
       try {
         const xfadeSeed = Date.now() % 10000;
         const probedClips = await Promise.all(
@@ -4722,6 +4716,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         scenes: scenePreviews,
         videoUrl: `${urlPrefix}/${encodeURIComponent(mp4Filename)}`,
         srtUrl: `${urlPrefix}/${encodeURIComponent(srtFilename)}`,
+        srtContent,
         savedOutputPath,
         savedSrtPath,
         outputFilename: mp4Filename,
@@ -4925,7 +4920,6 @@ async function startServer() {
       ollamaReachable: ollamaModels.length > 0,
       ollamaModels,
       builtinBgmReady: fs.existsSync(path.join(BGM_DIR, 'lofi_chill.mp3')),
-      elevenLabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY?.trim()),
     });
   });
 
@@ -5651,55 +5645,7 @@ async function startServer() {
     });
   });
 
-  // 4a. Verify ElevenLabs API Key & List Account Voices (Proxy)
-  app.post('/api/elevenlabs/voices', async (req, res) => {
-    const apiKey =
-      normalizeElevenLabsApiKey(req.body?.apiKey) ||
-      normalizeElevenLabsApiKey(process.env.ELEVENLABS_API_KEY);
-    if (!apiKey) {
-      res.status(400).json({ error: 'Vui lòng nhập ELEVENLABS_API_KEY để kiểm tra và tải giọng.' });
-      return;
-    }
-    try {
-      const elRes = await fetchWithTimeout(
-        'https://api.elevenlabs.io/v1/voices',
-        {
-          method: 'GET',
-          headers: {
-            'xi-api-key': apiKey,
-            Accept: 'application/json',
-          },
-        },
-        10000
-      );
-      if (!elRes.ok) {
-        const msg =
-          elRes.status === 401 || elRes.status === 403
-            ? 'ELEVENLABS_API_KEY không hợp lệ hoặc đã hết hạn.'
-            : `ElevenLabs trả về HTTP ${elRes.status}.`;
-        res.status(elRes.status).json({ error: msg });
-        return;
-      }
-      const data = (await elRes.json()) as {
-        voices?: Array<{ voice_id?: string; name?: string; category?: string }>;
-      };
-      const voices = (data.voices ?? [])
-        .filter((v) => v.voice_id && v.name)
-        .slice(0, 40)
-        .map((v) => ({
-          id: `el-custom:${v.voice_id}` as VoiceOptionId,
-          name: String(v.name),
-          category: v.category ? String(v.category) : undefined,
-        }));
-      res.json({ ok: true, voices });
-    } catch (err) {
-      res.status(502).json({
-        error: err instanceof Error ? err.message : 'Không thể kết nối máy chủ ElevenLabs.',
-      });
-    }
-  });
-
-  // 4. TTS Preview endpoint (supports both single-voice and dual-voice bilingual sample!)
+  // 4. TTS Preview endpoint (Edge Neural TTS default -> Google TTS fallback, with emotion prosody)
   app.post('/api/tts-preview', async (req, res) => {
     const rawText =
       String(req.body?.text ?? '').trim() ||
@@ -5707,15 +5653,15 @@ async function startServer() {
     const rawScript = String(req.body?.script ?? '').trim();
     const language = (req.body?.language ?? 'vi') as LanguageCode;
     const scriptStyle = (req.body?.scriptStyle ?? 'curious_facts') as ScriptStyle;
-    const voiceId = (req.body?.voiceId ?? 'el-rachel') as VoiceOptionId;
+    const voiceId = (req.body?.voiceId ?? 'vi-VN-HoaiMyNeural') as VoiceOptionId;
     const secondaryVoiceId = (req.body?.secondaryVoiceId ??
       getDefaultSecondaryVoiceForLanguage(language)) as VoiceOptionId;
     const dualVoiceEnabled = Boolean(req.body?.dualVoiceEnabled) || isBilingualLanguage(language);
     const pauseBetweenLinesSec = Number(req.body?.pauseBetweenLinesSec ?? 0);
     const clockTickEnabled = req.body?.clockTickEnabled !== false;
-    const ttsProvider = (req.body?.ttsProvider ?? 'elevenlabs') as TtsProvider;
+    const ttsProvider = (req.body?.ttsProvider ?? 'edge_auto') as TtsProvider;
     const voiceRate = Number(req.body?.voiceRate ?? 1.0);
-    const elevenLabsApiKey = normalizeElevenLabsApiKey(req.body?.elevenLabsApiKey);
+    const reqEmotionTag = typeof req.body?.emotionTag === 'string' ? req.body.emotionTag : undefined;
 
     const targetRepeatCount = Number(req.body?.targetRepeatCount ?? 0);
     const targetRepeatPauseSec = Number(req.body?.targetRepeatPauseSec ?? 2.0);
@@ -5742,7 +5688,6 @@ async function startServer() {
           summarizeAtEnd,
         });
 
-        // Prefer a Question (pauseAfterSec >= 1.5) + its Answer (including repeat!) so user hears the exact flow
         let sampleSegs = planned.slice(0, 3);
         const firstPauseIdx = planned.findIndex((s) => s.pauseKind === 'thinking' && s.pauseAfterSec >= 1.5);
         if (firstPauseIdx >= 0 && planned[firstPauseIdx]) {
@@ -5771,7 +5716,7 @@ async function startServer() {
               ttsProvider,
               voiceRate,
               outPath: segPath,
-              elevenLabsApiKey,
+              emotionTag: seg.emotionTag,
             });
             enginesUsed.push(segResult.engineUsed);
             if (segResult.fallbackNote && !fallbackNotes.includes(segResult.fallbackNote)) {
@@ -5826,7 +5771,7 @@ async function startServer() {
           const uniqueEngines = Array.from(new Set(enginesUsed));
           res.json({
             audioUrl: `/files/outputs/${filename}`,
-            engineUsed: `${uniqueEngines.join(' / ') || 'Google TTS Miễn phí'} (${voicesUsed.join(' + ')})`,
+            engineUsed: `${uniqueEngines.join(' / ') || 'Microsoft Edge Neural TTS'} (${voicesUsed.join(' + ')})`,
             recoveredFromEdgeError: anyRecoveredFromEdge,
             fallbackNote: fallbackNotes[0],
             voicesUsed,
@@ -5844,7 +5789,7 @@ async function startServer() {
         ttsProvider,
         voiceRate,
         outPath,
-        elevenLabsApiKey,
+        emotionTag: reqEmotionTag,
       });
       const durationSec = await probeDurationSec(outPath);
       res.json({

@@ -15,7 +15,7 @@ export type ScriptStyle =
   | 'motivational'
   | 'top_list';
 
-export type TtsProvider = 'google_free' | 'edge_auto' | 'elevenlabs';
+export type TtsProvider = 'edge_auto' | 'google_free';
 
 export type BuiltinVoiceOptionId =
   | 'vi-VN-HoaiMyNeural'
@@ -35,21 +35,9 @@ export type BuiltinVoiceOptionId =
   | 'ja-JP-DaichiNeural'
   | 'ja-JP-MayuNeural'
   | 'ja-JP-ShioriNeural'
-  | 'ja-JP-NaokiNeural'
-  | 'el-rachel'
-  | 'el-elli'
-  | 'el-sarah'
-  | 'el-bella'
-  | 'el-charlotte'
-  | 'el-lily'
-  | 'el-adam'
-  | 'el-josh'
-  | 'el-antoni'
-  | 'el-liam'
-  | 'el-brian'
-  | 'el-sam';
+  | 'ja-JP-NaokiNeural';
 
-export type VoiceOptionId = BuiltinVoiceOptionId | `el-custom:${string}`;
+export type VoiceOptionId = BuiltinVoiceOptionId;
 
 export type MaterialSource =
   | 'studio_2411'
@@ -197,6 +185,7 @@ export interface SubtitleCue {
   roleKind?: ScriptRoleKind;
   roleLabel?: string;
   contextLabel?: string;
+  emotionTag?: string;
 }
 
 export interface SubtitleConfig {
@@ -267,7 +256,6 @@ export interface RenderJobConfig {
   transitionMode: VideoTransitionMode;
   clipDurationSec: number;
   ttsProvider: TtsProvider;
-  elevenLabsApiKey?: string;
   voiceId: VoiceOptionId;
   dualVoiceEnabled?: boolean;
   secondaryVoiceId?: VoiceOptionId;
@@ -297,6 +285,7 @@ export interface RenderJobStatus {
   scenes?: ScenePreviewItem[];
   videoUrl?: string;
   srtUrl?: string;
+  srtContent?: string;
   savedOutputPath?: string;
   savedSrtPath?: string;
   outputFilename?: string;

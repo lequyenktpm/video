@@ -332,4 +332,15 @@
   animation: mptHandThink 1.35s ease-in-out infinite;
 }
 
+@keyframes mpt2411Breathe {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-1.8px);
+  }
+}
 
+.animate-2411-breathe {
+  animation: mpt2411Breathe 2.8s ease-in-out infinite;
+}

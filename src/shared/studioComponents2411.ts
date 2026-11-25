@@ -357,60 +357,12 @@ function pickAutoVariant(params: {
   lineIndex: number;
   prevVariant?: Studio2411ComponentVariant;
 }): Studio2411ComponentVariant {
-  const {
-    roleKind,
-    hasPause,
-    isSecondarySlot,
-    isDialogue,
-    isUpgradeCue,
-    dualVoiceEnabled = false,
-    iconKey,
-    lineIndex,
-    prevVariant,
-  } = params;
+  const { dualVoiceEnabled = false } = params;
 
-  // In 2-voice mode, keep all slides consistently focused on 2-speaker chat bubbles
-  // rather than randomizing or rotating different Component 2411 card layouts between slides.
-  if (dualVoiceEnabled) {
-    return 'friends-chat';
-  }
-
-  let candidates: Studio2411ComponentVariant[];
-  if (roleKind === 'title') {
-    candidates = ['css-browser-mockup', 'bs-card-header'];
-  } else if (roleKind === 'outro') {
-    candidates = ['css-glass-quote', 'staircase-3d'];
-  } else if (isUpgradeCue) {
-    candidates = ['dialogue-upgrade', 'css-compare', 'avatar-speech'];
-  } else if (roleKind === 'question' || hasPause) {
-    candidates = isDialogue
-      ? ['friends-chat', 'css-flashcard', 'avatar-speech', 'gauge-tone']
-      : ['css-flashcard', 'gauge-tone', 'bs-alert-callout'];
-  } else if (roleKind === 'answer' || isSecondarySlot) {
-    candidates = isDialogue
-      ? ['avatar-speech', 'dialogue-upgrade', 'friends-chat', 'css-compare', 'css-equation']
-      : ['css-compare', 'css-equation', 'bs-progress-meter', 'staircase-3d'];
-  } else if (isDialogue) {
-    candidates = ['friends-chat', 'avatar-speech', 'dialogue-upgrade', 'css-compare', 'css-roadmap'];
-  } else if (iconKey === 'bar_chart') {
-    candidates = ['bs-progress-meter', 'staircase-3d', 'css-roadmap'];
-  } else if (iconKey === 'alert_triangle') {
-    candidates = ['bs-alert-callout', 'gauge-tone', 'css-compare'];
-  } else {
-    candidates = [
-      'css-roadmap',
-      'bs-card-header',
-      'css-glass-quote',
-      'staircase-3d',
-      'css-equation',
-      'bs-progress-meter',
-    ];
-  }
-  const picked = candidates[lineIndex % candidates.length];
-  if (prevVariant && picked === prevVariant && candidates.length > 1) {
-    return candidates[(lineIndex + 1) % candidates.length];
-  }
-  return picked;
+  // Keep Component 2411 on one consistent continuous stage across the entire video:
+  // - 2-voice / Q&A mode uses stationary 2-speaker 'friends-chat' bubbles.
+  // - 1-voice narration uses stationary 1-speaker 'avatar-speech' so characters/cards never swap mid-video.
+  return dualVoiceEnabled ? 'friends-chat' : 'avatar-speech';
 }
 
 export function build2411CardSpecForLine(params: {
@@ -590,6 +542,7 @@ export function build2411CardSpecForLine(params: {
           rawOverrideExample.replace(/^Hint:\s*/i, '').trim().split(/\s+/).length > 4)
     );
 
+  const isTwoSpeakerFriendsChat = variant === 'friends-chat' || Boolean(dualVoiceEnabled);
   const autoContextual = buildContextualExampleForLine({
     cleanText,
     roleKind: pres.roleKind,
@@ -599,13 +552,14 @@ export function build2411CardSpecForLine(params: {
     pauseSec,
   });
   const resolvedEx = (!hasQuotedTargetLeak && rawOverrideExample) || autoContextual.text;
-  const exampleText = resolvedEx ? resolvedEx : undefined;
+  const exampleText = isTwoSpeakerFriendsChat ? undefined : resolvedEx ? resolvedEx : undefined;
   const hintKind = prevTargetText
     ? 'recall'
     : autoContextual.hintKind;
 
-  const resolvedPrevTarget =
-    override?.prevTargetText?.trim() || prevTargetText?.trim() || undefined;
+  const resolvedPrevTarget = isTwoSpeakerFriendsChat
+    ? undefined
+    : override?.prevTargetText?.trim() || prevTargetText?.trim() || undefined;
   const resolvedPromptPreview =
     override?.promptPreviewText?.trim() || promptPreviewText?.trim() || undefined;
 
@@ -668,16 +622,29 @@ export function buildContextualSceneComponentsForScript(params: {
     const pres = analyzeScriptLinePresentation(rawLine, {
       scriptStyle: params.scriptStyle,
     });
-    const hasExplicitTargetTag =
-      /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(rawLine);
+    const hasExplicitNonViTargetTag =
+      /^\s*(?:English|Japanese|Tiếng\s*Anh|Tiếng\s*Nhật|\[EN\]|\[JA\]|\[V2\])\s*[:：]?/i.test(rawLine);
+    const hasExplicitViTargetTag =
+      /^\s*(?:Vietnamese|Tiếng\s*Việt|\[VI\])\s*[:：]?/i.test(rawLine) &&
+      !pres.hasPause &&
+      pres.roleKind !== 'question' &&
+      idx > 0 &&
+      /^\s*(?:English|Japanese|Tiếng\s*Anh|Tiếng\s*Nhật|\[EN\]|\[JA\]|\[V1\]|Q|Question)\s*[:：]?/i.test(
+        lines[idx - 1]
+      );
     const isSecondary =
-      hasExplicitTargetTag || (pres.roleKind === 'answer' && !pres.hasPause);
+      !pres.hasPause &&
+      pres.roleKind !== 'question' &&
+      (hasExplicitNonViTargetTag || hasExplicitViTargetTag || pres.roleKind === 'answer');
     const rawExisting = params.existingOverrides?.[idx];
     const existing =
       params.dualVoiceEnabled && rawExisting && rawExisting.variant !== 'friends-chat'
         ? { ...rawExisting, variant: 'friends-chat' as Studio2411ComponentVariant, labels: undefined }
         : rawExisting;
-    const showRecall = !isSecondary && pres.roleKind !== 'title' ? lastTargetText : undefined;
+    const showRecall =
+      !params.dualVoiceEnabled && !isSecondary && pres.roleKind !== 'title'
+        ? lastTargetText
+        : undefined;
     const showPromptCtx = isSecondary && pres.roleKind !== 'outro' ? lastPromptText : undefined;
 
     const spec = build2411CardSpecForLine({
@@ -733,10 +700,12 @@ function escapeXml(str: string): string {
 }
 
 function charVisualUnits(ch: string): number {
-  if (/[\u3000-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/.test(ch)) return 1.85;
-  if (/[A-ZMW@]/.test(ch)) return 1.18;
-  if (/[ilIjtfr.,:;!|'\s]/.test(ch)) return 0.56;
-  return 0.96;
+  if (/[\u3000-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/.test(ch)) return 1.06;
+  if (/[MW@#%&QGOD]/.test(ch)) return 0.90;
+  if (/[A-Z]/.test(ch)) return 0.76;
+  if (/[mw]/.test(ch)) return 0.86;
+  if (/[ilIjtfr1.,:;!|'"()（）「」\- ]/.test(ch)) return 0.38;
+  return 0.60;
 }
 
 /**
@@ -771,6 +740,19 @@ function measureVisualUnits(str: string): number {
     sum += charVisualUnits(ch);
   }
   return sum;
+}
+
+export function measureSvgLinePx(
+  str: string,
+  fontSize: number,
+  fontWeight: number | string = 600
+): number {
+  const clean = str.trim();
+  if (!clean) return 0;
+  const weightNum = Number(fontWeight);
+  const weightMult = weightNum >= 700 ? 1.08 : weightNum >= 600 ? 1.05 : 1.0;
+  const letterSpacingExtra = Math.max(0, Array.from(clean).length - 1) * fontSize * 0.02;
+  return Math.ceil(measureVisualUnits(clean) * fontSize * weightMult + letterSpacingExtra);
 }
 
 function wrapAllSvgLines(text: string, maxUnitsPerLine: number): string[] {
@@ -836,7 +818,7 @@ function wrapAllSvgLines(text: string, maxUnitsPerLine: number): string[] {
       continue;
     }
 
-    const spaceCost = current ? 0.52 : 0;
+    const spaceCost = current ? 0.38 : 0;
     if (current && currentUnits + spaceCost + wordUnits > budget) {
       flushLine();
       current = word;
@@ -894,6 +876,7 @@ function fitTextToBox(opts: {
   minFontSize?: number;
   maxLines?: number;
   lineHeightRatio?: number;
+  fontWeight?: number | string;
 }): FittedSvgTextBlock {
   const {
     text,
@@ -903,23 +886,30 @@ function fitTextToBox(opts: {
     minFontSize = 11,
     maxLines = 5,
     lineHeightRatio = 1.24,
+    fontWeight = 600,
   } = opts;
   const clean = text.replace(/\s+/g, ' ').trim() || '';
   const safeW = Math.max(48, boxW);
   const safeH = Math.max(20, boxH);
+  const weightNum = Number(fontWeight);
+  const weightMult = weightNum >= 700 ? 1.08 : weightNum >= 600 ? 1.05 : 1.0;
 
   for (let fs = Math.round(baseFontSize); fs >= minFontSize; fs--) {
-    const unitsBudget = Math.max(6, Math.floor(safeW / (fs * 0.59)));
+    const unitsBudget = Math.max(5.5, (safeW * 0.91) / (fs * weightMult + fs * 0.028));
     const lines = wrapAllSvgLines(clean, unitsBudget);
     const lh = Math.max(fs + 2, Math.round(fs * lineHeightRatio));
     const totalH = lines.length * lh;
-    if (lines.length <= maxLines && totalH <= safeH) {
+    const widestPx = lines.reduce(
+      (mx, ln) => Math.max(mx, measureSvgLinePx(ln, fs, fontWeight)),
+      0
+    );
+    if (lines.length <= maxLines && totalH <= safeH && widestPx <= safeW) {
       return { lines, fontSize: fs, lineHeight: lh, totalHeight: totalH };
     }
   }
 
   const finalFs = minFontSize;
-  const unitsBudget = Math.max(6, Math.floor(safeW / (finalFs * 0.59)));
+  const unitsBudget = Math.max(5.5, (safeW * 0.91) / (finalFs * weightMult + finalFs * 0.028));
   const finalLines = wrapAllSvgLines(clean, unitsBudget);
   const finalLh = Math.max(finalFs + 2, Math.round(finalFs * lineHeightRatio));
   return {
@@ -1060,6 +1050,7 @@ function buildSvgCharacterAvatar(opts: {
   pose?: 'talking' | 'thinking' | 'idle';
   animFrame?: 0 | 1 | 2 | 3;
   side?: 'left' | 'right';
+  timeSec?: number;
 }): string {
   const {
     cx,
@@ -1075,11 +1066,29 @@ function buildSvgCharacterAvatar(opts: {
     pose = 'idle',
     animFrame = 0,
     side = 'left',
+    timeSec,
   } = opts;
+
+  const t = typeof timeSec === 'number' ? timeSec : animFrame * 0.18;
+  const phaseOffset = side === 'right' ? 1.35 : 0;
+  const breathY = typeof timeSec === 'number' ? Math.sin(t * 2.5 + phaseOffset) * 1.45 : 0;
+  const headTiltDeg =
+    typeof timeSec === 'number'
+      ? pose === 'talking'
+        ? Math.sin(t * 3.8 + phaseOffset) * 2.4
+        : pose === 'thinking'
+        ? (side === 'right' ? -4.5 : 4.5) + Math.sin(t * 1.8) * 1.2
+        : Math.sin(t * 1.9 + phaseOffset) * 1.1
+      : 0;
+  const blinkCycle = (t + phaseOffset * 0.7) % 3.9;
+  const isBlinking = typeof timeSec === 'number' && blinkCycle > 3.74;
+
   const hairSvg =
     hairStyle === 'bob'
-      ? `<path d="M-24 -6 C-26 -28 26 -28 24 -6 L24 10 C18 6 14 -6 0 -8 C-14 -6 -18 6 -24 10 Z" fill="${hairHex}"/>`
-      : `<path d="M-21 -8 C-20 -26 20 -26 21 -8 C12 -14 -12 -14 -21 -8 Z" fill="${hairHex}"/>`;
+      ? `<path d="M-24 -6 C-26 -28 26 -28 24 -6 L24 11 C18 7 14 -6 0 -8 C-14 -6 -18 7 -24 11 Z" fill="${hairHex}"/>
+         <path d="M-15 -17 Q-4 -23 11 -18" fill="none" stroke="#FFFFFF" stroke-opacity="0.26" stroke-width="2.4" stroke-linecap="round"/>`
+      : `<path d="M-21 -8 C-20 -26 20 -26 21 -8 C12 -14 -12 -14 -21 -8 Z" fill="${hairHex}"/>
+         <path d="M-12 -18 Q-1 -23 9 -18" fill="none" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="2.2" stroke-linecap="round"/>`;
   const rawTagText = (tagText ?? '').trim();
   const pillText = rawTagText && !isGenericSpeakerLabel(rawTagText) ? rawTagText : '';
   const pillFont = Math.max(11, Math.round(smallSize * 0.78));
@@ -1095,40 +1104,89 @@ function buildSvgCharacterAvatar(opts: {
   let handSvg = '';
 
   if (pose === 'talking') {
-    if (phase === 0) {
-      mouthSvg = `<ellipse cx="0" cy="8.1" rx="4.4" ry="3.3" fill="#991B1B" stroke="#1E293B" stroke-width="1.5"/>
-        <path d="M-2.8 6.4 Q0 7.6 2.8 6.4" fill="none" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round"/>`;
-    } else if (phase === 1) {
-      mouthSvg = `<ellipse cx="0" cy="7.8" rx="5.3" ry="2.1" fill="#991B1B" stroke="#1E293B" stroke-width="1.5"/>`;
-    } else if (phase === 2) {
-      mouthSvg = `<ellipse cx="0" cy="8.2" rx="3.1" ry="3.5" fill="#991B1B" stroke="#1E293B" stroke-width="1.5"/>`;
+    if (typeof timeSec === 'number') {
+      const syllable =
+        0.22 +
+        0.78 *
+          Math.abs(
+            Math.sin(t * 11.4 + phaseOffset) * 0.65 +
+              Math.sin(t * 6.8 + 0.8) * 0.35
+          );
+      const rx = (3.4 + syllable * 1.8).toFixed(2);
+      const ry = (1.3 + syllable * 3.1).toFixed(2);
+      mouthSvg = `<ellipse cx="0" cy="8.1" rx="${rx}" ry="${ry}" fill="#991B1B" stroke="#1E293B" stroke-width="1.45"/>
+        ${syllable > 0.48 ? `<path d="M-2.5 6.3 Q0 7.4 2.5 6.3" fill="none" stroke="#FFFFFF" stroke-width="1.2" stroke-linecap="round"/>` : ''}`;
+      const dir = side === 'right' ? -1 : 1;
+      const swing = Math.sin(t * 4.4 + phaseOffset);
+      const armOffset = -2.4 + swing * 2.8;
+      const wx = dir * (22 + swing * 1.8);
+      const wy = 12 + armOffset;
+      handSvg = `<path d="M${dir * 15} 22 Q${dir * 20} ${(17 + armOffset * 0.4).toFixed(2)} ${wx.toFixed(2)} ${wy.toFixed(2)}" fill="none" stroke="${shirtHex}" stroke-width="4.8" stroke-linecap="round"/>
+        <circle cx="${wx.toFixed(2)}" cy="${(wy - 1.5).toFixed(2)}" r="4.5" fill="#FDE68A" stroke="#1E293B" stroke-width="1.1"/>`;
     } else {
-      mouthSvg = `<path d="M-5.2 6.8 Q0 10.6 5.2 6.8" fill="none" stroke="#1E293B" stroke-width="2.1" stroke-linecap="round"/>`;
+      if (phase === 0) {
+        mouthSvg = `<ellipse cx="0" cy="8.1" rx="4.4" ry="3.3" fill="#991B1B" stroke="#1E293B" stroke-width="1.5"/>
+          <path d="M-2.8 6.4 Q0 7.6 2.8 6.4" fill="none" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round"/>`;
+      } else if (phase === 1) {
+        mouthSvg = `<ellipse cx="0" cy="7.8" rx="5.3" ry="2.1" fill="#991B1B" stroke="#1E293B" stroke-width="1.5"/>`;
+      } else if (phase === 2) {
+        mouthSvg = `<ellipse cx="0" cy="8.2" rx="3.1" ry="3.5" fill="#991B1B" stroke="#1E293B" stroke-width="1.5"/>`;
+      } else {
+        mouthSvg = `<path d="M-5.2 6.8 Q0 10.6 5.2 6.8" fill="none" stroke="#1E293B" stroke-width="2.1" stroke-linecap="round"/>`;
+      }
+      const dir = side === 'right' ? -1 : 1;
+      const armOffset = [0, -2.6, -4.0, -1.6][phase];
+      const wx = dir * 23;
+      const wy = 12 + armOffset;
+      handSvg = `<path d="M${dir * 15} 22 Q${dir * 20} ${17 + armOffset * 0.4} ${wx} ${wy}" fill="none" stroke="${shirtHex}" stroke-width="4.8" stroke-linecap="round"/>
+        <circle cx="${wx}" cy="${wy - 1.5}" r="4.5" fill="#FDE68A" stroke="#1E293B" stroke-width="1.1"/>`;
     }
-    const dir = side === 'right' ? -1 : 1;
-    const armOffset = [0, -2.6, -4.0, -1.6][phase];
-    const wx = dir * 23;
-    const wy = 12 + armOffset;
-    handSvg = `<path d="M${dir * 15} 22 Q${dir * 20} ${17 + armOffset * 0.4} ${wx} ${wy}" fill="none" stroke="${shirtHex}" stroke-width="4.8" stroke-linecap="round"/>
-      <circle cx="${wx}" cy="${wy - 1.5}" r="4.5" fill="#FDE68A" stroke="#1E293B" stroke-width="1.1"/>`;
   } else if (pose === 'thinking') {
+    const dir = side === 'right' ? -1 : 1;
     mouthSvg = `<path d="M-4 8.4 Q1 7 5 9.2" fill="none" stroke="#1E293B" stroke-width="2" stroke-linecap="round"/>`;
-    const bob = phase % 2 === 0 ? -1.4 : 0.6;
-    const dot1Op = phase % 3 === 0 ? '0.95' : '0.45';
-    const dot2Op = phase % 3 === 1 ? '0.95' : '0.45';
-    handSvg = `<path d="M-16 24 Q-12 18 -6 ${14 + bob}" fill="none" stroke="${shirtHex}" stroke-width="4.6" stroke-linecap="round"/>
-      <circle cx="-5" cy="${13 + bob}" r="4.0" fill="#FDE68A" stroke="#1E293B" stroke-width="1.1"/>
-      <circle cx="-22" cy="${-14 + bob}" r="2.2" fill="${tagHex ?? shirtHex}" fill-opacity="${dot1Op}"/>
-      <circle cx="-26" cy="${-21 + bob}" r="3.2" fill="${tagHex ?? shirtHex}" fill-opacity="${dot2Op}"/>`;
+    const bob =
+      typeof timeSec === 'number'
+        ? Math.sin(t * 2.8) * 1.4
+        : phase % 2 === 0
+        ? -1.4
+        : 0.6;
+    const dot1Op =
+      typeof timeSec === 'number'
+        ? (0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 4.5))).toFixed(2)
+        : phase % 3 === 0
+        ? '0.95'
+        : '0.45';
+    const dot2Op =
+      typeof timeSec === 'number'
+        ? (0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 4.5 - 1.2))).toFixed(2)
+        : phase % 3 === 1
+        ? '0.95'
+        : '0.45';
+    handSvg = `<path d="M${dir * -16} 24 Q${dir * -12} 18 ${dir * -6} ${(14 + bob).toFixed(2)}" fill="none" stroke="${shirtHex}" stroke-width="4.6" stroke-linecap="round"/>
+      <circle cx="${dir * -5}" cy="${(13 + bob).toFixed(2)}" r="4.0" fill="#FDE68A" stroke="#1E293B" stroke-width="1.1"/>
+      <circle cx="${dir * 22}" cy="${(-14 + bob * 0.8).toFixed(2)}" r="2.2" fill="${tagHex ?? shirtHex}" fill-opacity="${dot1Op}"/>
+      <circle cx="${dir * 26}" cy="${(-21 + bob * 0.8).toFixed(2)}" r="3.2" fill="${tagHex ?? shirtHex}" fill-opacity="${dot2Op}"/>`;
   }
 
-  return `<g transform="translate(${cx},${cy}) scale(${scale})">
+  const eyesSvg = isBlinking
+    ? `<path d="M-9 -2 Q-6 -0.2 -3 -2" fill="none" stroke="#1E293B" stroke-width="2.0" stroke-linecap="round"/>
+       <path d="M3 -2 Q6 -0.2 9 -2" fill="none" stroke="#1E293B" stroke-width="2.0" stroke-linecap="round"/>`
+    : `<circle cx="-6" cy="-2" r="2.5" fill="#1E293B"/>
+       <circle cx="6" cy="-2" r="2.5" fill="#1E293B"/>
+       <circle cx="-6.8" cy="-2.9" r="0.85" fill="#FFFFFF"/>
+       <circle cx="5.2" cy="-2.9" r="0.85" fill="#FFFFFF"/>`;
+
+  return `<g transform="translate(${cx},${(cy + breathY).toFixed(2)}) scale(${scale})">
     <path d="M-26 32 C-24 14 24 14 26 32 Z" fill="${shirtHex}"/>
-    <circle cx="0" cy="-2" r="19" fill="#FDE68A"/>
-    ${hairSvg}
-    <circle cx="-6" cy="-2" r="2.2" fill="#1E293B"/>
-    <circle cx="6" cy="-2" r="2.2" fill="#1E293B"/>
-    ${mouthSvg}
+    <path d="M-8 17 L0 22 L8 17" fill="none" stroke="#FFFFFF" stroke-opacity="0.48" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="rotate(${headTiltDeg.toFixed(2)} 0 4)">
+      <circle cx="0" cy="-2" r="19" fill="#FDE68A" stroke="#F59E0B" stroke-opacity="0.32" stroke-width="1.1"/>
+      <ellipse cx="-10" cy="3.5" rx="3.4" ry="1.8" fill="#FB7185" fill-opacity="0.22"/>
+      <ellipse cx="10" cy="3.5" rx="3.4" ry="1.8" fill="#FB7185" fill-opacity="0.22"/>
+      ${hairSvg}
+      ${eyesSvg}
+      ${mouthSvg}
+    </g>
     ${handSvg}
     ${namePill}
   </g>`;
@@ -1149,6 +1207,9 @@ export function build2411CardSvg(params: {
   speakerAPose?: 'talking' | 'thinking' | 'idle';
   speakerBPose?: 'talking' | 'thinking' | 'idle';
   countdownActive?: boolean;
+  timeSec?: number;
+  beatProgress?: number;
+  isPlayingSpeech?: boolean;
 }): string {
   const {
     spec,
@@ -1160,6 +1221,8 @@ export function build2411CardSvg(params: {
     speakerAPose: overridePoseA,
     speakerBPose: overridePoseB,
     countdownActive = false,
+    timeSec,
+    beatProgress,
   } = params;
   const { theme } = spec;
   const isLandscape = width > height;
@@ -1208,11 +1271,9 @@ export function build2411CardSvg(params: {
   const smallSize = Math.max(15, Math.round(titleSize * 0.70));
   const bigSize = Math.max(25, Math.round(titleSize * 1.22));
 
-  const modePrimaryHex =
-    spec.accentOverrideHex ??
-    (spec.layoutKind === 'answer_reveal' ? theme.secondaryAccentHex : theme.accentHex);
-  const modeSecondaryHex =
-    spec.layoutKind === 'answer_reveal' ? theme.accentHex : theme.secondaryAccentHex;
+  // Keep Speaker A / primary color and Speaker B / secondary color 100% consistent across all turns
+  const modePrimaryHex = spec.accentOverrideHex ?? theme.accentHex;
+  const modeSecondaryHex = theme.secondaryAccentHex;
 
   const innerW = cardW - padX * 2;
   const hasFooterContext = Boolean(spec.prevTargetText || spec.exampleText);
@@ -1782,33 +1843,42 @@ export function build2411CardSvg(params: {
       const spkA = rawLabelA && !isGenericSpeakerLabel(rawLabelA) ? rawLabelA : '';
       const spkB = rawLabelB && !isGenericSpeakerLabel(rawLabelB) ? rawLabelB : '';
       const avColW = Math.round(innerW * 0.16);
-      const maxLinePx = (fitted: FittedSvgTextBlock) =>
+      const bubblePadX = 20;
+      const maxLinePx = (fitted: FittedSvgTextBlock, weight = 600) =>
         fitted.lines.reduce(
-          (mx, ln) => Math.max(mx, Math.round(measureVisualUnits(ln) * fitted.fontSize * 0.59)),
+          (mx, ln) => Math.max(mx, measureSvgLinePx(ln, fitted.fontSize, weight)),
           0
         );
 
       if (isIntro || isOutro) {
-        const avScale = Math.max(0.82, Math.min(1.08, bodyH / 170));
-        const maxB1W = innerW - avColW - 18;
-        const b1Y = bodyTop + 4;
+        const avScale = Math.max(0.76, Math.min(0.98, width / 760));
+        const rowGap = 12;
+        const maxB1W = innerW - avColW - 14;
+        const b1Y = bodyTop;
         const speakerAPose: 'talking' | 'thinking' | 'idle' = overridePoseA ?? 'talking';
+        const speakerBPose: 'talking' | 'thinking' | 'idle' = overridePoseB ?? 'idle';
         const introBubbleFit = fitTextToBox({
           text: spec.speechText,
-          boxW: maxB1W - 36,
-          boxH: Math.max(84, bodyH - 22),
-          baseFontSize: Math.round(bigSize * 1.04),
+          boxW: maxB1W - bubblePadX * 2,
+          boxH: Math.round(height * 0.34),
+          baseFontSize: Math.round(bigSize * 1.02),
           minFontSize: 15,
-          maxLines: 4,
-          lineHeightRatio: 1.28,
+          maxLines: 5,
+          lineHeightRatio: 1.26,
+          fontWeight: 600,
         });
-        const naturalW = maxLinePx(introBubbleFit) + 42;
-        const b1W = Math.min(maxB1W, Math.max(Math.round(maxB1W * 0.44), naturalW));
-        const b1H = Math.max(70, introBubbleFit.totalHeight + 34);
-        effectiveBodyH = b1H + 8;
-        const leftAvCx = cardX + padX + Math.round(avColW * 0.54);
-        const leftAvCy = b1Y + Math.round(b1H * 0.5);
-        const b1X = cardX + padX + avColW + 14;
+        const naturalW = maxLinePx(introBubbleFit, 600) + bubblePadX * 2;
+        const b1W = Math.min(maxB1W, Math.max(Math.round(maxB1W * 0.38), naturalW));
+        const b1PadY = Math.max(12, Math.round(introBubbleFit.fontSize * 0.56));
+        const b1H = Math.max(54, introBubbleFit.totalHeight + b1PadY * 2);
+        const row2H = 56;
+        const row2Y = b1Y + b1H + rowGap;
+        effectiveBodyH = b1H + rowGap + row2H;
+        const leftAvCx = cardX + padX + Math.round(avColW * 0.5);
+        const leftAvCy = b1Y + Math.round(b1H * 0.48);
+        const rightAvCx = cardX + padX + innerW - Math.round(avColW * 0.5);
+        const rightAvCy = row2Y + Math.round(row2H * 0.48);
+        const b1X = cardX + padX + avColW + 12;
 
         variantBodySvg = `
           ${buildSvgCharacterAvatar({
@@ -1825,12 +1895,13 @@ export function build2411CardSvg(params: {
             pose: speakerAPose,
             animFrame,
             side: 'left',
+            timeSec,
           })}
-          <polygon points="${b1X},${b1Y + Math.round(b1H * 0.34)} ${b1X - 12},${b1Y + Math.round(b1H * 0.50)} ${b1X},${b1Y + Math.round(b1H * 0.66)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2.1"/>
+          <polygon points="${b1X},${b1Y + Math.round(b1H * 0.34)} ${b1X - 10},${b1Y + Math.round(b1H * 0.48)} ${b1X},${b1Y + Math.round(b1H * 0.62)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2.1"/>
           <rect x="${b1X}" y="${b1Y}" width="${b1W}" height="${b1H}" rx="16" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2.1"/>
           ${renderSvgTextLines({
             lines: introBubbleFit.lines,
-            x: b1X + 18,
+            x: b1X + bubblePadX,
             startY: centeredBlockStartY(b1Y, b1H, introBubbleFit),
             lineHeight: introBubbleFit.lineHeight,
             fontFamily,
@@ -1838,56 +1909,79 @@ export function build2411CardSvg(params: {
             fontWeight: 600,
             fill: theme.textHex,
           })}
+          <g opacity="0.92">
+            ${buildSvgCharacterAvatar({
+              cx: rightAvCx,
+              cy: rightAvCy,
+              scale: avScale,
+              shirtHex: modeSecondaryHex,
+              hairHex: '#78350F',
+              hairStyle: 'bob',
+              tagText: spkB,
+              tagHex: modeSecondaryHex,
+              fontFamily,
+              smallSize,
+              pose: speakerBPose,
+              animFrame,
+              side: 'right',
+              timeSec,
+            })}
+          </g>
         `;
         break;
       }
 
-      const avScale = Math.max(0.72, Math.min(0.96, bodyH / 184));
-      const rowGap = 12;
-      const maxRowH = Math.max(58, Math.floor((bodyH - rowGap) / 2));
+      const avScale = Math.max(0.76, Math.min(1.02, width / 740));
+      const rowGap = 14;
 
-      // Left Speaker A bubble (source prompt sentence)
+      // Left Speaker A bubble (source prompt sentence — tightly sized to text)
       const maxB1W = innerW - avColW - 14;
-      const promptBubbleText =
-        isAnswerReveal && spec.promptPreviewText ? spec.promptPreviewText : spec.speechText;
+      const promptBubbleText = isAnswerReveal
+        ? spec.promptPreviewText || spec.contextLabel || 'Prompt'
+        : spec.speechText;
       const b1Fit = fitTextToBox({
         text: promptBubbleText,
-        boxW: maxB1W - 30,
-        boxH: maxRowH - 12,
-        baseFontSize: Math.round(titleSize * 1.12),
-        minFontSize: 14,
-        maxLines: 3,
+        boxW: maxB1W - bubblePadX * 2,
+        boxH: Math.round(height * 0.24),
+        baseFontSize: Math.round(titleSize * 1.15),
+        minFontSize: 15,
+        maxLines: 5,
         lineHeightRatio: 1.26,
+        fontWeight: 600,
       });
-      const b1W = Math.min(maxB1W, Math.max(Math.round(maxB1W * 0.42), maxLinePx(b1Fit) + 38));
-      const row1H = Math.max(60, b1Fit.totalHeight + 28);
+      const b1W = Math.min(maxB1W, Math.max(Math.round(maxB1W * 0.36), maxLinePx(b1Fit, 600) + bubblePadX * 2));
+      const padY1 = Math.max(12, Math.round(b1Fit.fontSize * 0.56));
+      const row1H = Math.max(54, b1Fit.totalHeight + padY1 * 2);
       const row1Y = bodyTop;
       const leftAvCx = cardX + padX + Math.round(avColW * 0.5);
       const leftAvCy = row1Y + Math.round(row1H * 0.48);
       const b1X = cardX + padX + avColW + 12;
 
-      // Right Speaker B bubble (animated 3-dot thinking bubble OR translated reply)
+      // Right Speaker B bubble (animated 3-dot thinking bubble OR translated reply — tightly flexed to wrapped lines)
       const maxB2W = innerW - avColW - 14;
       const replyBubbleText = isAnswerReveal
         ? spec.speechText
         : spec.subtitle && spec.subtitle !== promptBubbleText
         ? spec.subtitle
         : spec.highlightWord;
+      const maxFlexRow2H = isLandscape ? Math.round(height * 0.40) : Math.round(height * 0.36);
       const b2Fit = fitTextToBox({
         text: replyBubbleText,
-        boxW: maxB2W - 30,
-        boxH: maxRowH - 12,
-        baseFontSize: Math.round(titleSize * 1.12),
-        minFontSize: 14,
-        maxLines: 3,
-        lineHeightRatio: 1.26,
+        boxW: maxB2W - bubblePadX * 2,
+        boxH: maxFlexRow2H,
+        baseFontSize: Math.round(titleSize * 1.16),
+        minFontSize: 16,
+        maxLines: 6,
+        lineHeightRatio: 1.28,
+        fontWeight: 600,
       });
       const b2W = isQuizPrompt
-        ? Math.min(maxB2W, Math.max(240, Math.round(maxB2W * 0.72)))
-        : Math.min(maxB2W, Math.max(Math.round(maxB2W * 0.42), maxLinePx(b2Fit) + 38));
+        ? Math.min(maxB2W, Math.max(246, Math.round(maxB2W * 0.68)))
+        : Math.min(maxB2W, Math.max(Math.round(maxB2W * 0.38), maxLinePx(b2Fit, 600) + bubblePadX * 2));
+      const padY2 = Math.max(13, Math.round(b2Fit.fontSize * 0.58));
       const row2H = isQuizPrompt
-        ? Math.max(58, Math.round(smallSize * 3.4))
-        : Math.max(60, b2Fit.totalHeight + 28);
+        ? Math.max(54, Math.round(smallSize * 3.1))
+        : Math.max(56, b2Fit.totalHeight + padY2 * 2);
       const row2Y = row1Y + row1H + rowGap;
       const rightAvCx = cardX + padX + innerW - Math.round(avColW * 0.5);
       const rightAvCy = row2Y + Math.round(row2H * 0.48);
@@ -1905,33 +1999,43 @@ export function build2411CardSvg(params: {
 
       const thinkingBubbleContent = (() => {
         const dotCenterY = row2Y + Math.round(row2H * 0.5);
-        const dotStartX = b2X + 28;
-        const dotStep = 18;
-        const activeDot = animFrame % 3;
-        const dotsSvg = [0, 1, 2]
-          .map((di) => {
-            const isActive = di === activeDot;
-            const cy = dotCenterY + (isActive ? -4.5 : 1);
-            const r = isActive ? 5.8 : 4.5;
-            const op = isActive ? '1' : '0.45';
-            return `<circle cx="${dotStartX + di * dotStep}" cy="${cy}" r="${r}" fill="${modeSecondaryHex}" fill-opacity="${op}"/>`;
-          })
-          .join('');
         const chipW = Math.min(b2W - 96, 128);
         const chipH = Math.max(26, Math.round(smallSize * 1.6));
-        const chipX = b2X + b2W - chipW - 14;
+        const chipX = b2X + 14;
         const chipY = dotCenterY - Math.round(chipH / 2);
         const thinkLabel = `Think ${Math.max(1, spec.pauseSec || 5)}s`;
         const iconCx = chipX + 16;
         const iconCy = chipY + Math.round(chipH / 2);
-        return `${dotsSvg}
-          <rect x="${chipX}" y="${chipY}" width="${chipW}" height="${chipH}" rx="${Math.round(chipH / 2)}" fill="${modeSecondaryHex}" fill-opacity="0.16" stroke="${modeSecondaryHex}" stroke-width="1.2"/>
+        const dotStep = 18;
+        const dotStartX = b2X + b2W - 22 - dotStep * 2;
+        const activeDot = animFrame % 3;
+        const dotsSvg = [0, 1, 2]
+          .map((di) => {
+            let cyOffset: number;
+            let r: number;
+            let op: string;
+            if (typeof timeSec === 'number') {
+              const wave = Math.sin(timeSec * 5.4 - di * 1.15);
+              cyOffset = wave * -4.0;
+              r = 4.6 + Math.max(0, wave) * 1.4;
+              op = (0.45 + 0.55 * Math.max(0, wave)).toFixed(2);
+            } else {
+              const isActive = di === activeDot;
+              cyOffset = isActive ? -4.5 : 1;
+              r = isActive ? 5.8 : 4.5;
+              op = isActive ? '1' : '0.45';
+            }
+            return `<circle cx="${dotStartX + di * dotStep}" cy="${(dotCenterY + cyOffset).toFixed(2)}" r="${r.toFixed(2)}" fill="${modeSecondaryHex}" fill-opacity="${op}"/>`;
+          })
+          .join('');
+        return `<rect x="${chipX}" y="${chipY}" width="${chipW}" height="${chipH}" rx="${Math.round(chipH / 2)}" fill="${modeSecondaryHex}" fill-opacity="0.16" stroke="${modeSecondaryHex}" stroke-width="1.2"/>
           ${getSvgVectorIllustration('clock', iconCx, iconCy, 0.20, modeSecondaryHex, modeSecondaryHex, theme.cardBgHex)}
-          <text x="${chipX + Math.round(chipW * 0.58)}" y="${chipY + Math.round(chipH * 0.69)}" text-anchor="middle" font-family="${fontFamily}" font-size="${Math.max(12, Math.round(smallSize * 0.86))}" font-weight="700" fill="${modeSecondaryHex}">${escapeXml(thinkLabel)}</text>`;
+          <text x="${chipX + Math.round(chipW * 0.58)}" y="${chipY + Math.round(chipH * 0.69)}" text-anchor="middle" font-family="${fontFamily}" font-size="${Math.max(12, Math.round(smallSize * 0.86))}" font-weight="700" fill="${modeSecondaryHex}">${escapeXml(thinkLabel)}</text>
+          ${dotsSvg}`;
       })();
 
       variantBodySvg = `
-        <g opacity="${isAActive ? '1' : '0.88'}">
+        <g opacity="${isAActive ? '1' : '0.92'}">
           ${buildSvgCharacterAvatar({
             cx: leftAvCx,
             cy: leftAvCy,
@@ -1946,12 +2050,13 @@ export function build2411CardSvg(params: {
             pose: speakerAPose,
             animFrame,
             side: 'left',
+            timeSec,
           })}
           <polygon points="${b1X},${row1Y + Math.round(row1H * 0.34)} ${b1X - 10},${row1Y + Math.round(row1H * 0.48)} ${b1X},${row1Y + Math.round(row1H * 0.62)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="${isAActive ? '2.2' : '1.4'}"/>
           <rect x="${b1X}" y="${row1Y}" width="${b1W}" height="${row1H}" rx="15" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="${isAActive ? '2.2' : '1.4'}"/>
           ${renderSvgTextLines({
             lines: b1Fit.lines,
-            x: b1X + 16,
+            x: b1X + bubblePadX,
             startY: centeredBlockStartY(row1Y, row1H, b1Fit),
             lineHeight: b1Fit.lineHeight,
             fontFamily,
@@ -1961,7 +2066,7 @@ export function build2411CardSvg(params: {
           })}
         </g>
 
-        <g opacity="${isBActive ? '1' : '0.88'}">
+        <g opacity="${isBActive ? '1' : '0.92'}">
           ${buildSvgCharacterAvatar({
             cx: rightAvCx,
             cy: rightAvCy,
@@ -1976,6 +2081,7 @@ export function build2411CardSvg(params: {
             pose: speakerBPose,
             animFrame,
             side: 'right',
+            timeSec,
           })}
           <polygon points="${b2X + b2W},${row2Y + Math.round(row2H * 0.34)} ${b2X + b2W + 10},${row2Y + Math.round(row2H * 0.48)} ${b2X + b2W},${row2Y + Math.round(row2H * 0.62)}" fill="${modeSecondaryHex}" fill-opacity="0.14" stroke="${modeSecondaryHex}" stroke-width="${isBActive ? '2.2' : '1.4'}"/>
           <rect x="${b2X}" y="${row2Y}" width="${b2W}" height="${row2H}" rx="15" fill="${modeSecondaryHex}" fill-opacity="0.14" stroke="${modeSecondaryHex}" stroke-width="${isBActive ? '2.2' : '1.4'}" ${isQuizPrompt ? 'stroke-dasharray="6 4"' : ''}/>
@@ -1984,7 +2090,7 @@ export function build2411CardSvg(params: {
               ? thinkingBubbleContent
               : renderSvgTextLines({
                   lines: b2Fit.lines,
-                  x: b2X + 16,
+                  x: b2X + bubblePadX,
                   startY: centeredBlockStartY(row2Y, row2H, b2Fit),
                   lineHeight: b2Fit.lineHeight,
                   fontFamily,
@@ -2000,40 +2106,44 @@ export function build2411CardSvg(params: {
 
     case 'avatar-speech': {
       const avX = cardX + padX + Math.round(innerW * 0.13);
-      const avScale = Math.max(0.75, Math.min(1.08, bodyH / 165));
+      const avScale = Math.max(0.76, Math.min(1.06, width / 740));
       const bX = cardX + padX + Math.round(innerW * 0.27);
       const bY = bodyTop + 2;
       const maxBW = Math.round(innerW * 0.73);
+      const bubblePadX = 20;
       const pillFont = Math.max(12, Math.round(smallSize * 0.82));
       const pillH = Math.max(24, Math.round(pillFont * 1.68));
-      const pillW = Math.min(maxBW - 24, Math.max(96, Math.round(spec.reactionText.length * pillFont * 0.68 + 26)));
+      const pillW = Math.min(maxBW - 24, Math.max(96, Math.round(spec.reactionText.length * pillFont * 0.72 + 28)));
       const metaRowH = pillH + 12;
       const spFit = fitTextToBox({
         text: spec.speechText,
-        boxW: maxBW - 32,
-        boxH: Math.max(54, bodyH - metaRowH - 18),
+        boxW: maxBW - bubblePadX * 2,
+        boxH: Math.round(height * 0.34),
         baseFontSize: bigSize,
-        minFontSize: 14,
-        maxLines: 4,
+        minFontSize: 15,
+        maxLines: 5,
+        lineHeightRatio: 1.26,
+        fontWeight: 700,
       });
       const spMaxPx = spFit.lines.reduce(
-        (mx, ln) => Math.max(mx, Math.round(measureVisualUnits(ln) * spFit.fontSize * 0.59)),
+        (mx, ln) => Math.max(mx, measureSvgLinePx(ln, spFit.fontSize, 700)),
         0
       );
-      const bW = Math.min(maxBW, Math.max(Math.max(pillW + 130, Math.round(maxBW * 0.52)), spMaxPx + 36));
-      const speechH = Math.max(46, spFit.totalHeight + 20);
+      const bW = Math.min(maxBW, Math.max(Math.max(pillW + 132, Math.round(maxBW * 0.46)), spMaxPx + bubblePadX * 2));
+      const speechH = Math.max(46, spFit.totalHeight + 22);
       const bH = speechH + metaRowH + 8;
       effectiveBodyH = bH + 6;
       const avY = bY + Math.round(bH * 0.5);
       const subFit = fitTextToBox({
         text: spec.subtitle,
-        boxW: Math.max(84, bW - pillW - 36),
+        boxW: Math.max(84, bW - pillW - bubblePadX * 2),
         boxH: metaRowH,
         baseFontSize: Math.max(14, Math.round(smallSize * 0.90)),
         minFontSize: 12,
         maxLines: 1,
+        fontWeight: 700,
       });
-      const pillX = bX + bW - pillW - 12;
+      const pillX = bX + bW - pillW - 14;
       const pillY = bY + bH - pillH - 10;
       const subY = pillY + Math.round(pillH * 0.68);
       variantBodySvg = `
@@ -2052,12 +2162,13 @@ export function build2411CardSvg(params: {
           pose: overridePoseA ?? 'talking',
           animFrame,
           side: 'left',
+          timeSec,
         })}
         <polygon points="${bX},${bY + Math.round(bH * 0.38)} ${bX - 14},${bY + Math.round(bH * 0.50)} ${bX},${bY + Math.round(bH * 0.62)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2"/>
         <rect x="${bX}" y="${bY}" width="${bW}" height="${bH}" rx="14" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2"/>
         ${renderSvgTextLines({
           lines: spFit.lines,
-          x: bX + 18,
+          x: bX + bubblePadX,
           startY: centeredBlockStartY(bY + 6, speechH, spFit),
           lineHeight: spFit.lineHeight,
           fontFamily,
@@ -2065,7 +2176,7 @@ export function build2411CardSvg(params: {
           fontWeight: 700,
           fill: theme.textHex,
         })}
-        <text x="${bX + 18}" y="${subY}" font-family="${fontFamily}" font-size="${subFit.fontSize}" font-weight="700" fill="${theme.mutedTextHex}">${escapeXml(subFit.lines[0] ?? spec.subtitle)}</text>
+        <text x="${bX + bubblePadX}" y="${subY}" font-family="${fontFamily}" font-size="${subFit.fontSize}" font-weight="700" fill="${theme.mutedTextHex}">${escapeXml(subFit.lines[0] ?? spec.subtitle)}</text>
         <rect x="${pillX}" y="${pillY}" width="${pillW}" height="${pillH}" rx="${Math.round(pillH / 2)}" fill="${modeSecondaryHex}"/>
         <text x="${pillX + Math.round(pillW / 2)}" y="${subY}" text-anchor="middle" font-family="${fontFamily}" font-size="${pillFont}" font-weight="700" fill="#FFFFFF">${escapeXml(spec.reactionText)}</text>
       `;
@@ -2230,14 +2341,22 @@ export function build2411CardSvg(params: {
     `;
   }
 
+  const computedCardH =
+    (bodyTop - cardY) + effectiveBodyH + (hasFooterContext ? stripH + 16 : 8) + bottomBarReserve;
   const effectiveCardH =
     spec.variant === 'friends-chat' || spec.variant === 'avatar-speech'
-      ? Math.max(120, (bodyTop - cardY) + effectiveBodyH + (hasFooterContext ? stripH + 16 : 8) + bottomBarReserve)
+      ? Math.max(116, computedCardH)
       : cardH;
 
   const barY = cardY + effectiveCardH - 15;
   const barW = innerW;
-  const barFillW = Math.max(18, Math.round((spec.progressPct / 100) * barW));
+  const animatedPct =
+    typeof beatProgress === 'number'
+      ? Math.min(100, Math.max(5, spec.progressPct - 4 + beatProgress * 4))
+      : spec.progressPct;
+  const barFillW = Math.max(18, Math.round((animatedPct / 100) * barW));
+  const glowShiftX = typeof timeSec === 'number' ? Math.sin(timeSec * 0.7) * 14 : 0;
+  const glowShiftY = typeof timeSec === 'number' ? Math.cos(timeSec * 0.55) * 10 : 0;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <defs>
@@ -2253,8 +2372,8 @@ export function build2411CardSvg(params: {
   </defs>
 
   <rect width="${width}" height="${height}" fill="url(#bgGrad)"/>
-  <circle cx="${Math.round(width * 0.2)}" cy="${Math.round(height * 0.22)}" r="${Math.round(Math.min(width, height) * 0.38)}" fill="${theme.bgAccentHex}" fill-opacity="0.55"/>
-  <circle cx="${Math.round(width * 0.84)}" cy="${Math.round(height * 0.76)}" r="${Math.round(Math.min(width, height) * 0.34)}" fill="${modeSecondaryHex}" fill-opacity="0.08"/>
+  <circle cx="${(width * 0.2 + glowShiftX).toFixed(1)}" cy="${(height * 0.22 + glowShiftY).toFixed(1)}" r="${Math.round(Math.min(width, height) * 0.38)}" fill="${theme.bgAccentHex}" fill-opacity="0.55"/>
+  <circle cx="${(width * 0.84 - glowShiftX).toFixed(1)}" cy="${(height * 0.76 - glowShiftY).toFixed(1)}" r="${Math.round(Math.min(width, height) * 0.34)}" fill="${modeSecondaryHex}" fill-opacity="0.08"/>
   <g>${dotLines.join('')}</g>
 
   <rect x="${cardX + 4}" y="${cardY + 10}" width="${cardW}" height="${effectiveCardH}" rx="${cardR}" fill="#000000" fill-opacity="${theme.isLight ? '0.07' : '0.36'}"/>

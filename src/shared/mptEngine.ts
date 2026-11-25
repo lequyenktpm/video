@@ -27,8 +27,7 @@ export interface VoiceCatalogItem {
   ttsProvider: TtsProvider;
   language: 'vi' | 'ja' | 'en' | 'multi';
   gender: 'female' | 'male';
-  edgeVoiceName?: string;
-  elevenLabsVoiceId?: string;
+  edgeVoiceName: string;
   pitchShiftFactor?: number;
 }
 
@@ -42,7 +41,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'vi',
     gender: 'female',
     edgeVoiceName: 'vi-VN-HoaiMyNeural',
-    elevenLabsVoiceId: '21m00Tcm4TlvDq8ikWAM',
   },
   {
     id: 'vi-VN-HoaiMyBright',
@@ -52,7 +50,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'vi',
     gender: 'female',
     edgeVoiceName: 'vi-VN-HoaiMyNeural',
-    elevenLabsVoiceId: 'MF3mGyEYCl7XYWbV9V6O',
     pitchShiftFactor: 1.07,
   },
   {
@@ -63,7 +60,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'vi',
     gender: 'male',
     edgeVoiceName: 'vi-VN-NamMinhNeural',
-    elevenLabsVoiceId: 'pNInz6obpgDQGcFmaJgB',
   },
   {
     id: 'vi-VN-NamMinhYoung',
@@ -73,7 +69,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'vi',
     gender: 'male',
     edgeVoiceName: 'vi-VN-NamMinhNeural',
-    elevenLabsVoiceId: 'TxGEqnHWrfWFTfGW9XjX',
     pitchShiftFactor: 1.06,
   },
   // Japanese (Edge Neural + Google TTS)
@@ -85,7 +80,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'ja',
     gender: 'female',
     edgeVoiceName: 'ja-JP-NanamiNeural',
-    elevenLabsVoiceId: 'MF3mGyEYCl7XYWbV9V6O',
   },
   {
     id: 'ja-JP-AoiNeural',
@@ -95,7 +89,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'ja',
     gender: 'female',
     edgeVoiceName: 'ja-JP-AoiNeural',
-    elevenLabsVoiceId: 'EXAVITQu4vr4xnSDxMaL',
     pitchShiftFactor: 1.06,
   },
   {
@@ -106,7 +99,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'ja',
     gender: 'female',
     edgeVoiceName: 'ja-JP-MayuNeural',
-    elevenLabsVoiceId: 'pFZP5JQG7iQjIQuC4Bku',
     pitchShiftFactor: 0.97,
   },
   {
@@ -117,7 +109,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'ja',
     gender: 'female',
     edgeVoiceName: 'ja-JP-ShioriNeural',
-    elevenLabsVoiceId: 'XB0fDUnXU5powFXDhCwa',
     pitchShiftFactor: 0.94,
   },
   {
@@ -128,7 +119,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'ja',
     gender: 'male',
     edgeVoiceName: 'ja-JP-KeitaNeural',
-    elevenLabsVoiceId: 'TxGEqnHWrfWFTfGW9XjX',
   },
   {
     id: 'ja-JP-DaichiNeural',
@@ -138,7 +128,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'ja',
     gender: 'male',
     edgeVoiceName: 'ja-JP-DaichiNeural',
-    elevenLabsVoiceId: 'pNInz6obpgDQGcFmaJgB',
     pitchShiftFactor: 0.93,
   },
   {
@@ -149,7 +138,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'ja',
     gender: 'male',
     edgeVoiceName: 'ja-JP-NaokiNeural',
-    elevenLabsVoiceId: 'ErXwobaYiN019PkySvjV',
     pitchShiftFactor: 1.03,
   },
   // English (Edge Neural + Google TTS)
@@ -161,7 +149,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'en',
     gender: 'female',
     edgeVoiceName: 'en-US-JennyNeural',
-    elevenLabsVoiceId: 'EXAVITQu4vr4xnSDxMaL',
   },
   {
     id: 'en-US-AriaNeural',
@@ -171,7 +158,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'en',
     gender: 'female',
     edgeVoiceName: 'en-US-AriaNeural',
-    elevenLabsVoiceId: '21m00Tcm4TlvDq8ikWAM',
     pitchShiftFactor: 1.04,
   },
   {
@@ -182,7 +168,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'en',
     gender: 'female',
     edgeVoiceName: 'en-US-EmmaNeural',
-    elevenLabsVoiceId: 'pFZP5JQG7iQjIQuC4Bku',
     pitchShiftFactor: 0.98,
   },
   {
@@ -193,7 +178,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'en',
     gender: 'female',
     edgeVoiceName: 'en-GB-SoniaNeural',
-    elevenLabsVoiceId: 'Xb7hH8MSUJpSbSDYk0k2',
   },
   {
     id: 'en-US-GuyNeural',
@@ -203,7 +187,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'en',
     gender: 'male',
     edgeVoiceName: 'en-US-GuyNeural',
-    elevenLabsVoiceId: 'ErXwobaYiN019PkySvjV',
   },
   {
     id: 'en-US-DavisNeural',
@@ -213,7 +196,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'en',
     gender: 'male',
     edgeVoiceName: 'en-US-DavisNeural',
-    elevenLabsVoiceId: 'nPczCjzI2devNBz1zQrb',
     pitchShiftFactor: 0.94,
   },
   {
@@ -224,120 +206,6 @@ export const VOICE_CATALOG: VoiceCatalogItem[] = [
     language: 'en',
     gender: 'male',
     edgeVoiceName: 'en-GB-RyanNeural',
-    elevenLabsVoiceId: 'TX3LPaxmHKxFdv7VOQHJ',
-  },
-  // ElevenLabs AI Multilingual v2 Voices (Supports VI / JA / EN)
-  {
-    id: 'el-rachel',
-    label: 'Rachel (Nữ · Tự nhiên, đa ngôn ngữ)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'female',
-    elevenLabsVoiceId: '21m00Tcm4TlvDq8ikWAM',
-  },
-  {
-    id: 'el-elli',
-    label: 'Elli (Nữ trẻ · Anime / Hội thoại)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'female',
-    elevenLabsVoiceId: 'MF3mGyEYCl7XYWbV9V6O',
-    pitchShiftFactor: 1.05,
-  },
-  {
-    id: 'el-sarah',
-    label: 'Sarah (Nữ · Ấm áp, rõ chữ)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'female',
-    elevenLabsVoiceId: 'EXAVITQu4vr4xnSDxMaL',
-  },
-  {
-    id: 'el-bella',
-    label: 'Bella (Nữ · Nhẹ nhàng, dịu êm)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'female',
-    elevenLabsVoiceId: 'AZnzlk1XvdvUeBnXmlld',
-  },
-  {
-    id: 'el-charlotte',
-    label: 'Charlotte (Nữ · Thanh lịch, diễn cảm)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'female',
-    elevenLabsVoiceId: 'XB0fDUnXU5powFXDhCwa',
-  },
-  {
-    id: 'el-lily',
-    label: 'Lily (Nữ · Kể chuyện, thuyết minh)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'female',
-    elevenLabsVoiceId: 'pFZP5JQG7iQjIQuC4Bku',
-  },
-  {
-    id: 'el-adam',
-    label: 'Adam (Nam · Trầm sâu / Senpai)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'male',
-    elevenLabsVoiceId: 'pNInz6obpgDQGcFmaJgB',
-    pitchShiftFactor: 0.94,
-  },
-  {
-    id: 'el-josh',
-    label: 'Josh (Nam · Trẻ trung, năng động)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'male',
-    elevenLabsVoiceId: 'TxGEqnHWrfWFTfGW9XjX',
-    pitchShiftFactor: 1.04,
-  },
-  {
-    id: 'el-antoni',
-    label: 'Antoni (Nam · Cân bằng, tự nhiên)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'male',
-    elevenLabsVoiceId: 'ErXwobaYiN019PkySvjV',
-  },
-  {
-    id: 'el-liam',
-    label: 'Liam (Nam · Thân thiện, rõ nét)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'male',
-    elevenLabsVoiceId: 'TX3LPaxmHKxFdv7VOQHJ',
-  },
-  {
-    id: 'el-brian',
-    label: 'Brian (Nam · Sâu lắng, dẫn chuyện)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'male',
-    elevenLabsVoiceId: 'nPczCjzI2devNBz1zQrb',
-    pitchShiftFactor: 0.96,
-  },
-  {
-    id: 'el-sam',
-    label: 'Sam (Nam · Điềm đạm)',
-    ttsLabel: 'ElevenLabs AI',
-    ttsProvider: 'elevenlabs',
-    language: 'multi',
-    gender: 'male',
-    elevenLabsVoiceId: 'yoZ06aMxZJJ28mfd3POQ',
   },
 ];
 
@@ -518,7 +386,7 @@ export function getDefaultSecondaryVoiceForLanguage(language: LanguageCode): Voi
 }
 
 export function doesVoiceMatchLanguage(voiceId: VoiceOptionId, language: LanguageCode): boolean {
-  if (isBilingualLanguage(language) || isElevenLabsVoiceId(voiceId)) return true;
+  if (isBilingualLanguage(language)) return true;
   if (language === 'ja') return voiceId.startsWith('ja-');
   if (language === 'en') return voiceId.startsWith('en-');
   return voiceId.startsWith('vi-');
@@ -527,7 +395,6 @@ export function doesVoiceMatchLanguage(voiceId: VoiceOptionId, language: Languag
 export function getVoiceLanguagePrefix(voiceId: VoiceOptionId): 'vi' | 'en' | 'ja' {
   if (voiceId.startsWith('ja-')) return 'ja';
   if (voiceId.startsWith('en-')) return 'en';
-  if (isElevenLabsVoiceId(voiceId)) return 'vi';
   return 'vi';
 }
 
@@ -550,6 +417,20 @@ export function detectLineLanguage(
   return fallbackLang;
 }
 
+const CONTROL_BRACKET_RE =
+  /^(?:V1|V2|1|2|A|B|Q|VI|EN|JA|ANSWER|QUESTION|TITLE|SUBTITLE|INTRO|OUTRO|PAUSE(?::\d+(?:\.\d+)?)?)$/i;
+
+export function extractInlineEmotionTag(line: string): string | undefined {
+  const matches = line.matchAll(/\[([a-z][a-z0-9_-]{1,39})\]/g);
+  for (const m of matches) {
+    const tag = m[1].trim();
+    if (tag && !CONTROL_BRACKET_RE.test(tag)) {
+      return tag;
+    }
+  }
+  return undefined;
+}
+
 export function stripNarrationTags(line: string): string {
   return line
     .replace(/^\s*\[(?:V1|V2|1|2|A|B|Q|VI|EN|JA|ANSWER|QUESTION|TITLE|SUBTITLE|INTRO|OUTRO)\]\s*/i, '')
@@ -558,6 +439,7 @@ export function stripNarrationTags(line: string): string {
       ''
     )
     .replace(/\s*\[PAUSE(?::\d+(?:\.\d+)?)?\]\s*/gi, ' ')
+    .replace(/\s*\[[a-z][a-z0-9_-]{1,39}\]\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -799,6 +681,7 @@ export interface PlannedNarrationSegment {
   contextLabel?: string;
   cueGroupId?: string;
   cueGroupFullText?: string;
+  emotionTag?: string;
 }
 
 export interface MixedLanguageRun {
@@ -819,8 +702,6 @@ function getFallbackVoiceForLangCode(
   const resolvedSecondaryLang = secondaryLangHint ?? getVoiceLanguagePrefix(secondary);
   if (resolvedPrimaryLang === lang) return { voiceId: primary, slot: 'primary' };
   if (resolvedSecondaryLang === lang) return { voiceId: secondary, slot: 'secondary' };
-  if (isElevenLabsVoiceId(primary)) return { voiceId: primary, slot: 'primary' };
-  if (isElevenLabsVoiceId(secondary)) return { voiceId: secondary, slot: 'secondary' };
   if (lang === 'ja') return { voiceId: 'ja-JP-NanamiNeural', slot: 'secondary' };
   if (lang === 'en') return { voiceId: 'en-US-JennyNeural', slot: 'secondary' };
   return { voiceId: 'vi-VN-HoaiMyNeural', slot: 'primary' };
@@ -1093,33 +974,17 @@ export function planNarrationSegments(
       (l) => !isTitleOrIntroTag(l) && hasVietnameseDiacritics(stripNarrationTags(l))
     );
     if (hasJaLine && hasEnTarget && !hasViLine) {
-      if (!primaryVoice.startsWith('ja-') && !isElevenLabsVoiceId(primaryVoice)) {
+      if (!primaryVoice.startsWith('ja-')) {
         primaryVoice = 'ja-JP-NanamiNeural';
       }
-      if (!secondaryVoice.startsWith('en-') && !isElevenLabsVoiceId(secondaryVoice)) {
+      if (!secondaryVoice.startsWith('en-')) {
         secondaryVoice = 'en-US-JennyNeural';
       }
     }
   }
 
-  const defaultPrimaryLangForConfig: 'vi' | 'en' | 'ja' =
-    config.language === 'ja' || config.language === 'ja_en'
-      ? 'ja'
-      : config.language === 'en'
-      ? 'en'
-      : 'vi';
-  const defaultSecondaryLangForConfig: 'vi' | 'en' | 'ja' =
-    config.language === 'bilingual' || config.language === 'ja_en' || config.language === 'en'
-      ? 'en'
-      : config.language === 'vi_ja' || config.language === 'ja'
-      ? 'ja'
-      : 'vi';
-  const primaryLang = isElevenLabsVoiceId(primaryVoice)
-    ? defaultPrimaryLangForConfig
-    : getVoiceLanguagePrefix(primaryVoice);
-  const secondaryLang = isElevenLabsVoiceId(secondaryVoice)
-    ? defaultSecondaryLangForConfig
-    : getVoiceLanguagePrefix(secondaryVoice);
+  const primaryLang = getVoiceLanguagePrefix(primaryVoice);
+  const secondaryLang = getVoiceLanguagePrefix(secondaryVoice);
   const dualEnabled =
     Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language) || hasExplicitQaSyntax;
   const basePause = Math.max(0, Math.min(10, Number(config.pauseBetweenLinesSec ?? 0)));
@@ -1497,6 +1362,8 @@ export function planNarrationSegments(
     const isMixedSingleLine = mixedRuns.length >= 2;
     const totalReads = isTargetForRepeat ? 1 + targetRepeatCount : 1;
 
+    const emotionTag = extractInlineEmotionTag(rawLine);
+
     for (let readPass = 0; readPass < totalReads; readPass++) {
       const isLastPass = readPass === totalReads - 1;
       if (isMixedSingleLine) {
@@ -1528,6 +1395,7 @@ export function planNarrationSegments(
             contextLabel: linePres.contextLabel,
             cueGroupId: groupId,
             cueGroupFullText: cleanText,
+            ...(emotionTag ? { emotionTag } : {}),
             ...(isIntroOrOutro ? { isIntroOrOutro: true } : {}),
           });
         });
@@ -1558,6 +1426,7 @@ export function planNarrationSegments(
             roleKind: linePres.roleKind,
             roleLabel: linePres.roleLabel,
             contextLabel: linePres.contextLabel,
+            ...(emotionTag ? { emotionTag } : {}),
             ...(isIntroOrOutro ? { isIntroOrOutro: true } : {}),
           });
         });
@@ -1658,6 +1527,7 @@ export interface RawSegmentTiming {
   contextLabel?: string;
   cueGroupId?: string;
   cueGroupFullText?: string;
+  emotionTag?: string;
 }
 
 export function buildDualSubtitleCues(
@@ -1692,6 +1562,7 @@ export function buildDualSubtitleCues(
         roleKind: rec.roleKind,
         roleLabel: rec.roleLabel,
         contextLabel: rec.contextLabel,
+        emotionTag: rec.emotionTag,
       });
       if (rec.countdownStartSec !== undefined && rec.countdownEndSec !== undefined) {
         if (!rec.isIntroOrOutro && rec.countdownEndSec > rec.endSec + 0.05) {
@@ -1753,6 +1624,7 @@ export function buildDualSubtitleCues(
         roleKind: rec.roleKind,
         roleLabel: rec.roleLabel,
         contextLabel: rec.contextLabel,
+        emotionTag: rec.emotionTag,
       });
       if (rec.countdownStartSec !== undefined && rec.countdownEndSec !== undefined) {
         const dur = Math.max(0.5, rec.countdownEndSec - rec.countdownStartSec);
@@ -1785,6 +1657,7 @@ export function buildDualSubtitleCues(
         roleKind: rec.roleKind,
         roleLabel: rec.roleLabel,
         contextLabel: rec.contextLabel,
+        emotionTag: rec.emotionTag,
       });
       if (rec.countdownStartSec !== undefined && rec.countdownEndSec !== undefined) {
         if (rec.countdownEndSec > rec.endSec + 0.05) {
@@ -1830,6 +1703,7 @@ export function buildDualSubtitleCues(
       roleKind: rec.roleKind,
       roleLabel: rec.roleLabel,
       contextLabel: rec.contextLabel,
+      emotionTag: rec.emotionTag,
     });
 
     // 2. Pinned source caption underneath until the next source sentence starts
@@ -1883,6 +1757,7 @@ export function buildDualSubtitleCues(
         roleKind: firstTgt.roleKind,
         roleLabel: firstTgt.roleLabel,
         contextLabel: firstTgt.contextLabel,
+        emotionTag: firstTgt.emotionTag,
       });
       k = m + 1;
     }
@@ -2301,7 +2176,8 @@ export function buildSrtFromCues(cues: SubtitleCue[]): string {
   return cues
     .filter((cue) => !cue.isStickySource && !cue.isStaticHold)
     .map((cue, idx) => {
-      const wrapped = wrapSubtitleLine(cue.text, 34);
+      const rawLine = cue.emotionTag ? `[${cue.emotionTag}] ${cue.text}` : cue.text;
+      const wrapped = wrapSubtitleLine(rawLine, 34);
       return `${idx + 1}\n${formatSrtTimestamp(cue.startSec)} --> ${formatSrtTimestamp(cue.endSec)}\n${wrapped}`;
     })
     .join('\n\n');
@@ -3082,7 +2958,7 @@ TÙY CHỌN STUDIO ĐANG ĐỒNG BỘ:
    - Mỗi dòng script có 1 object { "variant", "animationIn", "title", "subtitle", "labels", "highlightWord", "formula", "speechText", "reactionText", "exampleText", "prevTargetText" }.
 ${
   dualVoiceEnabled
-    ? `   - CHẾ ĐỘ 2 GIỌNG ĐANG BẬT: TẤT CẢ các slide trong "sceneComponents" PHẢI dùng ĐỒNG NHẤT variant "friends-chat" (bong bóng hội thoại 2 nhân vật — tuyệt đối KHÔNG đổi ngẫu nhiên sang card khác giữa các câu). Với [PAUSE], bong bóng A hiện câu nguồn và bong bóng B hiện "Your Turn · Translate in 5s" (không spoil đáp án).`
+    ? `   - CHẾ ĐỘ 2 GIỌNG ĐANG BẬT: TẤT CẢ các slide trong "sceneComponents" PHẢI dùng ĐỒNG NHẤT variant "friends-chat" (bong bóng hội thoại 2 nhân vật đứng cố định — tuyệt đối KHÔNG đổi sang card khác giữa các câu). KHÔNG điền "exampleText" hay "prevTargetText" (bỏ thanh Hint ở chế độ 2 người nói). Với [PAUSE], bong bóng A hiện câu nguồn và bong bóng B hiện "Think 5s" kèm 3 chấm suy nghĩ.`
     : `   - SÁNG TẠO & KHÔNG LẶP LẠI: Luôn đa dạng hóa "variant" giữa các câu liên tiếp (tuyệt đối KHÔNG lặp 1 variant 2 lần liền nhau):
      * "css-browser-mockup" | "bs-card-header": hợp câu mở đầu / chủ đề chính
      * "friends-chat": CẢNH HỘI THOẠI BONG BÓNG 2 NGƯỜI (bong bóng người A hiển thị câu nguồn, bong bóng người B hiển thị phần user dịch trong 5s khi [PAUSE] hoặc đáp án khi trả lời — truyền "labels": ["Prompt", "Your Turn"], "speechText": "câu thoại hoàn chỉnh", "reactionText": "Natural!")
@@ -4337,10 +4213,12 @@ export function updateScriptLinePreservingTag(
       const prefixMatch = orig.match(
         /^(\s*(?:\[(?:V1|V2|1|2|A|B|Q|VI|EN|JA|ANSWER|QUESTION|TITLE|SUBTITLE|INTRO|OUTRO)\]\s*)?(?:(?:Tiêu\s*đề\s*nhỏ|Tiêu\s*đề|Mở\s*đầu|Kết\s*thúc|Subheading|Subtitle|Heading|Title|Intro|Outro|Q|A|Question|Answer|Câu\s*hỏi|Trả\s*lời|Speaker\s*[12]|Người\s*[12]|English|Japanese|Vietnamese|Tiếng\s*Anh|Tiếng\s*Nhật|Tiếng\s*Việt)\s*[:：]\s*)?)/i
       );
+      const inlineEmotion = extractInlineEmotionTag(orig);
       const pauseMatch = orig.match(/(\s*\[PAUSE(?::\d+(?:\.\d+)?)?\]\s*)$/i);
       const prefix = prefixMatch?.[1] ?? '';
+      const emotionPrefix = inlineEmotion ? `[${inlineEmotion}] ` : '';
       const suffix = pauseMatch ? ` ${pauseMatch[1].trim()}` : '';
-      allLines[i] = `${prefix}${nextCleanText.replace(/\r?\n/g, ' ').trim()}${suffix}`.trim();
+      allLines[i] = `${prefix}${emotionPrefix}${nextCleanText.replace(/\r?\n/g, ' ').trim()}${suffix}`.trim();
       break;
     }
   }

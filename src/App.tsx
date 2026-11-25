@@ -12,15 +12,6 @@ import { safeParseJsonResponse } from './shared/mptEngine';
 import { DEFAULT_ANIME_DIALOGUE_SCRIPT } from './shared/animeStoryEngine';
 
 const HISTORY_STORAGE_KEY = 'mpt_vn_history_v1';
-const ELEVENLABS_KEY_STORAGE_KEY = 'mpt_vn_elevenlabs_key_v1';
-
-function loadSavedElevenLabsKey(): string {
-  try {
-    return window.localStorage.getItem(ELEVENLABS_KEY_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
 
 const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
   subject: 'Bí ẩn đại dương sâu thẳm chưa từng được giải mã',
@@ -54,10 +45,10 @@ const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
   concatMode: 'sequential',
   transitionMode: 'random',
   clipDurationSec: 3,
-  ttsProvider: 'elevenlabs',
-  voiceId: 'el-rachel',
+  ttsProvider: 'edge_auto',
+  voiceId: 'vi-VN-HoaiMyNeural',
   dualVoiceEnabled: false,
-  secondaryVoiceId: 'el-adam',
+  secondaryVoiceId: 'vi-VN-NamMinhNeural',
   pauseBetweenLinesSec: 0,
   clockTickEnabled: true,
   targetRepeatCount: 0,
@@ -75,8 +66,8 @@ const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
     fontName: 'Noto Sans',
     position: 'bottom',
     customPositionPct: 84,
-    fontSize: 38,
-    sourceFontSize: 30,
+    fontSize: 50,
+    sourceFontSize: 36,
     textColor: '#0F172A',
     highlightColor: '#4F46E5',
     strokeColor: '#FFFFFF',
@@ -123,10 +114,10 @@ const DEFAULT_LEARNING_CONFIG: RenderJobConfig = {
   concatMode: 'sequential',
   transitionMode: 'random',
   clipDurationSec: 3,
-  ttsProvider: 'elevenlabs',
-  voiceId: 'el-elli',
+  ttsProvider: 'edge_auto',
+  voiceId: 'ja-JP-NanamiNeural',
   dualVoiceEnabled: true,
-  secondaryVoiceId: 'el-rachel',
+  secondaryVoiceId: 'en-US-JennyNeural',
   pauseBetweenLinesSec: 5,
   clockTickEnabled: true,
   targetRepeatCount: 1,
@@ -144,8 +135,8 @@ const DEFAULT_LEARNING_CONFIG: RenderJobConfig = {
     fontName: 'M PLUS 1p',
     position: 'bottom',
     customPositionPct: 84,
-    fontSize: 38,
-    sourceFontSize: 28,
+    fontSize: 50,
+    sourceFontSize: 36,
     textColor: '#0F172A',
     highlightColor: '#4F46E5',
     strokeColor: '#FFFFFF',
@@ -169,9 +160,9 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
   animeSceneStyle: 'room_warm',
   animeRoomOverride: 'auto',
   animeCharacterVoices: {
-    先輩: 'el-adam',
-    芳蘭: 'el-elli',
-    日向: 'el-josh',
+    先輩: 'ja-JP-DaichiNeural',
+    芳蘭: 'ja-JP-NanamiNeural',
+    日向: 'ja-JP-KeitaNeural',
   },
   animeReadStageDirections: false,
   selectedMediaIds: [],
@@ -180,10 +171,10 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
   concatMode: 'sequential',
   transitionMode: 'fade',
   clipDurationSec: 3,
-  ttsProvider: 'elevenlabs',
-  voiceId: 'el-adam',
+  ttsProvider: 'edge_auto',
+  voiceId: 'ja-JP-DaichiNeural',
   dualVoiceEnabled: true,
-  secondaryVoiceId: 'el-elli',
+  secondaryVoiceId: 'ja-JP-NanamiNeural',
   pauseBetweenLinesSec: 0,
   clockTickEnabled: false,
   targetRepeatCount: 0,
@@ -197,12 +188,12 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
   bgmPreset: 'lofi_chill',
   bgmVolume: 0.03,
   subtitle: {
-    enabled: true,
+    enabled: false,
     fontName: 'M PLUS 1p',
     position: 'bottom',
     customPositionPct: 86,
-    fontSize: 34,
-    sourceFontSize: 26,
+    fontSize: 48,
+    sourceFontSize: 34,
     textColor: '#FFFFFF',
     highlightColor: '#FACC15',
     strokeColor: '#0F172A',
@@ -216,14 +207,11 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<StudioTab>('short_video');
-  const [configsByTab, setConfigsByTab] = useState<Record<StudioTab, RenderJobConfig>>(() => {
-    const savedKey = loadSavedElevenLabsKey();
-    return {
-      short_video: { ...DEFAULT_SHORT_CONFIG, elevenLabsApiKey: savedKey },
-      learning: { ...DEFAULT_LEARNING_CONFIG, elevenLabsApiKey: savedKey },
-      anime_story: { ...DEFAULT_ANIME_STORY_CONFIG, elevenLabsApiKey: savedKey },
-    };
-  });
+  const [configsByTab, setConfigsByTab] = useState<Record<StudioTab, RenderJobConfig>>(() => ({
+    short_video: { ...DEFAULT_SHORT_CONFIG },
+    learning: { ...DEFAULT_LEARNING_CONFIG },
+    anime_story: { ...DEFAULT_ANIME_STORY_CONFIG },
+  }));
 
   const [uploadedMedia, setUploadedMedia] = useState<MediaAssetItem[]>([]);
   const [builtinBgm, setBuiltinBgm] = useState<MediaAssetItem[]>([]);
@@ -279,37 +267,6 @@ export default function App() {
   );
 
   const updateActiveConfig = (patch: Partial<RenderJobConfig>) => {
-    if (patch.elevenLabsApiKey !== undefined) {
-      const nextKey = patch.elevenLabsApiKey;
-      try {
-        if (nextKey.trim()) {
-          window.localStorage.setItem(ELEVENLABS_KEY_STORAGE_KEY, nextKey);
-        } else {
-          window.localStorage.removeItem(ELEVENLABS_KEY_STORAGE_KEY);
-        }
-      } catch {
-        // Ignore storage quota errors safely
-      }
-      setConfigsByTab((prev) => ({
-        short_video: {
-          ...prev.short_video,
-          ...(activeTab === 'short_video' ? patch : {}),
-          elevenLabsApiKey: nextKey,
-        },
-        learning: {
-          ...prev.learning,
-          ...(activeTab === 'learning' ? patch : {}),
-          elevenLabsApiKey: nextKey,
-        },
-        anime_story: {
-          ...prev.anime_story,
-          ...(activeTab === 'anime_story' ? patch : {}),
-          elevenLabsApiKey: nextKey,
-        },
-      }));
-      return;
-    }
-
     setConfigsByTab((prev) => ({
       ...prev,
       [activeTab]: { ...prev[activeTab], ...patch },
@@ -568,7 +525,6 @@ export default function App() {
           onCancelRender={() => void handleCancelRender()}
           onResetForm={() => {
             setConfigsByTab((prev) => {
-              const preservedKey = prev[activeTab].elevenLabsApiKey ?? loadSavedElevenLabsKey();
               const base =
                 activeTab === 'anime_story'
                   ? DEFAULT_ANIME_STORY_CONFIG
@@ -577,7 +533,7 @@ export default function App() {
                   : DEFAULT_SHORT_CONFIG;
               return {
                 ...prev,
-                [activeTab]: { ...base, elevenLabsApiKey: preservedKey },
+                [activeTab]: { ...base },
               };
             });
             setJobsByTab((prev) => ({ ...prev, [activeTab]: null }));

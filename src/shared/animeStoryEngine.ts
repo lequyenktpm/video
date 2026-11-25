@@ -90,6 +90,7 @@ export interface AnimeStoryboardBeat {
   rawText: string;
   spokenText: string;
   actingNote?: string;
+  emotionTag?: string;
   emotion: AnimeEmotion;
   action: AnimeBodyAction;
   handProp: AnimeHandProp;
@@ -196,7 +197,7 @@ const CHARACTER_PRESETS: Record<string, Partial<AnimeCharacterProfile>> = {
   先輩: {
     displayName: '先輩',
     gender: 'male',
-    defaultVoiceId: 'el-adam',
+    defaultVoiceId: 'ja-JP-DaichiNeural',
     pitchRatio: 0.93,
     hairStyle: 'spiky',
     hairHex: '#1E293B',
@@ -214,7 +215,7 @@ const CHARACTER_PRESETS: Record<string, Partial<AnimeCharacterProfile>> = {
   芳蘭: {
     displayName: '芳蘭',
     gender: 'female',
-    defaultVoiceId: 'el-elli',
+    defaultVoiceId: 'ja-JP-NanamiNeural',
     pitchRatio: 1.03,
     hairStyle: 'bob',
     hairHex: '#4A2C2A',
@@ -232,7 +233,7 @@ const CHARACTER_PRESETS: Record<string, Partial<AnimeCharacterProfile>> = {
   日向: {
     displayName: '日向',
     gender: 'male',
-    defaultVoiceId: 'el-josh',
+    defaultVoiceId: 'ja-JP-KeitaNeural',
     pitchRatio: 1.13,
     hairStyle: 'tousled',
     hairHex: '#78350F',
@@ -252,7 +253,7 @@ const CHARACTER_PRESETS: Record<string, Partial<AnimeCharacterProfile>> = {
 const FALLBACK_PALETTES: Array<Omit<AnimeCharacterProfile, 'id' | 'displayName'>> = [
   {
     gender: 'male',
-    defaultVoiceId: 'el-adam',
+    defaultVoiceId: 'ja-JP-DaichiNeural',
     pitchRatio: 0.96,
     hairStyle: 'spiky',
     hairHex: '#1E293B',
@@ -269,7 +270,7 @@ const FALLBACK_PALETTES: Array<Omit<AnimeCharacterProfile, 'id' | 'displayName'>
   },
   {
     gender: 'female',
-    defaultVoiceId: 'el-elli',
+    defaultVoiceId: 'ja-JP-NanamiNeural',
     pitchRatio: 1.04,
     hairStyle: 'bob',
     hairHex: '#5B2333',
@@ -286,7 +287,7 @@ const FALLBACK_PALETTES: Array<Omit<AnimeCharacterProfile, 'id' | 'displayName'>
   },
   {
     gender: 'male',
-    defaultVoiceId: 'el-josh',
+    defaultVoiceId: 'ja-JP-KeitaNeural',
     pitchRatio: 1.12,
     hairStyle: 'tousled',
     hairHex: '#7C2D12',
@@ -303,7 +304,7 @@ const FALLBACK_PALETTES: Array<Omit<AnimeCharacterProfile, 'id' | 'displayName'>
   },
   {
     gender: 'female',
-    defaultVoiceId: 'el-sarah',
+    defaultVoiceId: 'ja-JP-AoiNeural',
     pitchRatio: 1.08,
     hairStyle: 'neat',
     hairHex: '#312E81',
@@ -320,6 +321,88 @@ const FALLBACK_PALETTES: Array<Omit<AnimeCharacterProfile, 'id' | 'displayName'>
   },
 ];
 
+export interface AnimeCharacterVisualDetail {
+  irisMainHex: string;
+  irisDarkHex: string;
+  irisGlowHex: string;
+  skinShadeHex: string;
+  outfitShadeHex: string;
+  skirtOrPantsShadeHex: string;
+  hairHighlightHex: string;
+  ribbonOrTieHex: string;
+  hasGlasses: boolean;
+  glassesFrameHex: string;
+  hasSideBow: boolean;
+}
+
+export function getAnimeCharacterVisualDetail(
+  profile: AnimeCharacterProfile
+): AnimeCharacterVisualDetail {
+  const outfitLower = profile.outfitHex.toUpperCase();
+  const hairLower = profile.hairHex.toUpperCase();
+
+  let irisMainHex = '#2563EB';
+  let irisDarkHex = '#1E3A8A';
+  let irisGlowHex = '#93C5FD';
+  let outfitShadeHex = '#1E293B';
+  let ribbonOrTieHex = '#D97706';
+
+  if (outfitLower === '#0F766E' || outfitLower === '#0D9488') {
+    irisMainHex = '#0D9488';
+    irisDarkHex = '#115E59';
+    irisGlowHex = '#5EEAD4';
+    outfitShadeHex = '#0F524C';
+    ribbonOrTieHex = '#F59E0B';
+  } else if (outfitLower === '#B45309') {
+    irisMainHex = '#D97706';
+    irisDarkHex = '#78350F';
+    irisGlowHex = '#FCD34D';
+    outfitShadeHex = '#853D07';
+    ribbonOrTieHex = '#334155';
+  } else if (outfitLower === '#DB2777') {
+    irisMainHex = '#0D9488';
+    irisDarkHex = '#0F524C';
+    irisGlowHex = '#67E8F9';
+    outfitShadeHex = '#9D174D';
+    ribbonOrTieHex = '#E11D48';
+  } else if (outfitLower === '#4F46E5') {
+    irisMainHex = '#4F46E5';
+    irisDarkHex = '#312E81';
+    irisGlowHex = '#A5B4FC';
+    outfitShadeHex = '#3730A3';
+    ribbonOrTieHex = '#1E293B';
+  } else if (outfitLower === '#2563EB') {
+    irisMainHex = '#0284C7';
+    irisDarkHex = '#1E3A8A';
+    irisGlowHex = '#7DD3FC';
+    outfitShadeHex = '#1D4ED8';
+    ribbonOrTieHex = '#1E293B';
+  }
+
+  const isCoolDarkHair =
+    hairLower === '#1E293B' ||
+    hairLower === '#0F172A' ||
+    hairLower === '#312E81';
+  const hairHighlightHex = isCoolDarkHair ? '#67E8F9' : '#FDE68A';
+
+  const hasSideBow = profile.gender === 'female' && profile.hairStyle === 'bob';
+  const hasGlasses = profile.gender === 'female' && profile.hairStyle === 'neat';
+
+  return {
+    irisMainHex,
+    irisDarkHex,
+    irisGlowHex,
+    skinShadeHex: '#F3C4A8',
+    outfitShadeHex,
+    skirtOrPantsShadeHex: '#0F172A',
+    hairHighlightHex,
+    ribbonOrTieHex,
+    hasGlasses,
+    glassesFrameHex: '#F97316',
+    hasSideBow,
+  };
+}
+
 function guessCharacterGender(name: string): 'male' | 'female' {
   if (/(?:芳蘭|美咲|花|さくら|ゆい|あおい|蘭|結衣|葵|凛)/.test(name)) {
     return 'female';
@@ -335,13 +418,29 @@ function guessCharacterGender(name: string): 'male' | 'female' {
   return 'male';
 }
 
-function detectLanguageVoiceForScript(_script: string, gender: 'male' | 'female', orderIdx: number): VoiceOptionId {
-  if (gender === 'female') {
-    if (orderIdx >= 2) return 'el-sarah';
-    return orderIdx === 0 ? 'el-rachel' : 'el-elli';
+function detectLanguageVoiceForScript(script: string, gender: 'male' | 'female', orderIdx: number): VoiceOptionId {
+  const hasJa = /[\u3040-\u30ff\u4e00-\u9faf]/.test(script);
+  const hasVi = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i.test(script);
+  if (hasJa) {
+    if (gender === 'female') {
+      if (orderIdx >= 2) return 'ja-JP-MayuNeural';
+      return orderIdx === 0 ? 'ja-JP-NanamiNeural' : 'ja-JP-AoiNeural';
+    }
+    if (orderIdx >= 2) return 'ja-JP-NaokiNeural';
+    return orderIdx === 0 ? 'ja-JP-DaichiNeural' : 'ja-JP-KeitaNeural';
   }
-  if (orderIdx >= 2) return 'el-liam';
-  return orderIdx === 0 ? 'el-adam' : 'el-josh';
+  if (hasVi) {
+    if (gender === 'female') {
+      return orderIdx % 2 === 0 ? 'vi-VN-HoaiMyNeural' : 'vi-VN-HoaiMyBright';
+    }
+    return orderIdx % 2 === 0 ? 'vi-VN-NamMinhNeural' : 'vi-VN-NamMinhYoung';
+  }
+  if (gender === 'female') {
+    if (orderIdx >= 2) return 'en-US-EmmaNeural';
+    return orderIdx === 0 ? 'en-US-JennyNeural' : 'en-US-AriaNeural';
+  }
+  if (orderIdx >= 2) return 'en-GB-RyanNeural';
+  return orderIdx === 0 ? 'en-US-GuyNeural' : 'en-US-DavisNeural';
 }
 
 function buildCharacterProfile(
@@ -426,7 +525,7 @@ function analyzeEmotionAndAction(
 } {
   const combined = `${actingNote ?? ''} ${spokenText}`;
 
-  if (/小声|ひそひそ|thì thầm|nói nhỏ|whisper/i.test(combined)) {
+  if (/小声|ひそひそ|thì thầm|nói nhỏ|whisper|lean_whisper/i.test(combined)) {
     return {
       emotion: 'whisper',
       action: 'lean_whisper',
@@ -435,7 +534,7 @@ function analyzeEmotionAndAction(
       fridgeOpen: false,
     };
   }
-  if (/(?:ガリガリ君|アイス|trà sữa|冷蔵庫|tủ lạnh).*(?:ない|mất rồi|đâu)|(?:ない！|đâu mất rồi)/i.test(combined)) {
+  if (/check_fridge_panic|(?:ガリガリ君|アイス|trà sữa|冷蔵庫|tủ lạnh).*(?:ない|mất rồi|đâu)|(?:ない！|đâu mất rồi)/i.test(combined)) {
     return {
       emotion: 'shocked',
       action: 'check_fridge_panic',
@@ -552,6 +651,7 @@ export function parseAnimeDialogueScript(
     rawText: string;
     spokenText: string;
     actingNote?: string;
+    emotionTag?: string;
     roomKind: AnimeRoomKind;
     isArrivalCue: boolean;
     enteringCandidateName?: string;
@@ -602,6 +702,12 @@ export function parseAnimeDialogueScript(
       registerSpeaker(speaker);
 
       const actingNotes: string[] = [];
+      const bracketTags: string[] = [];
+      rest = rest.replace(/\[([A-Za-z0-9_-]{2,36})\]/g, (_m, tag: string) => {
+        const cleanTag = tag.trim().toLowerCase();
+        if (cleanTag) bracketTags.push(cleanTag);
+        return '';
+      });
       rest = rest.replace(/[（(]([^（）()]{1,24})[）)]/g, (_m, inner: string) => {
         const cleanInner = inner.trim();
         if (cleanInner) actingNotes.push(cleanInner);
@@ -610,6 +716,7 @@ export function parseAnimeDialogueScript(
       const cleanSpoken =
         rest.replace(/\s+/g, ' ').replace(/[。.]+\s*$/, (m) => m).trim() || spkMatch[2].trim();
       const actingNote = actingNotes.length > 0 ? actingNotes.join('・') : undefined;
+      const emotionTag = bracketTags.length > 0 ? bracketTags[0] : undefined;
 
       drafts.push({
         kind: 'speech',
@@ -617,6 +724,7 @@ export function parseAnimeDialogueScript(
         rawText: actingNote ? `${cleanSpoken}（${actingNote}）` : cleanSpoken,
         spokenText: cleanSpoken,
         actingNote,
+        emotionTag,
         roomKind: currentRoom,
         isArrivalCue: false,
       });
@@ -625,11 +733,21 @@ export function parseAnimeDialogueScript(
 
     const fallbackSpeaker = speakerOrder[0] ?? 'Narrator';
     registerSpeaker(fallbackSpeaker);
+    const fallbackBrackets: string[] = [];
+    const fallbackClean = line
+      .replace(/\[([A-Za-z0-9_-]{2,36})\]/g, (_m, tag: string) => {
+        const cleanTag = tag.trim().toLowerCase();
+        if (cleanTag) fallbackBrackets.push(cleanTag);
+        return '';
+      })
+      .replace(/\s+/g, ' ')
+      .trim();
     drafts.push({
       kind: 'speech',
       speaker: fallbackSpeaker,
       rawText: line,
-      spokenText: line,
+      spokenText: fallbackClean || line,
+      emotionTag: fallbackBrackets[0],
       roomKind: currentRoom,
       isArrivalCue: false,
     });
@@ -721,7 +839,7 @@ export function parseAnimeDialogueScript(
     }
     const { emotion, action, fx, handProp, fridgeOpen } = analyzeEmotionAndAction(
       d.spokenText,
-      d.actingNote,
+      [d.actingNote, d.emotionTag].filter(Boolean).join(' '),
       d.roomKind
     );
     beats.push({
@@ -735,6 +853,7 @@ export function parseAnimeDialogueScript(
       rawText: d.rawText,
       spokenText: d.spokenText,
       actingNote: d.actingNote,
+      emotionTag: d.emotionTag,
       emotion,
       action,
       handProp,
@@ -1572,100 +1691,170 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
     skinHex,
     nameBadgeHex,
   } = profile;
+  const det = getAnimeCharacterVisualDetail(profile);
+  const ink = '#3B2828';
 
+  // Layered glossy back hair (female bob/neat extends gracefully behind shoulders with feathered ends)
   const backHairSvg =
     hairStyle === 'bob'
       ? `<g transform="rotate(${(hairSwayDeg * 0.65).toFixed(2)}, 0, -148)">
-           <path d="M-46 -136 C-56 -110 -56 -72 -44 -56 L44 -56 C56 -72 56 -110 46 -136 Z" fill="${hairShadeHex}" stroke="#1E1B18" stroke-width="2.6"/>
+           <path d="M-47 -144 C-57 -112 -57 -66 -43 -46 C-28 -52 -14 -45 0 -46 C14 -45 28 -52 43 -46 C57 -66 57 -112 47 -144 Z" fill="${hairShadeHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+           <path d="M-42 -126 C-49 -96 -48 -68 -39 -52 L-24 -52 C-28 -74 -30 -104 -30 -126 Z" fill="${hairHex}" fill-opacity="0.45"/>
+           <path d="M42 -126 C49 -96 48 -68 39 -52 L24 -52 C28 -74 30 -104 30 -126 Z" fill="${hairHex}" fill-opacity="0.45"/>
          </g>`
-      : '';
+      : hairStyle === 'neat' && gender === 'female'
+      ? `<g transform="rotate(${(hairSwayDeg * 0.65).toFixed(2)}, 0, -148)">
+           <path d="M-46 -144 C-56 -104 -54 -56 -40 -38 C-26 -44 -12 -38 0 -40 C12 -38 26 -44 40 -38 C54 -56 56 -104 46 -144 Z" fill="${hairShadeHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+           <path d="M-44 -90 Q-32 -84 -20 -90 M20 -90 Q32 -84 44 -90" fill="none" stroke="${det.hairHighlightHex}" stroke-opacity="0.32" stroke-width="2.2" stroke-linecap="round"/>
+         </g>`
+      : `<g transform="rotate(${(hairSwayDeg * 0.5).toFixed(2)}, 0, -148)">
+           <path d="M-40 -142 C-45 -124 -44 -108 -34 -98 L34 -98 C44 -108 45 -124 40 -142 Z" fill="${hairShadeHex}"/>
+         </g>`;
+
+  // Cheek-framing hime / temple strands (transforms cartoon outline into authentic Live2D anime hair)
+  const sideLocksSvg =
+    gender === 'female'
+      ? `<path d="M-45 -158 C-48 -134 -46 -106 -33 -86 C-30 -98 -33 -120 -35 -146 Z" fill="${hairHex}" stroke="${ink}" stroke-width="1.8" stroke-linejoin="round"/>
+         <path d="M45 -158 C48 -134 46 -106 33 -86 C30 -98 33 -120 35 -146 Z" fill="${hairHex}" stroke="${ink}" stroke-width="1.8" stroke-linejoin="round"/>`
+      : `<path d="M-43 -154 C-45 -136 -43 -118 -35 -106 C-33 -118 -35 -134 -36 -148 Z" fill="${hairHex}" stroke="${ink}" stroke-width="1.7" stroke-linejoin="round"/>
+         <path d="M43 -154 C45 -136 43 -118 35 -106 C33 -118 35 -134 36 -148 Z" fill="${hairHex}" stroke="${ink}" stroke-width="1.7" stroke-linejoin="round"/>`;
+
+  // Curved "Angel Ring" glossy hair specular highlight band across the crown/bangs
+  const hairHighlightArcSvg = `
+    <path d="M-26 -175 Q-12 -183 0 -177 Q14 -183 26 -173" fill="none" stroke="${det.hairHighlightHex}" stroke-opacity="0.28" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M-18 -170 Q-8 -175 -2 -172 M8 -172 Q16 -176 22 -170" fill="none" stroke="#FFFFFF" stroke-opacity="0.32" stroke-width="1.5" stroke-linecap="round"/>
+  `;
+
+  // Side ribbon bow (e.g. golden-amber ribbon like NTT XR Concierge) or hair clip
+  const sideRibbonBowSvg = det.hasSideBow
+    ? `<g transform="translate(35,-166) rotate(-22)">
+         <path d="M0 0 L-12 -9 C-16 -4 -14 5 -9 7 Z" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.6" stroke-linejoin="round"/>
+         <path d="M0 0 L13 -7 C16 -1 14 7 8 8 Z" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.6" stroke-linejoin="round"/>
+         <path d="M-2 2 L-7 15 L-1 13 Z" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.5" stroke-linejoin="round"/>
+         <path d="M2 2 L9 14 L3 14 Z" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.5" stroke-linejoin="round"/>
+         <circle cx="0" cy="0" r="3.6" fill="#FEF3C7" stroke="${ink}" stroke-width="1.5"/>
+       </g>`
+    : '';
 
   const frontHairSvg =
     hairStyle === 'spiky'
       ? `<g transform="rotate(${(hairSwayDeg * 0.45).toFixed(2)}, 0, -165)">
-           <path d="M-44 -146 C-44 -186 -14 -202 8 -196 C32 -196 48 -176 46 -144 C42 -154 32 -162 24 -152 C14 -165 0 -150 -8 -164 C-18 -148 -32 -158 -44 -146 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
-           <path d="M-36 -184 L-48 -200 L-22 -190 L-8 -208 L6 -190 L28 -204 L26 -182" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.4" stroke-linejoin="round"/>
+           ${sideLocksSvg}
+           <path d="M-44 -148 C-45 -186 -15 -202 8 -196 C32 -196 47 -176 45 -146 C40 -157 31 -165 23 -150 C15 -168 2 -149 -6 -166 C-16 -148 -30 -162 -44 -148 Z" fill="${hairHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+           <path d="M-36 -184 L-47 -199 L-22 -190 L-7 -206 L6 -190 L27 -203 L25 -182" fill="${hairHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+           ${hairHighlightArcSvg}
          </g>`
       : hairStyle === 'bob'
       ? `<g transform="rotate(${(hairSwayDeg * 0.4).toFixed(2)}, 0, -165)">
-           <path d="M-47 -142 C-48 -188 -16 -202 0 -202 C18 -202 48 -188 47 -142 C36 -156 22 -160 12 -148 C2 -160 -12 -160 -22 -148 C-32 -156 -40 -154 -47 -142 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
-           <rect x="26" y="-158" width="12" height="5" rx="2.5" transform="rotate(-18 32 -156)" fill="#F43F5E"/>
+           ${sideLocksSvg}
+           <path d="M-46 -146 C-47 -188 -16 -202 0 -202 C18 -202 47 -188 46 -146 C37 -158 26 -159 18 -147 C11 -159 5 -159 0 -145 C-5 -159 -12 -159 -19 -147 C-27 -159 -37 -157 -46 -146 Z" fill="${hairHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+           ${hairHighlightArcSvg}
+           ${sideRibbonBowSvg}
          </g>`
       : `<g transform="rotate(${(hairSwayDeg * 0.45).toFixed(2)}, 0, -165)">
-           <path d="M-45 -144 C-46 -186 -16 -202 4 -200 C28 -198 48 -180 45 -144 C34 -156 22 -146 12 -160 C2 -144 -10 -158 -22 -146 C-32 -158 -40 -152 -45 -144 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
+           ${sideLocksSvg}
+           <path d="M-45 -146 C-46 -187 -16 -202 3 -201 C26 -200 46 -182 45 -146 C35 -159 23 -150 13 -162 C4 -146 -6 -161 -17 -148 C-28 -160 -38 -154 -45 -146 Z" fill="${hairHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+           ${hairHighlightArcSvg}
          </g>`;
 
   const eyeScaleY = Math.max(0.08, 1 - blinkAmt);
   let eyesSvg = '';
   if (emotion === 'apologetic' && rig.action === 'bow_deep') {
     eyesSvg = `
-      <path d="M-24 -128 L-10 -122 L-24 -116" fill="none" stroke="#1E1B18" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M24 -128 L10 -122 L24 -116" fill="none" stroke="#1E1B18" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>`;
+      <path d="M-24 -128 L-10 -122 L-24 -116" fill="none" stroke="${ink}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M24 -128 L10 -122 L24 -116" fill="none" stroke="${ink}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
   } else if (emotion === 'happy' || emotion === 'wry_smile') {
     eyesSvg = `
-      <path d="M-26 -120 Q-17 -131 -8 -120" fill="none" stroke="#1E1B18" stroke-width="3.2" stroke-linecap="round"/>
-      <path d="M8 -120 Q17 -131 26 -120" fill="none" stroke="#1E1B18" stroke-width="3.2" stroke-linecap="round"/>`;
+      <path d="M-27 -120 Q-17 -132 -8 -120" fill="none" stroke="${ink}" stroke-width="3.2" stroke-linecap="round"/>
+      <path d="M-28 -121 L-24 -124" stroke="${ink}" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M8 -120 Q17 -132 27 -120" fill="none" stroke="${ink}" stroke-width="3.2" stroke-linecap="round"/>
+      <path d="M28 -121 L24 -124" stroke="${ink}" stroke-width="2.2" stroke-linecap="round"/>`;
   } else {
-    const irisR = emotion === 'shocked' ? 5.2 : 7.6;
+    const irisRx = emotion === 'shocked' ? 5.0 : 7.4;
+    const irisRy = emotion === 'shocked' ? 5.8 : 8.6;
+    const pupilR = emotion === 'shocked' ? 2.1 : 3.0;
     const pupilDx = rig.lookOffsetX;
-    eyesSvg = `
-      <g transform="translate(-17,-122) scale(1,${eyeScaleY.toFixed(2)})">
-        <ellipse cx="0" cy="0" rx="9" ry="10.5" fill="#FFFFFF" stroke="#1E1B18" stroke-width="2.2"/>
-        <circle cx="${pupilDx.toFixed(1)}" cy="1" r="${irisR}" fill="#1E293B"/>
-        <circle cx="${(pupilDx - 2.4).toFixed(1)}" cy="-2.8" r="2.6" fill="#FFFFFF"/>
-      </g>
-      <g transform="translate(17,-122) scale(1,${eyeScaleY.toFixed(2)})">
-        <ellipse cx="0" cy="0" rx="9" ry="10.5" fill="#FFFFFF" stroke="#1E1B18" stroke-width="2.2"/>
-        <circle cx="${pupilDx.toFixed(1)}" cy="1" r="${irisR}" fill="#1E293B"/>
-        <circle cx="${(pupilDx - 2.4).toFixed(1)}" cy="-2.8" r="2.6" fill="#FFFFFF"/>
+    const renderOneEye = (cx: number, wingDir: number) => `
+      <g transform="translate(${cx},-121) scale(1,${eyeScaleY.toFixed(2)})">
+        <!-- Soft borderless Live2D white sclera + gentle upper shadow -->
+        <ellipse cx="0" cy="0" rx="10" ry="9.2" fill="#FFFFFF"/>
+        <path d="M-9.2 -3 Q0 -9.6 9.2 -3 L9.2 -6 Q0 -11 -9.2 -6 Z" fill="#CBD5E1" fill-opacity="0.5"/>
+        <!-- Large vivid multi-layer Live2D iris touching upper/lower lids -->
+        <ellipse cx="${pupilDx.toFixed(1)}" cy="0.2" rx="${irisRx}" ry="${irisRy}" fill="${det.irisMainHex}"/>
+        <ellipse cx="${pupilDx.toFixed(1)}" cy="${(-irisRy * 0.34).toFixed(1)}" rx="${(irisRx * 0.92).toFixed(1)}" ry="${(irisRy * 0.52).toFixed(1)}" fill="${det.irisDarkHex}" fill-opacity="0.72"/>
+        <ellipse cx="${pupilDx.toFixed(1)}" cy="${(irisRy * 0.54).toFixed(1)}" rx="${(irisRx * 0.72).toFixed(1)}" ry="${(irisRy * 0.28).toFixed(1)}" fill="${det.irisGlowHex}" fill-opacity="0.88"/>
+        <circle cx="${pupilDx.toFixed(1)}" cy="0.4" r="${pupilR}" fill="#0F172A"/>
+        <circle cx="${(pupilDx - 2.4).toFixed(1)}" cy="-2.8" r="2.7" fill="#FFFFFF"/>
+        <circle cx="${(pupilDx + 2.5).toFixed(1)}" cy="3.1" r="1.3" fill="#FFFFFF" fill-opacity="0.96"/>
+        <!-- Plush curved upper eyelash with wing & delicate double-eyelid crease -->
+        <path d="M${(-10.2 * wingDir).toFixed(1)} -2.2 Q0 -11.4 ${(11.5 * wingDir).toFixed(1)} -1.2" fill="none" stroke="${ink}" stroke-width="3.6" stroke-linecap="round"/>
+        <path d="M${(-6.5 * wingDir).toFixed(1)} -12.4 Q0 -15.0 ${(7.2 * wingDir).toFixed(1)} -12.0" fill="none" stroke="${ink}" stroke-opacity="0.52" stroke-width="1.2" stroke-linecap="round"/>
+        <path d="M-5.8 8.8 Q0 10.0 5.8 8.8" fill="none" stroke="${ink}" stroke-opacity="0.48" stroke-width="1.2" stroke-linecap="round"/>
       </g>`;
+    eyesSvg = `${renderOneEye(-17, -1)}${renderOneEye(17, 1)}`;
   }
+
+  // Optional stylish round Live2D glasses (e.g. CHELULU look for 'neat' female)
+  const glassesSvg = det.hasGlasses
+    ? `<g opacity="0.92">
+         <circle cx="-17" cy="-120" r="11.5" fill="#ECFEFF" fill-opacity="0.16" stroke="${det.glassesFrameHex}" stroke-width="2.1"/>
+         <circle cx="17" cy="-120" r="11.5" fill="#ECFEFF" fill-opacity="0.16" stroke="${det.glassesFrameHex}" stroke-width="2.1"/>
+         <path d="M-5.5 -121 Q0 -123.5 5.5 -121" fill="none" stroke="${det.glassesFrameHex}" stroke-width="2"/>
+         <line x1="-22" y1="-125" x2="-17" y2="-118" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="1.5" stroke-linecap="round"/>
+         <line x1="12" y1="-125" x2="17" y2="-118" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="1.5" stroke-linecap="round"/>
+       </g>`
+    : '';
 
   let browsSvg = '';
   if (emotion === 'angry') {
     browsSvg = `
-      <path d="M-29 -141 L-7 -132" stroke="#1E1B18" stroke-width="3.5" stroke-linecap="round"/>
-      <path d="M29 -141 L7 -132" stroke="#1E1B18" stroke-width="3.5" stroke-linecap="round"/>`;
+      <path d="M-28 -140 L-7 -132" stroke="${ink}" stroke-width="3" stroke-linecap="round"/>
+      <path d="M28 -140 L7 -132" stroke="${ink}" stroke-width="3" stroke-linecap="round"/>`;
   } else if (emotion === 'apologetic' || emotion === 'wry_smile') {
     browsSvg = `
-      <path d="M-28 -134 L-8 -141" stroke="#1E1B18" stroke-width="3" stroke-linecap="round"/>
-      <path d="M28 -134 L8 -141" stroke="#1E1B18" stroke-width="3" stroke-linecap="round"/>`;
+      <path d="M-27 -134 L-8 -140" stroke="${ink}" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M27 -134 L8 -140" stroke="${ink}" stroke-width="2.5" stroke-linecap="round"/>`;
   } else if (emotion === 'shocked') {
     browsSvg = `
-      <path d="M-27 -144 Q-17 -151 -7 -144" fill="none" stroke="#1E1B18" stroke-width="3" stroke-linecap="round"/>
-      <path d="M7 -144 Q17 -151 27 -144" fill="none" stroke="#1E1B18" stroke-width="3" stroke-linecap="round"/>`;
+      <path d="M-26 -143 Q-17 -149 -8 -143" fill="none" stroke="${ink}" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M8 -143 Q17 -149 26 -143" fill="none" stroke="${ink}" stroke-width="2.5" stroke-linecap="round"/>`;
   } else {
     browsSvg = `
-      <path d="M-27 -139 Q-17 -143 -8 -139" fill="none" stroke="#1E1B18" stroke-width="2.8" stroke-linecap="round"/>
-      <path d="M8 -139 Q17 -143 27 -139" fill="none" stroke="#1E1B18" stroke-width="2.8" stroke-linecap="round"/>`;
+      <path d="M-26 -138 Q-17 -142 -8 -138" fill="none" stroke="${ink}" stroke-width="2.1" stroke-linecap="round"/>
+      <path d="M8 -138 Q17 -142 26 -138" fill="none" stroke="${ink}" stroke-width="2.1" stroke-linecap="round"/>`;
   }
 
   let mouthSvg = '';
   if (isSpeaking && mouthPhase > 0.14) {
     const mh =
       mouthViseme === 'i'
-        ? (2.6 + mouthPhase * 4.5).toFixed(1)
+        ? 2.6 + mouthPhase * 4.5
         : mouthViseme === 'o' || mouthViseme === 'u'
-        ? (4.2 + mouthPhase * 7.8).toFixed(1)
-        : (3.5 + mouthPhase * 9.5).toFixed(1);
+        ? 4.2 + mouthPhase * 7.6
+        : 3.4 + mouthPhase * 9.0;
     const mw =
       mouthViseme === 'i' || mouthViseme === 'e'
-        ? (7.8 + mouthPhase * 3.5).toFixed(1)
+        ? 7.6 + mouthPhase * 3.2
         : mouthViseme === 'u' || mouthViseme === 'o'
-        ? (4.2 + mouthPhase * 2.8).toFixed(1)
-        : (5.5 + (1 - mouthPhase * 0.3) * 5.0).toFixed(1);
-    mouthSvg = `<ellipse cx="0" cy="-96" rx="${mw}" ry="${mh}" fill="#9F1239" stroke="#1E1B18" stroke-width="2.2"/>
-                <ellipse cx="0" cy="${(-96 + Number(mh) * 0.45).toFixed(1)}" rx="${(Number(mw) * 0.65).toFixed(1)}" ry="${(Number(mh) * 0.35).toFixed(1)}" fill="#FB7185"/>`;
+        ? 4.2 + mouthPhase * 2.6
+        : 5.4 + (1 - mouthPhase * 0.3) * 4.8;
+    const teethSvg =
+      mh >= 5.2 && (mouthViseme === 'a' || mouthViseme === 'e' || mouthViseme === 'i')
+        ? `<path d="M${(-mw * 0.72).toFixed(1)} ${(-96 - mh * 0.45).toFixed(1)} Q0 ${(-96 - mh * 0.85).toFixed(1)} ${(mw * 0.72).toFixed(1)} ${(-96 - mh * 0.45).toFixed(1)} L${(mw * 0.62).toFixed(1)} ${(-96 - mh * 0.18).toFixed(1)} L${(-mw * 0.62).toFixed(1)} ${(-96 - mh * 0.18).toFixed(1)} Z" fill="#FFFFFF" fill-opacity="0.92"/>`
+        : '';
+    mouthSvg = `<ellipse cx="0" cy="-96" rx="${mw.toFixed(1)}" ry="${mh.toFixed(1)}" fill="#881337" stroke="${ink}" stroke-width="1.9"/>
+                <ellipse cx="0" cy="${(-96 + mh * 0.42).toFixed(1)}" rx="${(mw * 0.66).toFixed(1)}" ry="${(mh * 0.36).toFixed(1)}" fill="#FB7185"/>
+                ${teethSvg}`;
   } else if (emotion === 'happy') {
-    mouthSvg = `<path d="M-10 -99 Q0 -89 10 -99" fill="none" stroke="#1E1B18" stroke-width="2.8" stroke-linecap="round"/>`;
+    mouthSvg = `<path d="M-9 -99 Q0 -89 9 -99" fill="#FB7185" fill-opacity="0.35" stroke="${ink}" stroke-width="2.4" stroke-linecap="round"/>`;
   } else if (emotion === 'angry') {
-    mouthSvg = `<path d="M-10 -94 Q0 -101 10 -94" fill="none" stroke="#1E1B18" stroke-width="2.8" stroke-linecap="round"/>`;
+    mouthSvg = `<path d="M-9 -94 Q0 -100 9 -94" fill="none" stroke="${ink}" stroke-width="2.4" stroke-linecap="round"/>`;
   } else if (emotion === 'shocked') {
-    mouthSvg = `<ellipse cx="0" cy="-95" rx="6" ry="8" fill="#9F1239" stroke="#1E1B18" stroke-width="2.2"/>`;
+    mouthSvg = `<ellipse cx="0" cy="-95" rx="5.5" ry="7.2" fill="#881337" stroke="${ink}" stroke-width="1.9"/>`;
   } else if (emotion === 'wry_smile') {
-    mouthSvg = `<path d="M-9 -97 Q-2 -91 9 -98" fill="none" stroke="#1E1B18" stroke-width="2.6" stroke-linecap="round"/>`;
+    mouthSvg = `<path d="M-8 -97 Q-1 -91 8 -98" fill="none" stroke="${ink}" stroke-width="2.2" stroke-linecap="round"/>`;
   } else {
-    mouthSvg = `<path d="M-7 -96 Q0 -93 7 -96" fill="none" stroke="#1E1B18" stroke-width="2.6" stroke-linecap="round"/>`;
+    mouthSvg = `<path d="M-6.5 -96 Q0 -93.2 6.5 -96" fill="none" stroke="${ink}" stroke-width="2.1" stroke-linecap="round"/>`;
   }
 
   // Unflipped Comic FX anchored cleanly above head
@@ -1701,39 +1890,75 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
   }
 
   const legUpperFill = gender === 'female' ? skinHex : pantsHex;
-  const legLowerFill = gender === 'female' ? '#F8FAFC' : pantsHex; // knee socks vs trouser leg
+  const legLowerFill = gender === 'female' ? '#F8FAFC' : pantsHex;
 
   const renderLeg = (hipX: number, thighDeg: number, shinDeg: number, isBack: boolean) => `
-    <g transform="translate(${hipX},${(-82 + hipDropY).toFixed(1)}) rotate(${thighDeg.toFixed(1)})" opacity="${isBack ? '0.93' : '1'}">
-      <rect x="-9" y="-2" width="18" height="44" rx="9" fill="${legUpperFill}" stroke="#1E1B18" stroke-width="2.4"/>
+    <g transform="translate(${hipX},${(-82 + hipDropY).toFixed(1)}) rotate(${thighDeg.toFixed(1)})" opacity="${isBack ? '0.92' : '1'}">
+      <path d="M-8.5 -2 L8.5 -2 L7 39 C4 43 -4 43 -7 39 Z" fill="${legUpperFill}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
       <g transform="translate(0,40) rotate(${shinDeg.toFixed(1)})">
-        <rect x="-8" y="-2" width="16" height="40" rx="8" fill="${legLowerFill}" stroke="#1E1B18" stroke-width="2.4"/>
-        <!-- Articulated Shoe / Foot pointing forward (+X) -->
-        <path d="M-9 36 L14 36 C19 36 21 44 14 45 L-9 45 C-12 45 -12 36 -9 36 Z" fill="${shoeHex}" stroke="#1E1B18" stroke-width="2.2"/>
-        <line x1="-8" y1="43" x2="15" y2="43" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="1.6"/>
+        <path d="M-7 -2 L7 -2 L6 37 C3 40 -3 40 -6 37 Z" fill="${legLowerFill}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+        ${
+          gender === 'female'
+            ? `<rect x="-7.2" y="-1" width="14.4" height="4.5" rx="1.8" fill="${pantsHex}" stroke="${ink}" stroke-width="1.2"/>`
+            : `<line x1="0" y1="4" x2="0" y2="33" stroke="${det.skirtOrPantsShadeHex}" stroke-opacity="0.35" stroke-width="1.4"/>`
+        }
+        <path d="M-8 36 L13 36 C18 36 20 44 13 45 L-8 45 C-11 45 -11 36 -8 36 Z" fill="${shoeHex}" stroke="${ink}" stroke-width="2"/>
+        <path d="M-4 37.5 Q5 37.5 12 39" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1.4" stroke-linecap="round"/>
       </g>
     </g>
   `;
 
   const skirtSvg =
     gender === 'female'
-      ? `<path d="M-32 -88 L32 -88 L40 -48 C18 -43 -18 -43 -40 -48 Z" fill="${pantsHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
-         <line x1="-14" y1="-84" x2="-18" y2="-46" stroke="#334155" stroke-width="1.8"/>
-         <line x1="0" y1="-84" x2="0" y2="-45" stroke="#334155" stroke-width="1.8"/>
-         <line x1="14" y1="-84" x2="18" y2="-46" stroke="#334155" stroke-width="1.8"/>`
-      : `<path d="M-30 -88 L30 -88 L32 -70 L-32 -70 Z" fill="${pantsHex}" stroke="#1E1B18" stroke-width="2.4"/>`;
+      ? `<path d="M-27 -88 L27 -88 L39 -47 C18 -42 -18 -42 -39 -47 Z" fill="${pantsHex}" stroke="${ink}" stroke-width="2.1" stroke-linejoin="round"/>
+         <rect x="-27.5" y="-90" width="55" height="6" rx="2" fill="${det.skirtOrPantsShadeHex}" stroke="${ink}" stroke-width="1.6"/>
+         <rect x="-4" y="-90" width="8" height="6" rx="1.2" fill="#FDE68A" stroke="${ink}" stroke-width="1.2"/>
+         <path d="M-36 -54 C-16 -49 16 -49 36 -54 L39 -47 C18 -42 -18 -42 -39 -47 Z" fill="${det.skirtOrPantsShadeHex}" fill-opacity="0.28"/>
+         <line x1="-13" y1="-82" x2="-18" y2="-45" stroke="${det.skirtOrPantsShadeHex}" stroke-opacity="0.55" stroke-width="1.6"/>
+         <line x1="0" y1="-82" x2="0" y2="-44" stroke="${det.skirtOrPantsShadeHex}" stroke-opacity="0.55" stroke-width="1.6"/>
+         <line x1="13" y1="-82" x2="18" y2="-45" stroke="${det.skirtOrPantsShadeHex}" stroke-opacity="0.55" stroke-width="1.6"/>`
+      : `<path d="M-28 -88 L28 -88 L30 -68 L-30 -68 Z" fill="${pantsHex}" stroke="${ink}" stroke-width="2"/>
+         <rect x="-28" y="-89" width="56" height="5.5" rx="1.5" fill="${det.skirtOrPantsShadeHex}"/>
+         <rect x="-4" y="-89" width="8" height="5.5" rx="1" fill="#CBD5E1" stroke="${ink}" stroke-width="1.1"/>`;
+
+  const renderHand = () =>
+    `<path d="M-4.5 29 C-7 32 -6.5 39 -2 40.5 C2.5 41.5 6.5 39 7 34.5 C7.5 31.5 5 29 3.5 29 Z" fill="${skinHex}" stroke="${ink}" stroke-width="1.8" stroke-linejoin="round"/>
+     <path d="M4.5 31.5 C7.5 31.5 8.5 34 6.5 36" fill="${skinHex}" stroke="${ink}" stroke-width="1.5" stroke-linecap="round"/>`;
+
+  const collarDetailSvg =
+    gender === 'female'
+      ? `<!-- Crisp anime shirt collar + ribbon bow or jewel pendant -->
+         <path d="M-13 -88 L-2 -68 L-16 -64 Z" fill="#FFFFFF" stroke="${ink}" stroke-width="1.7" stroke-linejoin="round"/>
+         <path d="M13 -88 L2 -68 L16 -64 Z" fill="#FFFFFF" stroke="${ink}" stroke-width="1.7" stroke-linejoin="round"/>
+         ${
+           det.hasGlasses
+             ? `<path d="M-9 -82 Q0 -63 9 -82" fill="none" stroke="#F59E0B" stroke-width="1.4"/>
+                <circle cx="0" cy="-68" r="3.4" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.3"/>`
+             : `<g transform="translate(0,-70)">
+                  <path d="M0 0 L-13 -7 L-10 6 Z" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.5" stroke-linejoin="round"/>
+                  <path d="M0 0 L13 -7 L10 6 Z" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.5" stroke-linejoin="round"/>
+                  <path d="M-2 2 L-8 19 L-2 16 Z" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.4" stroke-linejoin="round"/>
+                  <path d="M2 2 L8 19 L2 16 Z" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.4" stroke-linejoin="round"/>
+                  <circle cx="0" cy="0" r="3.4" fill="#FEF3C7" stroke="${ink}" stroke-width="1.4"/>
+                </g>`
+         }`
+      : `<!-- Tailored male jacket lapels + inner shirt + necktie -->
+         <path d="M-13 -88 L0 -56 L13 -88 Z" fill="#FFFFFF" stroke="${ink}" stroke-width="1.7" stroke-linejoin="round"/>
+         <path d="M-13 -88 L-19 -68 L-8 -61 Z" fill="${det.outfitShadeHex}" fill-opacity="0.45" stroke="${ink}" stroke-width="1.5" stroke-linejoin="round"/>
+         <path d="M13 -88 L19 -68 L8 -61 Z" fill="${det.outfitShadeHex}" fill-opacity="0.45" stroke="${ink}" stroke-width="1.5" stroke-linejoin="round"/>
+         <polygon points="-3.5,-80 3.5,-80 5,-44 0,-36 -5,-44" fill="${det.ribbonOrTieHex}" stroke="${ink}" stroke-width="1.5" stroke-linejoin="round"/>`;
 
   return `
     <g transform="translate(${x.toFixed(1)},${y.toFixed(1)}) scale(${(scale * squashX).toFixed(3)},${(scale * squashY).toFixed(3)})" opacity="${opacity.toFixed(2)}">
       <!-- Ground contact shadow under shoes -->
-      <ellipse cx="0" cy="4" rx="46" ry="9" fill="#0F172A" fill-opacity="0.18"/>
+      <ellipse cx="0" cy="4" rx="44" ry="8.5" fill="#0F172A" fill-opacity="0.18"/>
 
       <!-- Full-Body Pose Group oriented by facing (+1 right, -1 left) -->
       <g transform="scale(${facing}, 1)">
         <!-- Back Leg -->
-        ${renderLeg(-14, rig.leftThighAngle, rig.leftShinAngle, true)}
+        ${renderLeg(-13, rig.leftThighAngle, rig.leftShinAngle, true)}
         <!-- Front Leg -->
-        ${renderLeg(14, rig.rightThighAngle, rig.rightShinAngle, false)}
+        ${renderLeg(13, rig.rightThighAngle, rig.rightShinAngle, false)}
 
         <!-- Pelvis / Skirt -->
         <g transform="translate(0,${hipDropY.toFixed(1)})">
@@ -1743,43 +1968,59 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
         <!-- Upper Body pivoting at hip (-82 + hipDropY) -->
         <g transform="translate(0,${(-82 + hipDropY + shoulderBreathY * 0.45).toFixed(1)}) rotate(${bodyTiltDeg.toFixed(2)})">
           <!-- Back Articulated Arm -->
-          <g transform="translate(-26,${(-70 + shoulderBreathY * 0.5).toFixed(1)}) rotate(${rig.leftArmAngle.toFixed(1)})">
-            <rect x="-8" y="0" width="16" height="38" rx="8" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.4"/>
+          <g transform="translate(-25,${(-70 + shoulderBreathY * 0.5).toFixed(1)}) rotate(${rig.leftArmAngle.toFixed(1)})">
+            <path d="M-7.5 0 L7.5 0 L6.5 34 C4 37 -4 37 -6.5 34 Z" fill="${outfitHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
             <g transform="translate(0,34) rotate(${rig.leftForearmAngle.toFixed(1)})">
-              <rect x="-7" y="0" width="14" height="32" rx="7" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.4"/>
-              <circle cx="0" cy="34" r="7.5" fill="${skinHex}" stroke="#1E1B18" stroke-width="2.2"/>
+              <path d="M-6.5 0 L6.5 0 L5.5 29 C3 31 -3 31 -5.5 29 Z" fill="${outfitHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+              <rect x="-5.8" y="24" width="11.6" height="5" rx="1.8" fill="#FFFFFF" stroke="${ink}" stroke-width="1.5"/>
+              ${renderHand()}
             </g>
           </g>
 
-          <!-- Torso & Collar (shifted so hip=0, shoulder=-76) -->
-          <path d="M-33 -74 C-35 -86 -20 -90 0 -90 C20 -90 35 -86 33 -74 L35 2 C35 8 28 11 22 11 L-22 11 C-28 11 -35 8 -35 2 Z" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.8"/>
-          <path d="M-13 -88 L0 -62 L13 -88 Z" fill="${outfitAccentHex}" stroke="#1E1B18" stroke-width="2"/>
-          <line x1="0" y1="-62" x2="0" y2="8" stroke="${outfitAccentHex}" stroke-opacity="0.65" stroke-width="2"/>
+          <!-- Tailored Torso + Cel Shading + Collar -->
+          <path d="M-29 -74 C-31 -86 -17 -90 0 -90 C17 -90 31 -86 29 -74 L25 -24 L29 2 C29 7 23 10 18 10 L-18 10 C-23 10 -29 7 -29 2 L-25 -24 Z" fill="${outfitHex}" stroke="${ink}" stroke-width="2.1" stroke-linejoin="round"/>
+          <path d="M16 -84 C25 -80 28 -70 25 -24 L28 2 C28 6 22 9 16 9 L12 9 C18 -20 19 -54 16 -84 Z" fill="${det.outfitShadeHex}" fill-opacity="0.34"/>
+          <line x1="0" y1="-58" x2="0" y2="8" stroke="${outfitAccentHex}" stroke-opacity="0.55" stroke-width="1.6"/>
+          ${collarDetailSvg}
 
           <!-- Neck & Head Group -->
           <g transform="translate(0,-84) rotate(${headTiltDeg.toFixed(2)})">
-            <rect x="-10" y="-12" width="20" height="22" rx="8" fill="${skinHex}" stroke="#1E1B18" stroke-width="2.4"/>
+            <rect x="-8" y="-12" width="16" height="21" rx="7" fill="${skinHex}" stroke="${ink}" stroke-width="1.9"/>
+            <path d="M-7.5 -4 Q0 3 7.5 -4 L7.5 -9 Q0 -4 -7.5 -9 Z" fill="${det.skinShadeHex}" fill-opacity="0.88"/>
             <g transform="translate(0,84)">
               ${backHairSvg}
-              <circle cx="-41" cy="-124" r="8" fill="${skinHex}" stroke="#1E1B18" stroke-width="2.2"/>
-              <circle cx="41" cy="-124" r="8" fill="${skinHex}" stroke="#1E1B18" stroke-width="2.2"/>
-              <path d="M-40 -142 C-42 -106 -22 -84 0 -84 C22 -84 42 -106 40 -142 C38 -174 22 -188 0 -188 C-22 -188 -38 -174 -40 -142 Z" fill="${skinHex}" stroke="#1E1B18" stroke-width="2.6"/>
-              <ellipse cx="-24" cy="-108" rx="7" ry="3.5" fill="#FDA4AF" fill-opacity="0.45"/>
-              <ellipse cx="24" cy="-108" rx="7" ry="3.5" fill="#FDA4AF" fill-opacity="0.45"/>
+              <!-- Delicate anime ears with inner curve -->
+              <ellipse cx="-38" cy="-123" rx="6" ry="8" fill="${skinHex}" stroke="${ink}" stroke-width="1.8"/>
+              <path d="M-39 -126 Q-36 -123 -38 -119" fill="none" stroke="${det.skinShadeHex}" stroke-width="1.5" stroke-linecap="round"/>
+              <ellipse cx="38" cy="-123" rx="6" ry="8" fill="${skinHex}" stroke="${ink}" stroke-width="1.8"/>
+              <path d="M39 -126 Q36 -123 38 -119" fill="none" stroke="${det.skinShadeHex}" stroke-width="1.5" stroke-linecap="round"/>
+
+              <!-- Sculpted V-chin anime face contour -->
+              <path d="M-38 -144 C-39 -112 -24 -91 0 -84 C24 -91 39 -112 38 -144 C36 -175 21 -189 0 -189 C-21 -189 -36 -175 -38 -144 Z" fill="${skinHex}" stroke="${ink}" stroke-width="2.1" stroke-linejoin="round"/>
+              <!-- Soft airbrushed rosy cheek blush + cute anime diagonal hatch marks -->
+              <ellipse cx="-23" cy="-109" rx="9" ry="4.5" fill="#FDA4AF" fill-opacity="0.46"/>
+              <ellipse cx="-23" cy="-109" rx="5.2" ry="2.6" fill="#FB7185" fill-opacity="0.42"/>
+              <ellipse cx="23" cy="-109" rx="9" ry="4.5" fill="#FDA4AF" fill-opacity="0.46"/>
+              <ellipse cx="23" cy="-109" rx="5.2" ry="2.6" fill="#FB7185" fill-opacity="0.42"/>
+              <path d="M-26 -107 L-24 -111 M-21 -107 L-19 -111 M19 -107 L21 -111 M24 -107 L26 -111" stroke="#FB7185" stroke-opacity="0.6" stroke-width="1.2" stroke-linecap="round"/>
+
               ${eyesSvg}
+              ${glassesSvg}
               ${browsSvg}
-              <path d="M0 -114 L3 -107" stroke="#C28E70" stroke-width="2" stroke-linecap="round"/>
+              <!-- Delicate anime nose point -->
+              <path d="M0.5 -113 L2.2 -108.5" stroke="#C28E70" stroke-width="1.6" stroke-linecap="round"/>
               ${mouthSvg}
               ${frontHairSvg}
             </g>
           </g>
 
           <!-- Front Articulated Arm + Hand Prop -->
-          <g transform="translate(26,${(-70 + shoulderBreathY * 0.5).toFixed(1)}) rotate(${rig.rightArmAngle.toFixed(1)})">
-            <rect x="-8" y="0" width="16" height="38" rx="8" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.4"/>
+          <g transform="translate(25,${(-70 + shoulderBreathY * 0.5).toFixed(1)}) rotate(${rig.rightArmAngle.toFixed(1)})">
+            <path d="M-7.5 0 L7.5 0 L6.5 34 C4 37 -4 37 -6.5 34 Z" fill="${outfitHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
             <g transform="translate(0,34) rotate(${rig.rightForearmAngle.toFixed(1)})">
-              <rect x="-7" y="0" width="14" height="32" rx="7" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.4"/>
-              <circle cx="0" cy="34" r="7.5" fill="${skinHex}" stroke="#1E1B18" stroke-width="2.2"/>
+              <path d="M-6.5 0 L6.5 0 L5.5 29 C3 31 -3 31 -5.5 29 Z" fill="${outfitHex}" stroke="${ink}" stroke-width="2" stroke-linejoin="round"/>
+              <rect x="-5.8" y="24" width="11.6" height="5" rx="1.8" fill="#FFFFFF" stroke="${ink}" stroke-width="1.5"/>
+              ${renderHand()}
               ${renderHandPropSvg(handProp)}
             </g>
           </g>

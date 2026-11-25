@@ -7,6 +7,7 @@ import {
   AnimeHandProp,
   AnimeStoryboardBeat,
   ComputedCharRig,
+  getAnimeCharacterVisualDetail,
   getAnimeThemePalette,
   resolveBubbleKaraokeColor,
   tokenizeAnimeKaraokeLine,
@@ -14,7 +15,7 @@ import {
 } from '../shared/animeStoryEngine';
 
 const DEG2RAD = Math.PI / 180;
-const LINE_INK = 0x1e1b18;
+const LINE_INK = 0x3b2828;
 
 export function hexToPixi(hex: string, fallback = 0xffffff): number {
   const clean = (hex ?? '').trim().replace('#', '');
@@ -74,7 +75,10 @@ function createLegBone(
   upperFill: number,
   lowerFill: number,
   shoeFill: number,
+  cuffFill: number,
+  shadeFill: number,
   hipX: number,
+  isFemale: boolean,
   isBack: boolean
 ): { thigh: Container; shin: Container } {
   const thigh = new Container();
@@ -83,31 +87,52 @@ function createLegBone(
 
   const thighGfx = new Graphics();
   thighGfx
-    .roundRect(-9, -2, 18, 44, 9)
+    .moveTo(-8.5, -2)
+    .lineTo(8.5, -2)
+    .lineTo(7, 39)
+    .bezierCurveTo(4, 43, -4, 43, -7, 39)
+    .closePath()
     .fill({ color: upperFill })
-    .stroke({ width: 2.4, color: LINE_INK });
+    .stroke({ width: 2, color: LINE_INK, join: 'round' });
   thigh.addChild(thighGfx);
 
   const shin = new Container();
   shin.position.set(0, 40);
   const shinGfx = new Graphics();
   shinGfx
-    .roundRect(-8, -2, 16, 40, 8)
+    .moveTo(-7, -2)
+    .lineTo(7, -2)
+    .lineTo(6, 37)
+    .bezierCurveTo(3, 40, -3, 40, -6, 37)
+    .closePath()
     .fill({ color: lowerFill })
-    .stroke({ width: 2.4, color: LINE_INK });
+    .stroke({ width: 2, color: LINE_INK, join: 'round' });
+
+  if (isFemale) {
+    shinGfx
+      .roundRect(-7.2, -1, 14.4, 4.5, 1.8)
+      .fill({ color: cuffFill })
+      .stroke({ width: 1.2, color: LINE_INK });
+  } else {
+    shinGfx
+      .moveTo(0, 4)
+      .lineTo(0, 33)
+      .stroke({ width: 1.4, color: shadeFill, alpha: 0.35 });
+  }
+
   shinGfx
-    .moveTo(-9, 36)
-    .lineTo(14, 36)
-    .bezierCurveTo(19, 36, 21, 44, 14, 45)
-    .lineTo(-9, 45)
-    .bezierCurveTo(-12, 45, -12, 36, -9, 36)
+    .moveTo(-8, 36)
+    .lineTo(13, 36)
+    .bezierCurveTo(18, 36, 20, 44, 13, 45)
+    .lineTo(-8, 45)
+    .bezierCurveTo(-11, 45, -11, 36, -8, 36)
     .closePath()
     .fill({ color: shoeFill })
-    .stroke({ width: 2.2, color: LINE_INK });
+    .stroke({ width: 2, color: LINE_INK });
   shinGfx
-    .moveTo(-8, 43)
-    .lineTo(15, 43)
-    .stroke({ width: 1.6, color: 0xffffff, alpha: 0.45 });
+    .moveTo(-4, 37.5)
+    .quadraticCurveTo(5, 37.5, 12, 39)
+    .stroke({ width: 1.4, color: 0xffffff, alpha: 0.35, cap: 'round' });
   shin.addChild(shinGfx);
   thigh.addChild(shin);
 
@@ -124,22 +149,44 @@ function createArmBone(
 
   const upperGfx = new Graphics();
   upperGfx
-    .roundRect(-8, 0, 16, 38, 8)
+    .moveTo(-7.5, 0)
+    .lineTo(7.5, 0)
+    .lineTo(6.5, 34)
+    .bezierCurveTo(4, 37, -4, 37, -6.5, 34)
+    .closePath()
     .fill({ color: outfitFill })
-    .stroke({ width: 2.4, color: LINE_INK });
+    .stroke({ width: 2, color: LINE_INK, join: 'round' });
   upperArm.addChild(upperGfx);
 
   const forearm = new Container();
   forearm.position.set(0, 34);
   const foreGfx = new Graphics();
   foreGfx
-    .roundRect(-7, 0, 14, 32, 7)
+    .moveTo(-6.5, 0)
+    .lineTo(6.5, 0)
+    .lineTo(5.5, 29)
+    .bezierCurveTo(3, 31, -3, 31, -5.5, 29)
+    .closePath()
     .fill({ color: outfitFill })
-    .stroke({ width: 2.4, color: LINE_INK });
+    .stroke({ width: 2, color: LINE_INK, join: 'round' });
+  // Crisp white shirt cuff
   foreGfx
-    .circle(0, 34, 7.5)
+    .roundRect(-5.8, 24, 11.6, 5, 1.8)
+    .fill({ color: 0xffffff })
+    .stroke({ width: 1.5, color: LINE_INK });
+  // Sculpted anime palm + thumb silhouette
+  foreGfx
+    .moveTo(-4.5, 29)
+    .bezierCurveTo(-7, 32, -6.5, 39, -2, 40.5)
+    .bezierCurveTo(2.5, 41.5, 6.5, 39, 7, 34.5)
+    .bezierCurveTo(7.5, 31.5, 5, 29, 3.5, 29)
+    .closePath()
     .fill({ color: skinFill })
-    .stroke({ width: 2.2, color: LINE_INK });
+    .stroke({ width: 1.8, color: LINE_INK, join: 'round' });
+  foreGfx
+    .moveTo(4.5, 31.5)
+    .bezierCurveTo(7.5, 31.5, 8.5, 34, 6.5, 36)
+    .stroke({ width: 1.5, color: LINE_INK, cap: 'round' });
   forearm.addChild(foreGfx);
 
   const propAnchor = new Container();
@@ -194,19 +241,26 @@ export function createPixiCharacterRig(
   profile: AnimeCharacterProfile,
   fontCss: string
 ): PixiCharRigHandle {
+  const det = getAnimeCharacterVisualDetail(profile);
   const skinFill = hexToPixi(profile.skinHex, 0xfce3d0);
+  const skinShadeFill = hexToPixi(det.skinShadeHex, 0xf3c4a8);
   const hairFill = hexToPixi(profile.hairHex, 0x1e293b);
   const hairShadeFill = hexToPixi(profile.hairShadeHex, 0x0f172a);
+  const hairHiFill = hexToPixi(det.hairHighlightHex, 0xfde68a);
   const outfitFill = hexToPixi(profile.outfitHex, 0x4f46e5);
+  const outfitShadeFill = hexToPixi(det.outfitShadeHex, 0x1e293b);
   const outfitAccentFill = hexToPixi(profile.outfitAccentHex, 0xe0e7ff);
   const pantsFill = hexToPixi(profile.pantsHex, 0x1e293b);
+  const pantsShadeFill = hexToPixi(det.skirtOrPantsShadeHex, 0x0f172a);
   const shoeFill = hexToPixi(profile.shoeHex, 0x0f172a);
   const badgeFill = hexToPixi(profile.nameBadgeHex, 0x4338ca);
+  const ribbonTieFill = hexToPixi(det.ribbonOrTieHex, 0xf59e0b);
+  const glassesFrameFill = hexToPixi(det.glassesFrameHex, 0xf97316);
 
   const root = new Container();
 
   const shadow = new Graphics();
-  shadow.ellipse(0, 4, 46, 9).fill({ color: 0x0f172a, alpha: 0.2 });
+  shadow.ellipse(0, 4, 44, 8.5).fill({ color: 0x0f172a, alpha: 0.18 });
   root.addChild(shadow);
 
   const poseFlip = new Container();
@@ -214,29 +268,67 @@ export function createPixiCharacterRig(
 
   const legUpperFill = profile.gender === 'female' ? skinFill : pantsFill;
   const legLowerFill = profile.gender === 'female' ? 0xf8fafc : pantsFill;
-  const backLeg = createLegBone(legUpperFill, legLowerFill, shoeFill, -14, true);
-  const frontLeg = createLegBone(legUpperFill, legLowerFill, shoeFill, 14, false);
+  const backLeg = createLegBone(
+    legUpperFill,
+    legLowerFill,
+    shoeFill,
+    pantsFill,
+    pantsShadeFill,
+    -14,
+    profile.gender === 'female',
+    true
+  );
+  const frontLeg = createLegBone(
+    legUpperFill,
+    legLowerFill,
+    shoeFill,
+    pantsFill,
+    pantsShadeFill,
+    14,
+    profile.gender === 'female',
+    false
+  );
   poseFlip.addChild(backLeg.thigh, frontLeg.thigh);
 
   const pelvis = new Container();
   const pelvisGfx = new Graphics();
   if (profile.gender === 'female') {
     pelvisGfx
-      .moveTo(-32, -88)
-      .lineTo(32, -88)
-      .lineTo(40, -48)
-      .bezierCurveTo(18, -43, -18, -43, -40, -48)
+      .moveTo(-27, -88)
+      .lineTo(27, -88)
+      .lineTo(39, -47)
+      .bezierCurveTo(18, -42, -18, -42, -39, -47)
       .closePath()
       .fill({ color: pantsFill })
-      .stroke({ width: 2.6, color: LINE_INK, join: 'round' });
-    pelvisGfx.moveTo(-14, -84).lineTo(-18, -46).stroke({ width: 1.8, color: 0x334155 });
-    pelvisGfx.moveTo(0, -84).lineTo(0, -45).stroke({ width: 1.8, color: 0x334155 });
-    pelvisGfx.moveTo(14, -84).lineTo(18, -46).stroke({ width: 1.8, color: 0x334155 });
+      .stroke({ width: 2.1, color: LINE_INK, join: 'round' });
+    pelvisGfx
+      .roundRect(-27.5, -90, 55, 6, 2)
+      .fill({ color: pantsShadeFill })
+      .stroke({ width: 1.6, color: LINE_INK });
+    pelvisGfx
+      .roundRect(-4, -90, 8, 6, 1.2)
+      .fill({ color: 0xfde68a })
+      .stroke({ width: 1.2, color: LINE_INK });
+    pelvisGfx
+      .moveTo(-36, -54)
+      .bezierCurveTo(-16, -49, 16, -49, 36, -54)
+      .lineTo(39, -47)
+      .bezierCurveTo(18, -42, -18, -42, -39, -47)
+      .closePath()
+      .fill({ color: pantsShadeFill, alpha: 0.28 });
+    pelvisGfx.moveTo(-13, -82).lineTo(-18, -45).stroke({ width: 1.6, color: pantsShadeFill, alpha: 0.55 });
+    pelvisGfx.moveTo(0, -82).lineTo(0, -44).stroke({ width: 1.6, color: pantsShadeFill, alpha: 0.55 });
+    pelvisGfx.moveTo(13, -82).lineTo(18, -45).stroke({ width: 1.6, color: pantsShadeFill, alpha: 0.55 });
   } else {
     pelvisGfx
-      .poly([-30, -88, 30, -88, 32, -70, -32, -70])
+      .poly([-28, -88, 28, -88, 30, -68, -30, -68])
       .fill({ color: pantsFill })
-      .stroke({ width: 2.4, color: LINE_INK });
+      .stroke({ width: 2, color: LINE_INK });
+    pelvisGfx.roundRect(-28, -89, 56, 5.5, 1.5).fill({ color: pantsShadeFill });
+    pelvisGfx
+      .roundRect(-4, -89, 8, 5.5, 1)
+      .fill({ color: 0xcbd5e1 })
+      .stroke({ width: 1.1, color: LINE_INK });
   }
   pelvis.addChild(pelvisGfx);
   poseFlip.addChild(pelvis);
@@ -250,24 +342,92 @@ export function createPixiCharacterRig(
 
   const torsoMesh = new Graphics();
   torsoMesh
-    .moveTo(-33, -74)
-    .bezierCurveTo(-35, -86, -20, -90, 0, -90)
-    .bezierCurveTo(20, -90, 35, -86, 33, -74)
-    .lineTo(35, 2)
-    .bezierCurveTo(35, 8, 28, 11, 22, 11)
-    .lineTo(-22, 11)
-    .bezierCurveTo(-28, 11, -35, 8, -35, 2)
+    .moveTo(-29, -74)
+    .bezierCurveTo(-31, -86, -17, -90, 0, -90)
+    .bezierCurveTo(17, -90, 31, -86, 29, -74)
+    .lineTo(25, -24)
+    .lineTo(29, 2)
+    .bezierCurveTo(29, 7, 23, 10, 18, 10)
+    .lineTo(-18, 10)
+    .bezierCurveTo(-23, 10, -29, 7, -29, 2)
+    .lineTo(-25, -24)
     .closePath()
     .fill({ color: outfitFill })
-    .stroke({ width: 2.8, color: LINE_INK });
+    .stroke({ width: 2.1, color: LINE_INK, join: 'round' });
+  // Subtle right-side cel shading
   torsoMesh
-    .poly([-13, -88, 0, -62, 13, -88])
-    .fill({ color: outfitAccentFill })
-    .stroke({ width: 2, color: LINE_INK });
+    .moveTo(16, -84)
+    .bezierCurveTo(25, -80, 28, -70, 25, -24)
+    .lineTo(28, 2)
+    .bezierCurveTo(28, 6, 22, 9, 16, 9)
+    .lineTo(12, 9)
+    .bezierCurveTo(18, -20, 19, -54, 16, -84)
+    .closePath()
+    .fill({ color: outfitShadeFill, alpha: 0.34 });
   torsoMesh
-    .moveTo(0, -62)
+    .moveTo(0, -58)
     .lineTo(0, 8)
-    .stroke({ width: 2, color: outfitAccentFill, alpha: 0.65 });
+    .stroke({ width: 1.6, color: outfitAccentFill, alpha: 0.55 });
+
+  if (profile.gender === 'female') {
+    torsoMesh
+      .poly([-13, -88, -2, -68, -16, -64])
+      .fill({ color: 0xffffff })
+      .stroke({ width: 1.7, color: LINE_INK, join: 'round' });
+    torsoMesh
+      .poly([13, -88, 2, -68, 16, -64])
+      .fill({ color: 0xffffff })
+      .stroke({ width: 1.7, color: LINE_INK, join: 'round' });
+    if (det.hasGlasses) {
+      torsoMesh
+        .moveTo(-9, -82)
+        .quadraticCurveTo(0, -63, 9, -82)
+        .stroke({ width: 1.4, color: 0xf59e0b });
+      torsoMesh
+        .circle(0, -68, 3.4)
+        .fill({ color: ribbonTieFill })
+        .stroke({ width: 1.3, color: LINE_INK });
+    } else {
+      // Cute chest ribbon bow (NTT XR Concierge / school uniform style)
+      torsoMesh
+        .poly([0, -70, -13, -77, -10, -64])
+        .fill({ color: ribbonTieFill })
+        .stroke({ width: 1.5, color: LINE_INK, join: 'round' });
+      torsoMesh
+        .poly([0, -70, 13, -77, 10, -64])
+        .fill({ color: ribbonTieFill })
+        .stroke({ width: 1.5, color: LINE_INK, join: 'round' });
+      torsoMesh
+        .poly([-2, -68, -8, -51, -2, -54])
+        .fill({ color: ribbonTieFill })
+        .stroke({ width: 1.4, color: LINE_INK, join: 'round' });
+      torsoMesh
+        .poly([2, -68, 8, -51, 2, -54])
+        .fill({ color: ribbonTieFill })
+        .stroke({ width: 1.4, color: LINE_INK, join: 'round' });
+      torsoMesh
+        .circle(0, -70, 3.4)
+        .fill({ color: 0xfef3c7 })
+        .stroke({ width: 1.4, color: LINE_INK });
+    }
+  } else {
+    torsoMesh
+      .poly([-13, -88, 0, -56, 13, -88])
+      .fill({ color: 0xffffff })
+      .stroke({ width: 1.7, color: LINE_INK, join: 'round' });
+    torsoMesh
+      .poly([-13, -88, -19, -68, -8, -61])
+      .fill({ color: outfitShadeFill, alpha: 0.45 })
+      .stroke({ width: 1.5, color: LINE_INK, join: 'round' });
+    torsoMesh
+      .poly([13, -88, 19, -68, 8, -61])
+      .fill({ color: outfitShadeFill, alpha: 0.45 })
+      .stroke({ width: 1.5, color: LINE_INK, join: 'round' });
+    torsoMesh
+      .poly([-3.5, -80, 3.5, -80, 5, -44, 0, -36, -5, -44])
+      .fill({ color: ribbonTieFill })
+      .stroke({ width: 1.5, color: LINE_INK, join: 'round' });
+  }
   torso.addChild(torsoMesh);
 
   // Neck & Head Group
@@ -277,9 +437,16 @@ export function createPixiCharacterRig(
 
   const neckGfx = new Graphics();
   neckGfx
-    .roundRect(-10, -12, 20, 22, 8)
+    .roundRect(-8, -12, 16, 21, 7)
     .fill({ color: skinFill })
-    .stroke({ width: 2.4, color: LINE_INK });
+    .stroke({ width: 1.9, color: LINE_INK });
+  neckGfx
+    .moveTo(-7.5, -4)
+    .quadraticCurveTo(0, 3, 7.5, -4)
+    .lineTo(7.5, -9)
+    .quadraticCurveTo(0, -4, -7.5, -9)
+    .closePath()
+    .fill({ color: skinShadeFill, alpha: 0.88 });
   neckHead.addChild(neckGfx);
 
   const headLocal = new Container();
@@ -289,44 +456,112 @@ export function createPixiCharacterRig(
   // Back hair with pivot at upper head (-148) for secondary overlapping sway
   const backHair = new Container();
   backHair.position.set(0, -148);
+  const bhGfx = new Graphics();
   if (profile.hairStyle === 'bob') {
-    const bhGfx = new Graphics();
     bhGfx
-      .moveTo(-46, 12)
-      .bezierCurveTo(-56, 38, -56, 76, -44, 92)
-      .lineTo(44, 92)
-      .bezierCurveTo(56, 76, 56, 38, 46, 12)
+      .moveTo(-47, 4)
+      .bezierCurveTo(-57, 36, -57, 82, -43, 102)
+      .bezierCurveTo(-28, 96, -14, 103, 0, 102)
+      .bezierCurveTo(14, 103, 28, 96, 43, 102)
+      .bezierCurveTo(57, 82, 57, 36, 47, 4)
       .closePath()
       .fill({ color: hairShadeFill })
-      .stroke({ width: 2.6, color: LINE_INK });
-    backHair.addChild(bhGfx);
+      .stroke({ width: 2, color: LINE_INK, join: 'round' });
+    bhGfx
+      .moveTo(-42, 22)
+      .bezierCurveTo(-49, 52, -48, 80, -39, 96)
+      .lineTo(-24, 96)
+      .bezierCurveTo(-28, 74, -30, 44, -30, 22)
+      .closePath()
+      .fill({ color: hairFill, alpha: 0.45 });
+    bhGfx
+      .moveTo(42, 22)
+      .bezierCurveTo(49, 52, 48, 80, 39, 96)
+      .lineTo(24, 96)
+      .bezierCurveTo(28, 74, 30, 44, 30, 22)
+      .closePath()
+      .fill({ color: hairFill, alpha: 0.45 });
+  } else if (profile.hairStyle === 'neat' && profile.gender === 'female') {
+    bhGfx
+      .moveTo(-46, 4)
+      .bezierCurveTo(-56, 44, -54, 92, -40, 110)
+      .bezierCurveTo(-26, 104, -12, 110, 0, 108)
+      .bezierCurveTo(12, 110, 26, 104, 40, 110)
+      .bezierCurveTo(54, 92, 56, 44, 46, 4)
+      .closePath()
+      .fill({ color: hairShadeFill })
+      .stroke({ width: 2, color: LINE_INK, join: 'round' });
+    bhGfx
+      .moveTo(-44, 58)
+      .quadraticCurveTo(-32, 64, -20, 58)
+      .stroke({ width: 2.2, color: hairHiFill, alpha: 0.32, cap: 'round' });
+    bhGfx
+      .moveTo(20, 58)
+      .quadraticCurveTo(32, 64, 44, 58)
+      .stroke({ width: 2.2, color: hairHiFill, alpha: 0.32, cap: 'round' });
+  } else {
+    bhGfx
+      .moveTo(-40, 6)
+      .bezierCurveTo(-45, 24, -44, 40, -34, 50)
+      .lineTo(34, 50)
+      .bezierCurveTo(44, 40, 45, 24, 40, 6)
+      .closePath()
+      .fill({ color: hairShadeFill });
   }
+  backHair.addChild(bhGfx);
   headLocal.addChild(backHair);
 
   const faceGfx = new Graphics();
+  // Ears with inner curves
   faceGfx
-    .circle(-41, -124, 8)
+    .ellipse(-38, -123, 6, 8)
     .fill({ color: skinFill })
-    .stroke({ width: 2.2, color: LINE_INK });
+    .stroke({ width: 1.8, color: LINE_INK });
   faceGfx
-    .circle(41, -124, 8)
+    .moveTo(-39, -126)
+    .quadraticCurveTo(-36, -123, -38, -119)
+    .stroke({ width: 1.5, color: skinShadeFill, cap: 'round' });
+  faceGfx
+    .ellipse(38, -123, 6, 8)
     .fill({ color: skinFill })
-    .stroke({ width: 2.2, color: LINE_INK });
+    .stroke({ width: 1.8, color: LINE_INK });
   faceGfx
-    .moveTo(-40, -142)
-    .bezierCurveTo(-42, -106, -22, -84, 0, -84)
-    .bezierCurveTo(22, -84, 42, -106, 40, -142)
-    .bezierCurveTo(38, -174, 22, -188, 0, -188)
-    .bezierCurveTo(-22, -188, -38, -174, -40, -142)
+    .moveTo(39, -126)
+    .quadraticCurveTo(36, -123, 38, -119)
+    .stroke({ width: 1.5, color: skinShadeFill, cap: 'round' });
+
+  // Sculpted V-chin anime face contour
+  faceGfx
+    .moveTo(-38, -144)
+    .bezierCurveTo(-39, -112, -24, -91, 0, -84)
+    .bezierCurveTo(24, -91, 39, -112, 38, -144)
+    .bezierCurveTo(36, -175, 21, -189, 0, -189)
+    .bezierCurveTo(-21, -189, -36, -175, -38, -144)
     .closePath()
     .fill({ color: skinFill })
-    .stroke({ width: 2.6, color: LINE_INK });
-  faceGfx.ellipse(-24, -108, 7, 3.5).fill({ color: 0xfda4af, alpha: 0.45 });
-  faceGfx.ellipse(24, -108, 7, 3.5).fill({ color: 0xfda4af, alpha: 0.45 });
+    .stroke({ width: 2.1, color: LINE_INK, join: 'round' });
+
+  // Soft airbrushed rosy cheek blush + cute anime diagonal hatch marks
+  faceGfx.ellipse(-23, -109, 9, 4.5).fill({ color: 0xfda4af, alpha: 0.46 });
+  faceGfx.ellipse(-23, -109, 5.2, 2.6).fill({ color: 0xfb7185, alpha: 0.42 });
+  faceGfx.ellipse(23, -109, 9, 4.5).fill({ color: 0xfda4af, alpha: 0.46 });
+  faceGfx.ellipse(23, -109, 5.2, 2.6).fill({ color: 0xfb7185, alpha: 0.42 });
   faceGfx
-    .moveTo(0, -114)
-    .lineTo(3, -107)
-    .stroke({ width: 2, color: 0xc28e70, cap: 'round' });
+    .moveTo(-26, -107)
+    .lineTo(-24, -111)
+    .moveTo(-21, -107)
+    .lineTo(-19, -111)
+    .moveTo(19, -107)
+    .lineTo(21, -111)
+    .moveTo(24, -107)
+    .lineTo(26, -111)
+    .stroke({ width: 1.2, color: 0xfb7185, alpha: 0.6, cap: 'round' });
+
+  // Delicate anime nose dot
+  faceGfx
+    .moveTo(0.5, -113)
+    .lineTo(2.2, -108.5)
+    .stroke({ width: 1.6, color: 0xc28e70, cap: 'round' });
   headLocal.addChild(faceGfx);
 
   const leftEye = new Container();
@@ -343,59 +578,161 @@ export function createPixiCharacterRig(
   const mouthGfx = new Graphics();
   headLocal.addChild(leftEye, rightEye, browsGfx, mouthGfx);
 
+  if (det.hasGlasses) {
+    const glassesGfx = new Graphics();
+    glassesGfx.alpha = 0.92;
+    glassesGfx
+      .circle(-17, -121, 11.5)
+      .fill({ color: 0xecfeff, alpha: 0.16 })
+      .stroke({ width: 2.1, color: glassesFrameFill });
+    glassesGfx
+      .circle(17, -121, 11.5)
+      .fill({ color: 0xecfeff, alpha: 0.16 })
+      .stroke({ width: 2.1, color: glassesFrameFill });
+    glassesGfx
+      .moveTo(-5.5, -122)
+      .quadraticCurveTo(0, -124.5, 5.5, -122)
+      .stroke({ width: 2, color: glassesFrameFill });
+    glassesGfx
+      .moveTo(-22, -126)
+      .lineTo(-17, -119)
+      .moveTo(12, -126)
+      .lineTo(17, -119)
+      .stroke({ width: 1.5, color: 0xffffff, alpha: 0.5, cap: 'round' });
+    headLocal.addChild(glassesGfx);
+  }
+
+  // Front hair (local y = absY + 165)
   const frontHair = new Container();
   frontHair.position.set(0, -165);
   const fhGfx = new Graphics();
-  if (profile.hairStyle === 'spiky') {
+
+  // Cheek-framing hime / temple side locks
+  if (profile.gender === 'female') {
     fhGfx
-      .moveTo(-44, 19)
-      .bezierCurveTo(-44, -21, -14, -37, 8, -31)
-      .bezierCurveTo(32, -31, 48, -11, 46, 21)
-      .bezierCurveTo(42, 11, 32, 3, 24, 13)
-      .bezierCurveTo(14, 0, 0, 15, -8, 1)
-      .bezierCurveTo(-18, 17, -32, 7, -44, 19)
+      .moveTo(-45, 7)
+      .bezierCurveTo(-48, 31, -46, 59, -33, 79)
+      .bezierCurveTo(-30, 67, -33, 45, -35, 19)
       .closePath()
       .fill({ color: hairFill })
-      .stroke({ width: 2.6, color: LINE_INK, join: 'round' });
+      .stroke({ width: 1.8, color: LINE_INK, join: 'round' });
     fhGfx
-      .moveTo(-36, -19)
-      .lineTo(-48, -35)
-      .lineTo(-22, -25)
-      .lineTo(-8, -43)
-      .lineTo(6, -25)
-      .lineTo(28, -39)
-      .lineTo(26, -17)
-      .fill({ color: hairFill })
-      .stroke({ width: 2.4, color: LINE_INK, join: 'round' });
-  } else if (profile.hairStyle === 'bob') {
-    fhGfx
-      .moveTo(-47, 23)
-      .bezierCurveTo(-48, -23, -16, -37, 0, -37)
-      .bezierCurveTo(18, -37, 48, -23, 47, 23)
-      .bezierCurveTo(36, 9, 22, 5, 12, 17)
-      .bezierCurveTo(2, 5, -12, 5, -22, 17)
-      .bezierCurveTo(-32, 9, -40, 11, -47, 23)
+      .moveTo(45, 7)
+      .bezierCurveTo(48, 31, 46, 59, 33, 79)
+      .bezierCurveTo(30, 67, 33, 45, 35, 19)
       .closePath()
       .fill({ color: hairFill })
-      .stroke({ width: 2.6, color: LINE_INK, join: 'round' });
-    const clip = new Graphics();
-    clip.roundRect(-6, -2.5, 12, 5, 2.5).fill({ color: 0xf43f5e });
-    clip.position.set(32, 9);
-    clip.rotation = -18 * DEG2RAD;
-    frontHair.addChild(clip);
+      .stroke({ width: 1.8, color: LINE_INK, join: 'round' });
   } else {
     fhGfx
-      .moveTo(-45, 21)
-      .bezierCurveTo(-46, -21, -16, -37, 4, -35)
-      .bezierCurveTo(28, -33, 48, -15, 45, 21)
-      .bezierCurveTo(34, 9, 22, 19, 12, 5)
-      .bezierCurveTo(2, 21, -10, 7, -22, 19)
-      .bezierCurveTo(-32, 7, -40, 13, -45, 21)
+      .moveTo(-43, 11)
+      .bezierCurveTo(-45, 29, -43, 47, -35, 59)
+      .bezierCurveTo(-33, 47, -35, 31, -36, 17)
       .closePath()
       .fill({ color: hairFill })
-      .stroke({ width: 2.6, color: LINE_INK, join: 'round' });
+      .stroke({ width: 1.7, color: LINE_INK, join: 'round' });
+    fhGfx
+      .moveTo(43, 11)
+      .bezierCurveTo(45, 29, 43, 47, 35, 59)
+      .bezierCurveTo(33, 47, 35, 31, 36, 17)
+      .closePath()
+      .fill({ color: hairFill })
+      .stroke({ width: 1.7, color: LINE_INK, join: 'round' });
   }
-  frontHair.addChildAt(fhGfx, 0);
+
+  if (profile.hairStyle === 'spiky') {
+    fhGfx
+      .moveTo(-44, 17)
+      .bezierCurveTo(-45, -21, -15, -37, 8, -31)
+      .bezierCurveTo(32, -31, 47, -11, 45, 19)
+      .bezierCurveTo(40, 8, 31, 0, 23, 15)
+      .bezierCurveTo(15, -3, 2, 16, -6, -1)
+      .bezierCurveTo(-16, 17, -30, 3, -44, 17)
+      .closePath()
+      .fill({ color: hairFill })
+      .stroke({ width: 2, color: LINE_INK, join: 'round' });
+    fhGfx
+      .moveTo(-36, -19)
+      .lineTo(-47, -34)
+      .lineTo(-22, -25)
+      .lineTo(-7, -41)
+      .lineTo(6, -25)
+      .lineTo(27, -38)
+      .lineTo(25, -17)
+      .fill({ color: hairFill })
+      .stroke({ width: 2, color: LINE_INK, join: 'round' });
+  } else if (profile.hairStyle === 'bob') {
+    fhGfx
+      .moveTo(-46, 19)
+      .bezierCurveTo(-47, -23, -16, -37, 0, -37)
+      .bezierCurveTo(18, -37, 47, -23, 46, 19)
+      .bezierCurveTo(37, 7, 26, 6, 18, 18)
+      .bezierCurveTo(11, 6, 5, 6, 0, 20)
+      .bezierCurveTo(-5, 6, -12, 6, -19, 18)
+      .bezierCurveTo(-27, 6, -37, 8, -46, 19)
+      .closePath()
+      .fill({ color: hairFill })
+      .stroke({ width: 2, color: LINE_INK, join: 'round' });
+  } else {
+    fhGfx
+      .moveTo(-45, 19)
+      .bezierCurveTo(-46, -22, -16, -37, 3, -36)
+      .bezierCurveTo(26, -35, 46, -17, 45, 19)
+      .bezierCurveTo(35, 6, 23, 15, 13, 3)
+      .bezierCurveTo(4, 19, -6, 4, -17, 17)
+      .bezierCurveTo(-28, 5, -38, 11, -45, 19)
+      .closePath()
+      .fill({ color: hairFill })
+      .stroke({ width: 2, color: LINE_INK, join: 'round' });
+  }
+
+  // Curved "Angel Ring" glossy hair specular highlight across bangs
+  fhGfx
+    .moveTo(-26, -10)
+    .quadraticCurveTo(-12, -18, 0, -12)
+    .quadraticCurveTo(14, -18, 26, -8)
+    .stroke({ width: 2.6, color: hairHiFill, alpha: 0.28, cap: 'round' });
+  fhGfx
+    .moveTo(-18, -5)
+    .quadraticCurveTo(-8, -10, -2, -7)
+    .moveTo(8, -7)
+    .quadraticCurveTo(16, -11, 22, -5)
+    .stroke({ width: 1.5, color: 0xffffff, alpha: 0.32, cap: 'round' });
+
+  frontHair.addChild(fhGfx);
+
+  if (det.hasSideBow) {
+    const bow = new Graphics();
+    bow.position.set(35, -1);
+    bow.rotation = -22 * DEG2RAD;
+    bow
+      .moveTo(0, 0)
+      .lineTo(-12, -9)
+      .bezierCurveTo(-16, -4, -14, 5, -9, 7)
+      .closePath()
+      .fill({ color: ribbonTieFill })
+      .stroke({ width: 1.6, color: LINE_INK, join: 'round' });
+    bow
+      .moveTo(0, 0)
+      .lineTo(13, -7)
+      .bezierCurveTo(16, -1, 14, 7, 8, 8)
+      .closePath()
+      .fill({ color: ribbonTieFill })
+      .stroke({ width: 1.6, color: LINE_INK, join: 'round' });
+    bow
+      .poly([-2, 2, -7, 15, -1, 13])
+      .fill({ color: ribbonTieFill })
+      .stroke({ width: 1.5, color: LINE_INK, join: 'round' });
+    bow
+      .poly([2, 2, 9, 14, 3, 14])
+      .fill({ color: ribbonTieFill })
+      .stroke({ width: 1.5, color: LINE_INK, join: 'round' });
+    bow
+      .circle(0, 0, 3.6)
+      .fill({ color: 0xfef3c7 })
+      .stroke({ width: 1.5, color: LINE_INK });
+    frontHair.addChild(bow);
+  }
   headLocal.addChild(frontHair);
 
   const frontArm = createArmBone(outfitFill, skinFill, 26);
@@ -461,13 +798,64 @@ export function createPixiCharacterRig(
   };
 }
 
+function drawPixiAnimeEye(
+  g: Graphics,
+  wingDir: number,
+  irisRx: number,
+  irisRy: number,
+  pupilR: number,
+  lookOffsetX: number,
+  irisMain: number,
+  irisDark: number,
+  irisGlow: number
+): void {
+  // Soft borderless Live2D white sclera + gentle upper shadow
+  g.ellipse(0, 1, 10, 9.2).fill({ color: 0xffffff });
+  g.moveTo(-9.2, -2)
+    .quadraticCurveTo(0, -8.6, 9.2, -2)
+    .lineTo(9.2, -5)
+    .quadraticCurveTo(0, -10, -9.2, -5)
+    .closePath()
+    .fill({ color: 0xcbd5e1, alpha: 0.5 });
+
+  // Large vivid multi-layer Live2D iris touching upper/lower lids
+  g.ellipse(lookOffsetX, 1.2, irisRx, irisRy).fill({ color: irisMain });
+  g.ellipse(lookOffsetX, 1.2 - irisRy * 0.34, irisRx * 0.92, irisRy * 0.52).fill({
+    color: irisDark,
+    alpha: 0.72,
+  });
+  g.ellipse(lookOffsetX, 1.2 + irisRy * 0.54, irisRx * 0.72, irisRy * 0.28).fill({
+    color: irisGlow,
+    alpha: 0.88,
+  });
+  g.circle(lookOffsetX, 1.4, pupilR).fill({ color: 0x0f172a });
+  g.circle(lookOffsetX - 2.4, -1.8, 2.7).fill({ color: 0xffffff });
+  g.circle(lookOffsetX + 2.5, 4.1, 1.3).fill({ color: 0xffffff, alpha: 0.96 });
+
+  // Plush curved upper eyelash with wing & delicate double-eyelid crease
+  g.moveTo(-10.2 * wingDir, -1.2)
+    .quadraticCurveTo(0, -10.4, 11.5 * wingDir, -0.2)
+    .stroke({ width: 3.6, color: LINE_INK, cap: 'round' });
+  g.moveTo(-6.5 * wingDir, -11.4)
+    .quadraticCurveTo(0, -14.0, 7.2 * wingDir, -11.0)
+    .stroke({ width: 1.2, color: LINE_INK, alpha: 0.52, cap: 'round' });
+  g.moveTo(-5.8, 9.8)
+    .quadraticCurveTo(0, 11.0, 5.8, 9.8)
+    .stroke({ width: 1.2, color: LINE_INK, alpha: 0.48, cap: 'round' });
+}
+
 function redrawEyesAndBrows(
   handle: PixiCharRigHandle,
   emotion: AnimeEmotion,
   isBowDeep: boolean,
   lookOffsetX: number
 ): void {
-  const { leftEyeGfx, rightEyeGfx, browsGfx } = handle;
+  const { leftEyeGfx, rightEyeGfx, browsGfx, profile } = handle;
+  const det = getAnimeCharacterVisualDetail(profile);
+  const irisMain = hexToPixi(det.irisMainHex, 0x2563eb);
+  const irisDark = hexToPixi(det.irisDarkHex, 0x1e3a8a);
+  const irisGlow = hexToPixi(det.irisGlowHex, 0x93c5fd);
+
   leftEyeGfx.clear();
   rightEyeGfx.clear();
   browsGfx.clear();
@@ -477,56 +865,61 @@ function redrawEyesAndBrows(
       .moveTo(-7, -6)
       .lineTo(7, 0)
       .lineTo(-7, 6)
-      .stroke({ width: 3.2, color: LINE_INK, cap: 'round', join: 'round' });
+      .stroke({ width: 3, color: LINE_INK, cap: 'round', join: 'round' });
     rightEyeGfx
       .moveTo(7, -6)
       .lineTo(-7, 0)
       .lineTo(7, 6)
-      .stroke({ width: 3.2, color: LINE_INK, cap: 'round', join: 'round' });
+      .stroke({ width: 3, color: LINE_INK, cap: 'round', join: 'round' });
   } else if (emotion === 'happy' || emotion === 'wry_smile') {
     leftEyeGfx
-      .moveTo(-9, 2)
-      .quadraticCurveTo(0, -9, 9, 2)
+      .moveTo(-10, 2)
+      .quadraticCurveTo(0, -10, 9, 2)
       .stroke({ width: 3.2, color: LINE_INK, cap: 'round' });
+    leftEyeGfx
+      .moveTo(-11, 1)
+      .lineTo(-7, -2)
+      .stroke({ width: 2.2, color: LINE_INK, cap: 'round' });
     rightEyeGfx
       .moveTo(-9, 2)
-      .quadraticCurveTo(0, -9, 9, 2)
+      .quadraticCurveTo(0, -10, 10, 2)
       .stroke({ width: 3.2, color: LINE_INK, cap: 'round' });
+    rightEyeGfx
+      .moveTo(11, 1)
+      .lineTo(7, -2)
+      .stroke({ width: 2.2, color: LINE_INK, cap: 'round' });
   } else {
-    const irisR = emotion === 'shocked' ? 5.2 : 7.6;
-    for (const g of [leftEyeGfx, rightEyeGfx]) {
-      g.ellipse(0, 0, 9, 10.5)
-        .fill({ color: 0xffffff })
-        .stroke({ width: 2.2, color: LINE_INK });
-      g.circle(lookOffsetX, 1, irisR).fill({ color: 0x1e293b });
-      g.circle(lookOffsetX - 2.4, -2.8, 2.6).fill({ color: 0xffffff });
-    }
+    const irisRx = emotion === 'shocked' ? 5.0 : 7.4;
+    const irisRy = emotion === 'shocked' ? 5.8 : 8.6;
+    const pupilR = emotion === 'shocked' ? 2.1 : 3.0;
+    drawPixiAnimeEye(leftEyeGfx, -1, irisRx, irisRy, pupilR, lookOffsetX, irisMain, irisDark, irisGlow);
+    drawPixiAnimeEye(rightEyeGfx, 1, irisRx, irisRy, pupilR, lookOffsetX, irisMain, irisDark, irisGlow);
   }
 
   if (emotion === 'angry') {
-    browsGfx.moveTo(-29, -141).lineTo(-7, -132).stroke({ width: 3.5, color: LINE_INK, cap: 'round' });
-    browsGfx.moveTo(29, -141).lineTo(7, -132).stroke({ width: 3.5, color: LINE_INK, cap: 'round' });
+    browsGfx.moveTo(-28, -140).lineTo(-7, -132).stroke({ width: 3, color: LINE_INK, cap: 'round' });
+    browsGfx.moveTo(28, -140).lineTo(7, -132).stroke({ width: 3, color: LINE_INK, cap: 'round' });
   } else if (emotion === 'apologetic' || emotion === 'wry_smile') {
-    browsGfx.moveTo(-28, -134).lineTo(-8, -141).stroke({ width: 3, color: LINE_INK, cap: 'round' });
-    browsGfx.moveTo(28, -134).lineTo(8, -141).stroke({ width: 3, color: LINE_INK, cap: 'round' });
+    browsGfx.moveTo(-27, -134).lineTo(-8, -140).stroke({ width: 2.5, color: LINE_INK, cap: 'round' });
+    browsGfx.moveTo(27, -134).lineTo(8, -140).stroke({ width: 2.5, color: LINE_INK, cap: 'round' });
   } else if (emotion === 'shocked') {
     browsGfx
-      .moveTo(-27, -144)
-      .quadraticCurveTo(-17, -151, -7, -144)
-      .stroke({ width: 3, color: LINE_INK, cap: 'round' });
+      .moveTo(-26, -143)
+      .quadraticCurveTo(-17, -149, -8, -143)
+      .stroke({ width: 2.5, color: LINE_INK, cap: 'round' });
     browsGfx
-      .moveTo(7, -144)
-      .quadraticCurveTo(17, -151, 27, -144)
-      .stroke({ width: 3, color: LINE_INK, cap: 'round' });
+      .moveTo(8, -143)
+      .quadraticCurveTo(17, -149, 26, -143)
+      .stroke({ width: 2.5, color: LINE_INK, cap: 'round' });
   } else {
     browsGfx
-      .moveTo(-27, -139)
-      .quadraticCurveTo(-17, -143, -8, -139)
-      .stroke({ width: 2.8, color: LINE_INK, cap: 'round' });
+      .moveTo(-26, -138)
+      .quadraticCurveTo(-17, -142, -8, -138)
+      .stroke({ width: 2.1, color: LINE_INK, cap: 'round' });
     browsGfx
-      .moveTo(8, -139)
-      .quadraticCurveTo(17, -143, 27, -139)
-      .stroke({ width: 2.8, color: LINE_INK, cap: 'round' });
+      .moveTo(8, -138)
+      .quadraticCurveTo(17, -142, 26, -138)
+      .stroke({ width: 2.1, color: LINE_INK, cap: 'round' });
   }
 }
 
@@ -539,44 +932,54 @@ function redrawMouth(handle: PixiCharRigHandle, rig: ComputedCharRig): void {
       rig.mouthViseme === 'i'
         ? 2.6 + rig.mouthPhase * 4.5
         : rig.mouthViseme === 'o' || rig.mouthViseme === 'u'
-        ? 4.2 + rig.mouthPhase * 7.8
-        : 3.5 + rig.mouthPhase * 9.5;
+        ? 4.2 + rig.mouthPhase * 7.6
+        : 3.4 + rig.mouthPhase * 9.0;
     const mw =
       rig.mouthViseme === 'i' || rig.mouthViseme === 'e'
-        ? 7.8 + rig.mouthPhase * 3.5
+        ? 7.6 + rig.mouthPhase * 3.2
         : rig.mouthViseme === 'u' || rig.mouthViseme === 'o'
-        ? 4.2 + rig.mouthPhase * 2.8
-        : 5.5 + (1 - rig.mouthPhase * 0.3) * 5.0;
+        ? 4.2 + rig.mouthPhase * 2.6
+        : 5.4 + (1 - rig.mouthPhase * 0.3) * 4.8;
     mouthGfx
       .ellipse(0, -96, mw, mh)
-      .fill({ color: 0x9f1239 })
-      .stroke({ width: 2.2, color: LINE_INK });
-    mouthGfx.ellipse(0, -96 + mh * 0.45, mw * 0.65, mh * 0.35).fill({ color: 0xfb7185 });
+      .fill({ color: 0x881337 })
+      .stroke({ width: 1.9, color: LINE_INK });
+    mouthGfx.ellipse(0, -96 + mh * 0.42, mw * 0.66, mh * 0.36).fill({ color: 0xfb7185 });
+    if (mh >= 5.2 && (rig.mouthViseme === 'a' || rig.mouthViseme === 'e' || rig.mouthViseme === 'i')) {
+      mouthGfx
+        .moveTo(-mw * 0.72, -96 - mh * 0.45)
+        .quadraticCurveTo(0, -96 - mh * 0.85, mw * 0.72, -96 - mh * 0.45)
+        .lineTo(mw * 0.62, -96 - mh * 0.18)
+        .lineTo(-mw * 0.62, -96 - mh * 0.18)
+        .closePath()
+        .fill({ color: 0xffffff, alpha: 0.92 });
+    }
   } else if (rig.emotion === 'happy') {
     mouthGfx
-      .moveTo(-10, -99)
-      .quadraticCurveTo(0, -89, 10, -99)
-      .stroke({ width: 2.8, color: LINE_INK, cap: 'round' });
+      .moveTo(-9, -99)
+      .quadraticCurveTo(0, -89, 9, -99)
+      .fill({ color: 0xfb7185, alpha: 0.35 })
+      .stroke({ width: 2.4, color: LINE_INK, cap: 'round' });
   } else if (rig.emotion === 'angry') {
     mouthGfx
-      .moveTo(-10, -94)
-      .quadraticCurveTo(0, -101, 10, -94)
-      .stroke({ width: 2.8, color: LINE_INK, cap: 'round' });
+      .moveTo(-9, -94)
+      .quadraticCurveTo(0, -100, 9, -94)
+      .stroke({ width: 2.4, color: LINE_INK, cap: 'round' });
   } else if (rig.emotion === 'shocked') {
     mouthGfx
-      .ellipse(0, -95, 6, 8)
-      .fill({ color: 0x9f1239 })
-      .stroke({ width: 2.2, color: LINE_INK });
+      .ellipse(0, -95, 5.5, 7.2)
+      .fill({ color: 0x881337 })
+      .stroke({ width: 1.9, color: LINE_INK });
   } else if (rig.emotion === 'wry_smile') {
     mouthGfx
-      .moveTo(-9, -97)
-      .quadraticCurveTo(-2, -91, 9, -98)
-      .stroke({ width: 2.6, color: LINE_INK, cap: 'round' });
+      .moveTo(-8, -97)
+      .quadraticCurveTo(-1, -91, 8, -98)
+      .stroke({ width: 2.2, color: LINE_INK, cap: 'round' });
   } else {
     mouthGfx
-      .moveTo(-7, -96)
-      .quadraticCurveTo(0, -93, 7, -96)
-      .stroke({ width: 2.6, color: LINE_INK, cap: 'round' });
+      .moveTo(-6.5, -96)
+      .quadraticCurveTo(0, -93.2, 6.5, -96)
+      .stroke({ width: 2.1, color: LINE_INK, cap: 'round' });
   }
 }
 

@@ -15,6 +15,7 @@ import {
   detectLineLanguage,
   doesVoiceMatchLanguage,
   extractEnglishSearchTerms,
+  extractInlineEmotionTag,
   formatVoiceOptionLabel,
   generateOfflineVietnameseScript,
   getCanvasDimensions,
@@ -1372,14 +1373,22 @@ test('all 14 Studio 2411 variants render distinct SVGs without truncation, suppo
       'What is your biggest strength when leading a cross-functional project under tight deadlines?'
     );
     assert.equal(spec.reactionText, 'Natural!');
-    assert.equal(spec.exampleText, 'e.g. I proactively organized our weekly team check-ins.');
+    if (v === 'friends-chat') {
+      assert.equal(spec.exampleText, undefined);
+    } else {
+      assert.equal(spec.exampleText, 'e.g. I proactively organized our weekly team check-ins.');
+    }
 
     const svg = build2411CardSvg({ spec, width: 720, height: 1280 });
     assert.ok(svg.startsWith('<svg '));
     assert.equal(svg.includes('undefined'), false);
     assert.equal(svg.includes('NaN'), false);
     assert.equal(svg.includes('…'), false, `Variant ${v} truncated text with ellipsis`);
-    assert.ok(svg.includes('e.g. I proactively'), `Variant ${v} should include exampleText footer strip`);
+    if (v === 'friends-chat') {
+      assert.equal(svg.includes('e.g. I proactively'), false, 'friends-chat must suppress Hint/example strip');
+    } else {
+      assert.ok(svg.includes('e.g. I proactively'), `Variant ${v} should include exampleText footer strip`);
+    }
     svgsByVariant.add(svg);
   }
   assert.equal(svgsByVariant.size, 14, 'All 14 variants must produce distinct SVG visuals');
@@ -1530,8 +1539,7 @@ test('Component 2411 wraps long CJK+English copy without ellipsis/overflow and k
     override: { variant: 'friends-chat', animationIn: 'random' },
   });
   assert.equal(quizChatSpec.layoutKind, 'quiz_prompt');
-  assert.ok(quizChatSpec.exampleText?.startsWith('Hint:'));
-  assert.equal(quizChatSpec.exampleText?.toLowerCase().includes('watch out for her'), false);
+  assert.equal(quizChatSpec.exampleText, undefined);
   const quizChatSvg = build2411CardSvg({
     spec: quizChatSpec,
     width: 720,
@@ -2000,45 +2008,172 @@ test('Studio 2411 filters Lesson Topic labels, preserves unbroken PR tokens, and
   assert.ok(shortH > 0 && shortH < longH - 20, `Expected compact short bubble (${shortH}) < long bubble (${longH})`);
 });
 
-test('VOICE_CATALOG exposes expanded voices across Edge/Google and ElevenLabs with explicit TTS labels', () => {
-  assert.ok(VOICE_CATALOG.length >= 25, `Expected at least 25 catalog voices, got ${VOICE_CATALOG.length}`);
+test('VOICE_CATALOG exposes Edge Neural voices across vi/ja/en with explicit TTS labels and legacy el-* guard', () => {
+  assert.ok(VOICE_CATALOG.length >= 15, `Expected at least 15 catalog voices, got ${VOICE_CATALOG.length}`);
   const edgeVoices = VOICE_CATALOG.filter((v) => v.ttsProvider === 'edge_auto');
-  const elVoices = VOICE_CATALOG.filter((v) => v.ttsProvider === 'elevenlabs');
-  assert.ok(edgeVoices.length >= 15);
-  assert.ok(elVoices.length >= 10);
+  assert.equal(edgeVoices.length, VOICE_CATALOG.length);
 
   for (const v of VOICE_CATALOG) {
     const formatted = formatVoiceOptionLabel(v);
     assert.ok(formatted.startsWith(`[${v.ttsLabel}] `), `Voice label missing TTS tag: ${formatted}`);
     assert.equal(getVoiceCatalogItem(v.id)?.id, v.id);
-    assert.equal(isElevenLabsVoiceId(v.id), v.ttsProvider === 'elevenlabs');
+    assert.equal(isElevenLabsVoiceId(v.id), false);
   }
 
-  assert.equal(isElevenLabsVoiceId('el-custom:myVoice123'), true);
+  assert.equal(isElevenLabsVoiceId('el-rachel'), true);
   assert.equal(isElevenLabsVoiceId('ja-JP-DaichiNeural'), false);
-  assert.equal(doesVoiceMatchLanguage('el-rachel', 'ja'), true);
+  assert.equal(doesVoiceMatchLanguage('vi-VN-HoaiMyNeural', 'vi'), true);
   assert.equal(doesVoiceMatchLanguage('ja-JP-DaichiNeural', 'ja'), true);
+  assert.equal(doesVoiceMatchLanguage('en-US-JennyNeural', 'en'), true);
 });
 
-test('planNarrationSegments preserves ElevenLabs primary and secondary voices across ja_en Q&A scripts', () => {
+test('planNarrationSegments preserves Edge primary/secondary voices, extracts [check_fridge_panic], and embeds emotion tags in SRT', () => {
+  const lineWithEmotion = 'A: [check_fridge_panic] 「冷蔵庫が空っぽだ！」を英語で言うと？ [PAUSE]';
+  assert.equal(extractInlineEmotionTag(lineWithEmotion), 'check_fridge_panic');
+  assert.equal(
+    stripNarrationTags(lineWithEmotion),
+    '「冷蔵庫が空っぽだ！」を英語で言うと？'
+  );
+
   const segs = planNarrationSegments({
     script: [
-      'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
-      'English: Watch out for her!',
+      lineWithEmotion,
+      'B: [relieved] The fridge is completely empty!',
     ].join('\n'),
     language: 'ja_en',
     scriptStyle: 'language_challenge',
-    voiceId: 'el-elli',
+    voiceId: 'ja-JP-NanamiNeural',
     dualVoiceEnabled: true,
-    secondaryVoiceId: 'el-custom:customVoice99',
+    secondaryVoiceId: 'en-US-JennyNeural',
     pauseBetweenLinesSec: 5,
   });
 
   assert.equal(segs.length, 2);
-  assert.equal(segs[0].voiceId, 'el-elli');
+  assert.equal(segs[0].voiceId, 'ja-JP-NanamiNeural');
   assert.equal(segs[0].voiceSlot, 'primary');
-  assert.equal(segs[1].voiceId, 'el-custom:customVoice99');
+  assert.equal(segs[0].emotionTag, 'check_fridge_panic');
+  assert.equal(segs[0].text.includes('check_fridge_panic'), false);
+  assert.equal(segs[1].voiceId, 'en-US-JennyNeural');
   assert.equal(segs[1].voiceSlot, 'secondary');
+  assert.equal(segs[1].emotionTag, 'relieved');
+  assert.equal(segs[1].text.includes('relieved'), false);
+
+  const timings: RawSegmentTiming[] = [
+    {
+      text: segs[0].text,
+      voiceSlot: 'primary',
+      emotionTag: segs[0].emotionTag,
+      startSec: 0,
+      endSec: 2.4,
+    },
+    {
+      text: segs[1].text,
+      voiceSlot: 'secondary',
+      emotionTag: segs[1].emotionTag,
+      startSec: 2.6,
+      endSec: 4.9,
+    },
+  ];
+  const srt = buildSrtFromCues(buildDualSubtitleCues(timings));
+  assert.ok(srt.includes('[check_fridge_panic]'), `Expected [check_fridge_panic] in SRT:\n${srt}`);
+  assert.ok(srt.includes('[relieved]'), `Expected [relieved] in SRT:\n${srt}`);
 });
 
+test('friends-chat and dualVoiceEnabled suppress Hint strip and prevTargetText in Studio 2411 card spec', () => {
+  const friendsChatSpec = build2411CardSpecForLine({
+    rawLine: 'B: Watch out for her!',
+    lineIndex: 1,
+    totalLines: 4,
+    isSecondarySlot: true,
+    dualVoiceEnabled: true,
+    scriptStyle: 'language_challenge',
+    override: { variant: 'friends-chat' },
+    prevTargetText: '彼女には気をつけて！',
+  });
+
+  assert.equal(friendsChatSpec.variant, 'friends-chat');
+  assert.equal(friendsChatSpec.exampleText, undefined);
+  assert.equal(friendsChatSpec.prevTargetText, undefined);
+});
+
+test('friends-chat answer card expands >= 1/3 frame height and wraps long English target answers without truncation', () => {
+  const longEnglishAnswer =
+    "Take it easy and don't push yourself too hard when everything feels overwhelming!";
+  const answerSpec = build2411CardSpecForLine({
+    rawLine: `English: ${longEnglishAnswer}`,
+    lineIndex: 2,
+    totalLines: 6,
+    isSecondarySlot: true,
+    dualVoiceEnabled: true,
+    scriptStyle: 'language_challenge',
+    override: { variant: 'friends-chat' },
+    promptPreviewText: 'Khi mọi thứ quá tải thì đừng tự ép bản thân quá mức nhé!',
+  });
+
+  const portraitSvg = build2411CardSvg({
+    spec: answerSpec,
+    width: 720,
+    height: 1280,
+    speakerAPose: 'idle',
+    speakerBPose: 'talking',
+  });
+
+  assert.equal(portraitSvg.includes('…'), false, 'Long English answer must not be ellipsized');
+  assert.equal(portraitSvg.includes('...'), false, 'Long English answer must not truncate with ...');
+  assert.equal(portraitSvg.includes('NaN'), false);
+  assert.equal(portraitSvg.includes('undefined'), false);
+
+  // Outer card rect carries stroke-width="2.5"; confirm card height >= 33% of 1280 (~1/3 frame height)
+  const cardMatch = portraitSvg.match(/<rect x="36" y="\d+" width="648" height="(\d+)"[^>]+stroke-width="2\.5"/);
+  assert.ok(cardMatch, 'Expected outer friends-chat card rect in portrait SVG');
+  const outerCardH = Number(cardMatch[1]);
+  assert.ok(
+    outerCardH >= Math.round(1280 * 0.33),
+    `Expected friends-chat Q&A card height (${outerCardH}) >= 1/3 of 1280 (${Math.round(1280 * 0.33)})`
+  );
+
+  // Confirm words from start & end of the long English sentence all render in SVG tspans/text
+  assert.ok(portraitSvg.includes('Take it easy'));
+  assert.ok(portraitSvg.includes('overwhelming!'));
+});
+
+test('buildContextualSceneComponentsForScript pairs [VI] prompt with [EN] answer without duplicating English into Speaker A', () => {
+  const script = [
+    'Tiêu đề: Thực hành phản xạ tiếng Anh mỗi ngày!',
+    '[VI] Câu 1: Khi mọi thứ quá tải thì đừng tự ép bản thân quá mức nhé! [PAUSE]',
+    '[EN] Take it easy and do not push yourself too hard when everything feels overwhelming!',
+    'Outro: Lưu video lại để luyện tập thêm nhé!',
+  ].join('\n');
+
+  const comps = buildContextualSceneComponentsForScript({
+    script,
+    scriptStyle: 'language_challenge',
+    dualVoiceEnabled: true,
+    pauseBetweenLinesSec: 5,
+  });
+
+  assert.equal(comps.length, 4);
+  assert.equal(comps[1].promptPreviewText, undefined);
+  assert.equal(
+    comps[2].promptPreviewText,
+    'Câu 1: Khi mọi thứ quá tải thì đừng tự ép bản thân quá mức nhé!'
+  );
+  assert.equal(
+    comps[2].speechText,
+    'Take it easy and do not push yourself too hard when everything feels overwhelming!'
+  );
+
+  const answerSpec = build2411CardSpecForLine({
+    rawLine: '[EN] Take it easy and do not push yourself too hard when everything feels overwhelming!',
+    lineIndex: 2,
+    totalLines: 4,
+    isSecondarySlot: true,
+    dualVoiceEnabled: true,
+    scriptStyle: 'language_challenge',
+    override: comps[2],
+  });
+  const svg = build2411CardSvg({ spec: answerSpec, width: 720, height: 1280 });
+  assert.ok(svg.includes('Khi mọi thứ quá tải'));
+  assert.ok(svg.includes('overwhelming!'));
+});
 

@@ -9,13 +9,10 @@ import {
   Copy,
   Download,
   ExternalLink,
-  Eye,
-  EyeOff,
   Film,
   Folder,
   FolderPlus,
   Image as ImageIcon,
-  KeyRound,
   Layers,
   LayoutGrid,
   ListChecks,
@@ -74,6 +71,7 @@ import {
   buildScenePromptsFromScript,
   doesVoiceMatchLanguage,
   extractEnglishSearchTerms,
+  extractInlineEmotionTag,
   formatVoiceOptionLabel,
   generateOfflineVietnameseScript,
   getDefaultSecondaryVoiceForLanguage,
@@ -84,7 +82,6 @@ import {
   hasCjkChars,
   hasVietnameseDiacritics,
   isBilingualLanguage,
-  isElevenLabsVoiceId,
   isKnownPresetSubject,
   NEUTRAL_BG_THEMES,
   normalizeOutputSubdir,
@@ -241,19 +238,6 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const [isPreviewingTts, setIsPreviewingTts] = useState(false);
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const [ttsPreviewNote, setTtsPreviewNote] = useState<string | null>(null);
-  const [showElKey, setShowElKey] = useState(false);
-  const [isCheckingElKey, setIsCheckingElKey] = useState(false);
-  const [elKeyStatus, setElKeyStatus] = useState<{ ok: boolean; message: string } | null>(null);
-  const [customElVoices, setCustomElVoices] = useState<
-    Array<{ id: VoiceOptionId; name: string; category?: string }>
-  >(() => {
-    try {
-      const raw = window.localStorage.getItem('mpt_vn_el_voices_v1');
-      return raw ? (JSON.parse(raw) as Array<{ id: VoiceOptionId; name: string; category?: string }>) : [];
-    } catch {
-      return [];
-    }
-  });
   const [captionReplayNonce, setCaptionReplayNonce] = useState(0);
   const [previewCountdown, setPreviewCountdown] = useState<number | null>(null);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
@@ -568,50 +552,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     { roomOverride: config.animeRoomOverride }
   );
 
-  const handleVerifyElevenLabsKey = async () => {
-    setIsCheckingElKey(true);
-    setElKeyStatus(null);
-    try {
-      const res = await fetch('/api/elevenlabs/voices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: config.elevenLabsApiKey ?? '' }),
-      });
-      const data = await safeParseJsonResponse<{
-        ok?: boolean;
-        voices?: Array<{ id: VoiceOptionId; name: string; category?: string }>;
-        error?: string;
-      }>(res, 'Không kiểm tra được ELEVENLABS_API_KEY.');
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || 'ELEVENLABS_API_KEY chưa hợp lệ.');
-      }
-      const fetched = Array.isArray(data.voices) ? data.voices : [];
-      setCustomElVoices(fetched);
-      try {
-        window.localStorage.setItem('mpt_vn_el_voices_v1', JSON.stringify(fetched));
-      } catch {
-        // Ignore storage quota errors
-      }
-      setElKeyStatus({
-        ok: true,
-        message: `Kết nối ElevenLabs thành công! Đã tải ${fetched.length} giọng từ tài khoản của bạn.`,
-      });
-      onChangeConfig({ ttsProvider: 'elevenlabs' });
-    } catch (err) {
-      setElKeyStatus({
-        ok: false,
-        message: err instanceof Error ? err.message : 'Lỗi kết nối ElevenLabs API.',
-      });
-    } finally {
-      setIsCheckingElKey(false);
-    }
-  };
-
   const renderVoiceSelectOptions = () => {
     const viVoices = VOICE_CATALOG.filter((v) => v.language === 'vi');
     const jaVoices = VOICE_CATALOG.filter((v) => v.language === 'ja');
     const enVoices = VOICE_CATALOG.filter((v) => v.language === 'en');
-    const elVoices = VOICE_CATALOG.filter((v) => v.language === 'multi');
     return (
       <>
         <optgroup label="Tiếng Việt · Edge Neural / Google TTS">
@@ -635,22 +579,6 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             </option>
           ))}
         </optgroup>
-        <optgroup label="ElevenLabs AI · Đa ngôn ngữ (Cần ELEVENLABS_API_KEY)">
-          {elVoices.map((v) => (
-            <option key={v.id} value={v.id}>
-              {formatVoiceOptionLabel(v)}
-            </option>
-          ))}
-        </optgroup>
-        {customElVoices.length > 0 && (
-          <optgroup label="ElevenLabs Account · Giọng riêng của bạn">
-            {customElVoices.map((cv) => (
-              <option key={cv.id} value={cv.id}>
-                {`[ElevenLabs Account] ${cv.name}${cv.category ? ` (${cv.category})` : ''}`}
-              </option>
-            ))}
-          </optgroup>
-        )}
       </>
     );
   };
@@ -810,6 +738,25 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         stripNarrationTags(activeRawLine).includes(rawActiveSentence)
       ? { speechText: rawActiveSentence }
       : rawActive2411Override;
+  const isCandidateSecondary = (
+    lineIdx: number,
+    candidateLine: string,
+    candidatePres: ReturnType<typeof analyzeScriptLinePresentation>
+  ): boolean => {
+    const seg = previewBaseSegments.find(
+      (s) =>
+        s.rawLineIndex === lineIdx &&
+        s.segmentKind !== 'recap' &&
+        s.segmentKind !== 'summary'
+    );
+    if (seg) return seg.voiceSlot === 'secondary';
+    return (
+      candidatePres.roleKind === 'answer' ||
+      /^\s*(?:\[(?:V2|2|B|EN|JA)\]|(?:B|Speaker\s*2|Người\s*2|English|Japanese|Tiếng\s*Anh|Tiếng\s*Nhật)\s*[:：])/i.test(
+        candidateLine
+      )
+    );
+  };
   let prevTargetForActive2411: string | undefined;
   let promptPreviewForActive2411: string | undefined;
   if (!activeIsSecondarySlot && !activeIsIntroOrOutro && activeRawLineIdx !== null && activeRawLineIdx > 0) {
@@ -818,10 +765,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       const candidatePres = analyzeScriptLinePresentation(candidateLine, {
         scriptStyle: config.scriptStyle,
       });
-      const looksSecondary =
-        candidatePres.roleKind === 'answer' ||
-        /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(candidateLine);
-      if (looksSecondary && candidatePres.cleanText) {
+      if (isCandidateSecondary(pi, candidateLine, candidatePres) && candidatePres.cleanText) {
         prevTargetForActive2411 = candidatePres.cleanText;
         break;
       }
@@ -832,11 +776,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       const candidatePres = analyzeScriptLinePresentation(candidateLine, {
         scriptStyle: config.scriptStyle,
       });
-      const looksSecondary =
-        candidatePres.roleKind === 'answer' ||
-        /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(candidateLine);
       if (
-        !looksSecondary &&
+        !isCandidateSecondary(pi, candidateLine, candidatePres) &&
         candidatePres.roleKind !== 'title' &&
         candidatePres.roleKind !== 'outro' &&
         candidatePres.cleanText
@@ -867,7 +808,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     animationSeed: captionReplayNonce,
     override: active2411Override,
   });
-  const active2411CardKey = `${safeActiveIdx}_${active2411Spec.variant}_${active2411Spec.resolvedAnimationIn}_${captionReplayNonce}`;
+  const isFriendsChatActive =
+    active2411Spec.variant === 'friends-chat' || active2411Spec.variant === 'avatar-speech';
+  const active2411CardKey = isFriendsChatActive
+    ? `continuous_${active2411Spec.variant}_${config.studio2411Theme ?? 'cards_pastel'}`
+    : `${safeActiveIdx}_${active2411Spec.variant}_${active2411Spec.resolvedAnimationIn}_${captionReplayNonce}`;
 
   useEffect(() => {
     const nextSnap = {
@@ -889,7 +834,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       override: active2411Override,
     };
     const prevSnap = current2411SnapRef.current;
-    if (prevSnap && prevSnap.key !== active2411CardKey && config.materialSource === 'studio_2411') {
+    if (isFriendsChatActive) {
+      setExiting2411Card(null);
+    } else if (prevSnap && prevSnap.key !== active2411CardKey && config.materialSource === 'studio_2411') {
       setExiting2411Card(prevSnap);
       if (exit2411TimerRef.current !== null) {
         window.clearTimeout(exit2411TimerRef.current);
@@ -899,16 +846,17 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       }, 460);
     }
     current2411SnapRef.current = nextSnap;
-  }, [active2411CardKey]);
+  }, [active2411CardKey, isFriendsChatActive]);
 
   const playServerTtsBeat = async (params: {
     text: string;
     voiceId: VoiceOptionId;
+    emotionTag?: string;
     fallbackDelayMs: number;
     onFinished: () => void;
     onFallbackSpeak: () => void;
   }) => {
-    const { text, voiceId, fallbackDelayMs, onFinished, onFallbackSpeak } = params;
+    const { text, voiceId, emotionTag, fallbackDelayMs, onFinished, onFallbackSpeak } = params;
     const clean = stripNarrationTags(text);
     if (!clean) {
       previewPlayTimerRef.current = window.setTimeout(() => {
@@ -945,12 +893,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         body: JSON.stringify({
           text: clean,
           voiceId,
-          ttsProvider:
-            config.ttsProvider === 'elevenlabs' || isElevenLabsVoiceId(voiceId)
-              ? 'elevenlabs'
-              : config.ttsProvider,
+          emotionTag,
+          ttsProvider: config.ttsProvider,
           voiceRate: config.voiceRate,
-          elevenLabsApiKey: config.elevenLabsApiKey,
           dualVoiceEnabled: false,
         }),
       });
@@ -983,7 +928,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       audio.volume = Math.max(0.2, Math.min(1.0, config.voiceVolume || 1.0));
       stagePreviewAudioRef.current = audio;
 
-      // Real-time Web Audio amplitude envelope for accurate ElevenLabs lip-sync
+      // Real-time Web Audio RMS amplitude envelope for tight mouth/hand lip-sync
       const stopSpeechMeter = () => {
         if (speechMeterRafRef.current !== null) {
           window.cancelAnimationFrame(speechMeterRafRef.current);
@@ -1006,7 +951,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           const srcNode = ctx.createMediaElementSource(audio);
           const analyser = ctx.createAnalyser();
           analyser.fftSize = 256;
-          analyser.smoothingTimeConstant = 0.45;
+          analyser.smoothingTimeConstant = 0.4;
           srcNode.connect(analyser);
           analyser.connect(ctx.destination);
           const buf = new Uint8Array(analyser.fftSize);
@@ -1021,13 +966,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               sumSq += norm * norm;
             }
             const rms = Math.sqrt(sumSq / buf.length);
-            speechLevelRef.current = Math.min(1, rms * 3.4);
+            speechLevelRef.current = Math.min(1, rms * 3.8);
             speechMeterRafRef.current = window.requestAnimationFrame(sampleLevel);
           };
           speechMeterRafRef.current = window.requestAnimationFrame(sampleLevel);
         }
       } catch {
-        // Gracefully fall back to syllable cadence if Web Audio routing is unavailable
         speechLevelRef.current = undefined;
       }
 
@@ -1039,7 +983,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         if (!previewPlayingRef.current) return;
         previewPlayTimerRef.current = window.setTimeout(() => {
           if (previewPlayingRef.current) onFinished();
-        }, 220);
+        }, 60);
       };
 
       audio.onended = finishOnce;
@@ -1094,10 +1038,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         const delayMs = Math.max(1700, Math.round(beat.estDurationSec * 1000));
         const shouldSpeak = !beat.isStageCue || Boolean(config.animeReadStageDirections);
 
-        if (shouldSpeak && (config.ttsProvider === 'elevenlabs' || isElevenLabsVoiceId(charVoiceId))) {
+        if (shouldSpeak && beat.spokenText.trim()) {
           void playServerTtsBeat({
             text: beat.spokenText,
             voiceId: charVoiceId,
+            emotionTag: beat.emotionTag || beat.action || beat.emotion,
             fallbackDelayMs: delayMs,
             onFinished: () => runAnimeBeat(idx + 1),
             onFallbackSpeak: () =>
@@ -1111,14 +1056,6 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           return;
         }
 
-        if (shouldSpeak) {
-          speakPreviewSlideText(
-            beat.spokenText,
-            charProfile?.gender === 'female',
-            charVoiceId,
-            charProfile?.pitchRatio
-          );
-        }
         previewPlayTimerRef.current = window.setTimeout(() => {
           if (!previewPlayingRef.current) return;
           runAnimeBeat(idx + 1);
@@ -1171,18 +1108,17 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         }
       };
 
-      if (lineText && (config.ttsProvider === 'elevenlabs' || isElevenLabsVoiceId(segVoiceId))) {
+      if (lineText) {
         void playServerTtsBeat({
           text: lineText,
           voiceId: segVoiceId,
+          emotionTag: extractInlineEmotionTag(rawLineForIdx),
           fallbackDelayMs: hasPause && pauseSec > 0 ? 1250 : readDelayMs,
           onFinished: advanceAfterLine,
           onFallbackSpeak: () => speakPreviewSlideText(lineText, isSecondary, segVoiceId),
         });
         return;
       }
-
-      speakPreviewSlideText(lineText, isSecondary, segVoiceId);
 
       if (hasPause && pauseSec > 0) {
         previewPlayTimerRef.current = window.setTimeout(() => {
@@ -1280,28 +1216,18 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       autoLangPatch.pauseBetweenLinesSec =
         (config.pauseBetweenLinesSec ?? 0) > 0 ? config.pauseBetweenLinesSec : 5;
       autoLangPatch.clockTickEnabled = config.clockTickEnabled !== false;
-      const keepElevenLabs =
-        config.ttsProvider === 'elevenlabs' ||
-        isElevenLabsVoiceId(config.voiceId) ||
-        isElevenLabsVoiceId(config.secondaryVoiceId ?? '');
       if (hasJa && !hasVi) {
         autoLangPatch.language = 'ja_en';
-        if (!keepElevenLabs) {
-          autoLangPatch.voiceId = 'ja-JP-NanamiNeural';
-          autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
-        }
+        autoLangPatch.voiceId = 'ja-JP-NanamiNeural';
+        autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
       } else if (hasVi && hasJa) {
         autoLangPatch.language = 'vi_ja';
-        if (!keepElevenLabs) {
-          autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
-          autoLangPatch.secondaryVoiceId = 'ja-JP-NanamiNeural';
-        }
+        autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
+        autoLangPatch.secondaryVoiceId = 'ja-JP-NanamiNeural';
       } else if (hasVi && hasEnTarget) {
         autoLangPatch.language = 'bilingual';
-        if (!keepElevenLabs) {
-          autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
-          autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
-        }
+        autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
+        autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
       }
       if (pastedLines.some((l) => /^\s*(?:A|Answer)\s*[:：]/i.test(l))) {
         autoLangPatch.fullAnswerRecapMode =
@@ -1709,7 +1635,6 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           summarizeAtEnd: !isAnimeMode && Boolean(config.summarizeAtEnd),
           ttsProvider: config.ttsProvider,
           voiceRate: config.voiceRate,
-          elevenLabsApiKey: config.elevenLabsApiKey,
         }),
       });
       const data = await safeParseJsonResponse<{
@@ -1758,6 +1683,57 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     }
     const filename = fileUrl.split('/').pop() || downloadName;
     return `/api/download/${encodeURIComponent(filename)}?name=${encodeURIComponent(downloadName)}`;
+  };
+
+  const triggerBlobDownload = (blob: Blob, filename: string) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+  };
+
+  const handleDownloadFile = async (params: {
+    fileUrl: string;
+    downloadName: string;
+    savedPath?: string;
+    inlineTextContent?: string;
+  }) => {
+    const { fileUrl, downloadName, savedPath, inlineTextContent } = params;
+    if (typeof inlineTextContent === 'string' && inlineTextContent.trim().length > 0) {
+      const blob = new Blob([inlineTextContent], { type: 'application/x-subrip;charset=utf-8' });
+      triggerBlobDownload(blob, downloadName);
+      return;
+    }
+    const apiUrl = toDownloadUrl(fileUrl, downloadName, savedPath);
+    try {
+      const res = await fetch(apiUrl, { credentials: 'same-origin' });
+      if (res.ok) {
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.includes('text/html')) {
+          const blob = await res.blob();
+          triggerBlobDownload(blob, downloadName);
+          return;
+        }
+      }
+      const directRes = await fetch(fileUrl, { credentials: 'same-origin' });
+      if (directRes.ok) {
+        const contentType = (directRes.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.includes('text/html')) {
+          const blob = await directRes.blob();
+          triggerBlobDownload(blob, downloadName);
+          return;
+        }
+      }
+      setVideoPlaybackError(
+        'Máy chủ trả về trang HTML thay vì tệp cần tải — vui lòng kiểm tra đăng nhập phiên preview rồi thử lại.'
+      );
+    } catch {
+      setVideoPlaybackError('Không thể tải xuống tệp lúc này, vui lòng thử lại.');
+    }
   };
 
   const resolvedOutputDir = normalizeOutputSubdir(config.outputDir);
@@ -1946,7 +1922,6 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                               ...(config.animeCharacterVoices ?? {}),
                               [ch.id]: nextVoice,
                             },
-                            ...(isElevenLabsVoiceId(nextVoice) ? { ttsProvider: 'elevenlabs' } : {}),
                           });
                         }}
                         className="w-full px-2 py-1 text-[11px] border border-slate-200 rounded bg-white text-slate-900"
@@ -1974,7 +1949,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {!isAnimeMode && (
-              <div>
+              <div className="sm:col-span-2">
                 <label htmlFor="mpt-material-source" className="block text-xs font-medium text-slate-700 mb-1">
                   Nguồn video B-roll
                 </label>
@@ -2083,10 +2058,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         />
                       ))}
                     </div>
-                    <div className="text-[11px] font-semibold text-slate-900 leading-tight line-clamp-2">
+                    <div className="text-[11px] font-semibold text-slate-900 leading-snug">
                       Xoay vòng tự động
                     </div>
-                    <div className="text-[10px] text-slate-500 truncate mt-auto pt-0.5">
+                    <div className="text-[10px] text-slate-500 mt-auto pt-0.5 leading-snug">
                       Đổi nền mượt mỗi câu
                     </div>
                   </button>
@@ -2116,10 +2091,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                           alt={bg.title}
                           className="w-full h-16 object-cover rounded border border-black/10 mb-1.5 bg-slate-900"
                         />
-                        <div className="text-[11px] font-semibold text-slate-900 leading-tight line-clamp-2">
+                        <div className="text-[11px] font-semibold text-slate-900 leading-snug">
                           {bg.title}
                         </div>
-                        <div className="text-[10px] text-slate-500 truncate mt-auto pt-0.5">
+                        <div className="text-[10px] text-slate-500 mt-auto pt-0.5 leading-snug">
                           {bg.categoryLabel}
                         </div>
                       </button>
@@ -2166,7 +2141,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     </button>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {STUDIO_2411_THEMES.map((theme) => {
                     const selected = (config.studio2411Theme ?? 'cards_pastel') === theme.id;
                     return (
@@ -2181,7 +2156,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                             customScenes: undefined,
                           });
                         }}
-                        className={`p-2 rounded-lg border text-left transition-all ${
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
                           selected
                             ? 'border-indigo-600 ring-2 ring-indigo-200 bg-white'
                             : 'border-slate-200 bg-white/80 hover:border-slate-400'
@@ -2205,16 +2180,16 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                             style={{ backgroundColor: theme.accentHex }}
                           />
                         </div>
-                        <div className="text-[11px] font-semibold text-slate-900 truncate">
+                        <div className="text-[11px] font-semibold text-slate-900 leading-snug">
                           {theme.label}
                         </div>
-                        <div className="text-[10px] text-slate-500 truncate">{theme.subtitle}</div>
+                        <div className="text-[10px] text-slate-500 leading-snug mt-0.5">{theme.subtitle}</div>
                       </button>
                     );
                   })}
                 </div>
 
-                <div className="pt-2 border-t border-slate-200/80 grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-end">
+                <div className="pt-2 border-t border-slate-200/80 grid grid-cols-1 gap-2.5">
                   <div>
                     <label
                       htmlFor="mpt-2411-scene-variant"
@@ -2365,34 +2340,36 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   </div>
                 )}
 
-                <div className="pt-2 border-t border-slate-200/80">
-                  <label
-                    htmlFor="mpt-2411-example-text"
-                    className="block text-[11px] font-medium text-slate-700 mb-1"
-                  >
-                    Ví dụ / Ghi chú gợi nhớ trên thẻ (#{safeActiveIdx + 1})
-                  </label>
-                  <input
-                    id="mpt-2411-example-text"
-                    type="text"
-                    value={config.sceneComponents?.[activeComponentEditIdx]?.exampleText ?? active2411Spec.exampleText ?? ''}
-                    onChange={(e) => {
-                      const nextList = [...(config.sceneComponents ?? [])];
-                      nextList[activeComponentEditIdx] = {
-                        ...(nextList[activeComponentEditIdx] ?? {}),
-                        variant: active2411Spec.variant,
-                        exampleText: e.target.value,
-                      };
-                      setPreviewScenes([]);
-                      onChangeConfig({
-                        sceneComponents: nextList,
-                        customScenes: undefined,
-                      });
-                    }}
-                    placeholder="Ví dụ giao tiếp hữu ích hoặc câu gợi nhớ..."
-                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
-                  />
-                </div>
+                {active2411Spec.variant !== 'friends-chat' && !isDualVoiceMode && (
+                  <div className="pt-2 border-t border-slate-200/80">
+                    <label
+                      htmlFor="mpt-2411-example-text"
+                      className="block text-[11px] font-medium text-slate-700 mb-1"
+                    >
+                      Ví dụ / Ghi chú gợi nhớ trên thẻ (#{safeActiveIdx + 1})
+                    </label>
+                    <input
+                      id="mpt-2411-example-text"
+                      type="text"
+                      value={config.sceneComponents?.[activeComponentEditIdx]?.exampleText ?? active2411Spec.exampleText ?? ''}
+                      onChange={(e) => {
+                        const nextList = [...(config.sceneComponents ?? [])];
+                        nextList[activeComponentEditIdx] = {
+                          ...(nextList[activeComponentEditIdx] ?? {}),
+                          variant: active2411Spec.variant,
+                          exampleText: e.target.value,
+                        };
+                        setPreviewScenes([]);
+                        onChangeConfig({
+                          sceneComponents: nextList,
+                          customScenes: undefined,
+                        });
+                      }}
+                      placeholder="Ví dụ giao tiếp hữu ích hoặc câu gợi nhớ..."
+                      className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -2410,7 +2387,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     Chữ &amp; icon nổi bật tối đa
                   </span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {NEUTRAL_BG_THEMES.map((theme) => {
                     const selected = (config.neutralBgTheme ?? 'slate_studio') === theme.id;
                     return (
@@ -2425,7 +2402,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                             customScenes: undefined,
                           });
                         }}
-                        className={`p-2 rounded-lg border text-left transition-all ${
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
                           selected
                             ? 'border-indigo-600 ring-2 ring-indigo-200 bg-white'
                             : 'border-slate-200 bg-white/80 hover:border-slate-400'
@@ -2434,10 +2411,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         <div
                           className={`w-full h-7 rounded border border-black/10 mb-1.5 mpt-neutral-bg-${theme.id}`}
                         />
-                        <div className="text-[11px] font-semibold text-slate-900 truncate">
+                        <div className="text-[11px] font-semibold text-slate-900 leading-snug">
                           {theme.label}
                         </div>
-                        <div className="text-[10px] text-slate-500 truncate">{theme.description}</div>
+                        <div className="text-[10px] text-slate-500 leading-snug mt-0.5">{theme.description}</div>
                       </button>
                     );
                   })}
@@ -2637,7 +2614,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       key={item.id}
                       className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-slate-200 bg-slate-50 text-xs text-slate-800"
                     >
-                      <span className="truncate max-w-[160px]">{item.name}</span>
+                      <span className="break-all">{item.name}</span>
                       <button
                         type="button"
                         aria-label={`Xóa ${item.name}`}
@@ -2697,7 +2674,6 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     const nextVoice = e.target.value as VoiceOptionId;
                     onChangeConfig({
                       voiceId: nextVoice,
-                      ...(isElevenLabsVoiceId(nextVoice) ? { ttsProvider: 'elevenlabs' } : {}),
                     });
                   }}
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
@@ -2717,102 +2693,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 onChange={(e) => onChangeConfig({ ttsProvider: e.target.value as TtsProvider })}
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
               >
+                <option value="edge_auto">Edge Neural TTS (Mặc định · Tự chuyển Google nếu lỗi)</option>
                 <option value="google_free">Google TTS Miễn phí (Ổn định 100%)</option>
-                <option value="edge_auto">Edge Neural TTS (Tự chuyển Google nếu lỗi)</option>
-                <option value="elevenlabs">ElevenLabs AI (Đa ngôn ngữ · dùng Key nhập bên dưới)</option>
               </select>
-            </div>
-
-            <div
-              data-testid="elevenlabs-key-panel"
-              className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label
-                  htmlFor="mpt-elevenlabs-key"
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800"
-                >
-                  <KeyRound className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
-                  <span>ELEVENLABS_API_KEY (Lưu cục bộ trên trình duyệt · dùng chung mọi tab)</span>
-                </label>
-                {config.elevenLabsApiKey?.trim() ? (
-                  <span className="text-[11px] font-medium text-emerald-700">
-                    Đã nhập key cục bộ · Sẵn sàng phát ElevenLabs
-                  </span>
-                ) : config.ttsProvider === 'elevenlabs' ? (
-                  <span className="text-[11px] font-medium text-amber-700">
-                    Đang chọn ElevenLabs (Mặc định) — dán API key vào đây để kích hoạt giọng ElevenLabs
-                  </span>
-                ) : (
-                  <span className="text-[11px] text-slate-500">
-                    Tùy chọn — cần khi chọn giọng ElevenLabs AI
-                  </span>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative flex-1 min-w-[200px]">
-                  <input
-                    id="mpt-elevenlabs-key"
-                    data-testid="elevenlabs-key-input"
-                    type={showElKey ? 'text' : 'password'}
-                    autoComplete="off"
-                    value={config.elevenLabsApiKey ?? ''}
-                    onChange={(e) => {
-                      setElKeyStatus(null);
-                      onChangeConfig({ elevenLabsApiKey: e.target.value });
-                    }}
-                    placeholder="sk_... (Nhập trực tiếp ELEVENLABS_API_KEY để dùng giọng ElevenLabs)"
-                    className="w-full pl-3 pr-9 py-1.5 text-xs font-mono border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
-                  />
-                  <button
-                    type="button"
-                    aria-label={showElKey ? 'Ẩn API key' : 'Hiện API key'}
-                    onClick={() => setShowElKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
-                  >
-                    {showElKey ? (
-                      <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
-                    ) : (
-                      <Eye className="w-3.5 h-3.5" aria-hidden="true" />
-                    )}
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  data-testid="elevenlabs-verify-btn"
-                  disabled={isCheckingElKey}
-                  onClick={() => void handleVerifyElevenLabsKey()}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg disabled:opacity-50 whitespace-nowrap"
-                >
-                  {isCheckingElKey ? (
-                    <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <RefreshCw className="w-3 h-3" aria-hidden="true" />
-                  )}
-                  <span>Kiểm tra &amp; Tải giọng ElevenLabs</span>
-                </button>
-                {config.elevenLabsApiKey && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setElKeyStatus(null);
-                      onChangeConfig({ elevenLabsApiKey: '' });
-                    }}
-                    className="px-2.5 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg whitespace-nowrap"
-                  >
-                    Xóa key
-                  </button>
-                )}
-              </div>
-              {elKeyStatus && (
-                <div
-                  className={`text-[11px] font-medium ${
-                    elKeyStatus.ok ? 'text-emerald-700' : 'text-rose-700'
-                  }`}
-                >
-                  {elKeyStatus.message}
-                </div>
-              )}
             </div>
 
             {!isAnimeMode && (
@@ -2879,7 +2762,6 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                             const nextVoice = e.target.value as VoiceOptionId;
                             onChangeConfig({
                               secondaryVoiceId: nextVoice,
-                              ...(isElevenLabsVoiceId(nextVoice) ? { ttsProvider: 'elevenlabs' } : {}),
                             });
                           }}
                           className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
@@ -3509,21 +3391,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     config.scriptStyle === 'language_challenge' ||
                     config.scriptStyle === 'bilingual_dialogue' ||
                     config.scriptStyle === 'quiz_riddle';
-                  const keepElevenLabs =
-                    config.ttsProvider === 'elevenlabs' ||
-                    isElevenLabsVoiceId(config.voiceId) ||
-                    isElevenLabsVoiceId(config.secondaryVoiceId ?? '');
                   const patch: Partial<RenderJobConfig> = {
                     language: nextLang,
                     customScenes: undefined,
                     dualVoiceEnabled: isBilingual || isInteractiveStyle,
-                    secondaryVoiceId: keepElevenLabs
-                      ? isElevenLabsVoiceId(config.secondaryVoiceId ?? '')
-                        ? config.secondaryVoiceId
-                        : config.voiceId === 'el-rachel'
-                        ? 'el-adam'
-                        : 'el-rachel'
-                      : getDefaultSecondaryVoiceForLanguage(nextLang),
+                    secondaryVoiceId: getDefaultSecondaryVoiceForLanguage(nextLang),
                     pauseBetweenLinesSec:
                       config.scriptStyle === 'language_challenge' ||
                       config.scriptStyle === 'quiz_riddle'
@@ -3535,7 +3407,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         ? config.clockTickEnabled !== false
                         : config.clockTickEnabled,
                   };
-                  if (!keepElevenLabs && (!doesVoiceMatchLanguage(config.voiceId, nextLang) || isBilingual)) {
+                  if (!doesVoiceMatchLanguage(config.voiceId, nextLang) || isBilingual) {
                     patch.voiceId = getDefaultVoiceForLanguage(nextLang);
                   }
                   if (isKnownPresetSubject(config.subject)) {
@@ -3920,13 +3792,13 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                           setCaptionReplayNonce((n) => n + 1);
                         }}
                         aria-current={isSelected ? 'true' : undefined}
-                        className={`w-full py-1.5 px-2.5 flex items-center justify-between gap-2 text-left text-xs transition-colors ${
+                        className={`w-full py-1.5 px-2.5 flex items-start justify-between gap-2 text-left text-xs transition-colors ${
                           isSelected
                             ? 'bg-indigo-50/90 text-slate-900 font-medium'
                             : 'bg-white text-slate-700 hover:bg-slate-50'
                         }`}
                       >
-                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
                           <span className="text-[10px] font-mono text-slate-400 w-5 shrink-0">
                             #{bi + 1}
                           </span>
@@ -3950,7 +3822,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                           <span className="text-[10px] font-mono text-slate-500 shrink-0">
                             [{beat.action}]
                           </span>
-                          <span className="truncate">{beat.rawText}</span>
+                          <span className="break-words leading-snug">{beat.rawText}</span>
                         </div>
                         <span className="text-[10px] font-mono text-slate-400 shrink-0">
                           {beat.estDurationSec.toFixed(1)}s
@@ -4003,13 +3875,13 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                             setCaptionReplayNonce((n) => n + 1);
                           }}
                           aria-current={isSelectedLine ? 'true' : undefined}
-                          className={`w-full py-1.5 px-2.5 flex items-center justify-between gap-2 text-left text-xs transition-colors ${
+                          className={`w-full py-1.5 px-2.5 flex items-start justify-between gap-2 text-left text-xs transition-colors ${
                             isSelectedLine
                               ? 'bg-indigo-50/90 text-slate-900 font-medium'
                               : 'bg-white text-slate-700 hover:bg-slate-50'
                           }`}
                         >
-                          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
                             <span
                               className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold shrink-0 ${
                                 BREAKDOWN_TONE_CLASSES[pres.roleTone]
@@ -4022,7 +3894,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                               <PresentationIcon iconKey={pres.contextIconKey} className="w-3 h-3 text-slate-500 shrink-0" />
                               <span>{pres.contextLabel}</span>
                             </span>
-                            <span className="truncate">{pres.cleanText || line}</span>
+                            <span className="break-words leading-snug">{pres.cleanText || line}</span>
                           </div>
                           {pres.hasPause && (
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[10px] font-mono font-semibold shrink-0">
@@ -4333,7 +4205,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             <div
               data-testid="stage-tts-engine-note"
               className={`px-3 py-1.5 rounded-lg border text-[11px] font-medium ${
-                ttsPreviewNote.includes('ElevenLabs') && !ttsPreviewNote.includes('Google TTS')
+                ttsPreviewNote.includes('Microsoft Edge Neural') && !ttsPreviewNote.includes('403')
                   ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                   : 'bg-amber-50 border-amber-200 text-amber-800'
               }`}
@@ -4351,9 +4223,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   : 'bg-slate-900'
               } ${
                 config.aspectRatio === '9:16'
-                  ? 'aspect-[9/16] w-full max-w-[245px]'
+                  ? 'aspect-[9/16] w-full max-w-[295px]'
                   : config.aspectRatio === '1:1'
-                  ? 'aspect-square w-full max-w-[300px]'
+                  ? 'aspect-square w-full max-w-[330px]'
                   : 'aspect-video w-full'
               }`}
             >
@@ -4443,6 +4315,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       pauseBetweenLinesSec={config.pauseBetweenLinesSec ?? 5}
                       aspectRatio={config.aspectRatio}
                       countdownActive={previewCountdown !== null}
+                      isPlayingPreview={isPlayingPreview}
+                      speechLevelRef={speechLevelRef}
                       prevTargetText={prevTargetForActive2411}
                       promptPreviewText={promptPreviewForActive2411}
                       animationSeed={captionReplayNonce}
@@ -4498,7 +4372,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   <span className="px-1.5 py-0.5 rounded bg-black/55 whitespace-nowrap shrink-0">
                     {config.aspectRatio} · {config.videoQuality ?? '720p'}
                   </span>
-                  <span className="px-1.5 py-0.5 rounded bg-black/55 truncate max-w-[155px]">
+                  <span className="px-1.5 py-0.5 rounded bg-black/55 leading-tight text-right max-w-[210px]">
                     {activeScene
                       ? activeScene.sourceLabel
                       : config.materialSource === 'curated_preset'
@@ -4557,14 +4431,14 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   >
                     Ngôn ngữ đích (hiển thị bên trên)
                   </label>
-                  <input
+                  <textarea
                     id="mpt-preview-edit-target"
-                    type="text"
+                    rows={2}
                     value={stripNarrationTags(rawNonEmptyLines[editTargetLineIdx] ?? '')}
                     onChange={(e) =>
                       handleInlineEditSubtitleLine(editTargetLineIdx, e.target.value)
                     }
-                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md text-slate-900 focus:outline-none focus:border-indigo-600"
+                    className="w-full px-2.5 py-1.5 text-xs leading-snug bg-white border border-slate-200 rounded-md text-slate-900 focus:outline-none focus:border-indigo-600"
                   />
                 </div>
               )}
@@ -4579,14 +4453,14 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       ? 'Ngôn ngữ gốc (ghim bên dưới)'
                       : 'Nội dung phụ đề dòng đang xem'}
                   </label>
-                  <input
+                  <textarea
                     id="mpt-preview-edit-source"
-                    type="text"
+                    rows={2}
                     value={stripNarrationTags(rawNonEmptyLines[editSourceLineIdx] ?? '')}
                     onChange={(e) =>
                       handleInlineEditSubtitleLine(editSourceLineIdx, e.target.value)
                     }
-                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md text-slate-900 focus:outline-none focus:border-slate-900"
+                    className="w-full px-2.5 py-1.5 text-xs leading-snug bg-white border border-slate-200 rounded-md text-slate-900 focus:outline-none focus:border-slate-900"
                   />
                 </div>
               )}
@@ -4646,7 +4520,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                           className="w-full h-14 object-cover bg-slate-900"
                         />
                       )}
-                      <div className="px-1.5 py-0.5 bg-white text-[10px] font-mono text-slate-700 truncate">
+                      <div className="px-1.5 py-0.5 bg-white text-[10px] font-mono text-slate-700 leading-snug">
                         #{idx + 1} · {scene.kind === 'video' ? 'MP4' : 'Ảnh'}
                       </div>
                     </button>
@@ -4769,7 +4643,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                                 className="w-full h-11 object-cover bg-slate-900"
                               />
                             )}
-                            <div className="px-1 py-0.5 text-[9px] font-mono text-slate-700 truncate">
+                            <div className="px-1 py-0.5 text-[9px] font-mono text-slate-700 leading-snug break-words">
                               {cand.kind === 'video' ? 'MP4' : 'Ảnh'} · {cand.sourceLabel}
                             </div>
                           </button>
@@ -4855,7 +4729,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               </div>
             )}
 
-            <div className="text-[11px] font-mono text-slate-600 truncate">
+            <div className="text-[11px] font-mono text-slate-600 break-all leading-snug">
               Lưu tại: <span className="text-slate-900 font-medium">{resolvedOutputDir}/{expectedBaseFilename}.mp4</span>
               {outputRootAbsPath ? ` (${outputRootAbsPath})` : ''}
             </div>
@@ -4896,8 +4770,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               data-testid="render-status-panel"
               className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-2.5"
             >
-              <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-900">
-                <span className="truncate">{renderJob.stepLabel}</span>
+              <div className="flex items-start justify-between gap-2 text-xs font-medium text-slate-900">
+                <span className="leading-snug">{renderJob.stepLabel}</span>
                 <span className="font-mono tabular-nums shrink-0">{renderJob.progressPct}%</span>
               </div>
 
@@ -4941,7 +4815,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
                 <div className="min-w-0">
                   <h4 className="text-sm font-semibold text-slate-900">Video MP4 đã xuất xong</h4>
-                  <p className="text-xs text-slate-500 tabular-nums truncate">
+                  <p className="text-xs text-slate-500 tabular-nums break-all leading-snug">
                     {(renderJob.durationSec ?? 0).toFixed(1)}s ·{' '}
                     {((renderJob.fileSizeBytes ?? 0) / 1024).toFixed(0)} KB
                     {renderJob.savedOutputPath ? ` · ${renderJob.savedOutputPath}` : ''}
@@ -4950,31 +4824,40 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               </div>
 
               <div className="flex items-center gap-2">
-                {renderJob.srtUrl && (
-                  <a
-                    href={toDownloadUrl(
-                      renderJob.srtUrl,
-                      (renderJob.outputFilename || `${expectedBaseFilename}.mp4`).replace(/\.mp4$/i, '.srt'),
-                      renderJob.savedSrtPath
-                    )}
-                    download={(renderJob.outputFilename || `${expectedBaseFilename}.mp4`).replace(/\.mp4$/i, '.srt')}
+                {(renderJob.srtUrl || renderJob.srtContent) && (
+                  <button
+                    type="button"
+                    data-testid="download-srt-btn"
+                    onClick={() =>
+                      void handleDownloadFile({
+                        fileUrl: renderJob.srtUrl ?? '',
+                        downloadName: (
+                          renderJob.outputFilename || `${expectedBaseFilename}.mp4`
+                        ).replace(/\.mp4$/i, '.srt'),
+                        savedPath: renderJob.savedSrtPath,
+                        inlineTextContent: renderJob.srtContent,
+                      })
+                    }
                     className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 whitespace-nowrap"
                   >
                     Tải .SRT
-                  </a>
+                  </button>
                 )}
-                <a
-                  href={toDownloadUrl(
-                    renderJob.videoUrl,
-                    renderJob.outputFilename || `${expectedBaseFilename}.mp4`,
-                    renderJob.savedOutputPath
-                  )}
-                  download={renderJob.outputFilename || `${expectedBaseFilename}.mp4`}
+                <button
+                  type="button"
+                  data-testid="download-mp4-btn"
+                  onClick={() =>
+                    void handleDownloadFile({
+                      fileUrl: renderJob.videoUrl!,
+                      downloadName: renderJob.outputFilename || `${expectedBaseFilename}.mp4`,
+                      savedPath: renderJob.savedOutputPath,
+                    })
+                  }
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 whitespace-nowrap"
                 >
                   <Download className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>Tải về (.MP4)</span>
-                </a>
+                </button>
               </div>
             </div>
 
@@ -4998,9 +4881,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 }
                 className={
                   config.aspectRatio === '9:16'
-                    ? 'aspect-[9/16] w-full max-w-[235px] bg-black'
+                    ? 'aspect-[9/16] w-full max-w-[290px] bg-black'
                     : config.aspectRatio === '1:1'
-                    ? 'aspect-square w-full max-w-[280px] bg-black'
+                    ? 'aspect-square w-full max-w-[320px] bg-black'
                     : 'w-full aspect-video bg-black'
                 }
               />
@@ -5018,22 +4901,28 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 const dlName =
                   rec.outputFilename || `${slugifyOutputFilename(rec.subject, rec.jobId)}.mp4`;
                 return (
-                  <div key={rec.jobId} className="py-2 flex items-center justify-between gap-2 text-xs">
+                  <div key={rec.jobId} className="py-2 flex items-start justify-between gap-2 text-xs">
                     <div className="min-w-0">
-                      <div className="font-medium text-slate-900 truncate">{rec.subject}</div>
-                      <div className="text-[11px] text-slate-500 tabular-nums truncate">
+                      <div className="font-medium text-slate-900 leading-snug">{rec.subject}</div>
+                      <div className="text-[11px] text-slate-500 tabular-nums break-all leading-snug">
                         {rec.aspectRatio} · {rec.durationSec.toFixed(1)}s
                         {rec.savedOutputPath ? ` · ${rec.savedOutputPath}` : ''}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <a
-                        href={toDownloadUrl(rec.videoUrl, dlName, rec.savedOutputPath)}
-                        download={dlName}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleDownloadFile({
+                            fileUrl: rec.videoUrl,
+                            downloadName: dlName,
+                            savedPath: rec.savedOutputPath,
+                          })
+                        }
                         className="text-indigo-700 font-medium hover:underline whitespace-nowrap"
                       >
                         Tải MP4
-                      </a>
+                      </button>
                       <button
                         type="button"
                         aria-label={`Xóa bản xuất ${rec.subject}`}
