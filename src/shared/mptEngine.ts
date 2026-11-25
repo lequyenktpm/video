@@ -300,40 +300,40 @@ const CONTEXT_LABELS_BY_LANG: Record<
   PresentationIconKey,
   { vi: string; en: string; ja: string }
 > = {
-  alert_triangle: { vi: 'Lưu ý', en: 'Caution', ja: '注意' },
-  clock: { vi: 'Thời gian', en: 'Timing', ja: '時間' },
-  waves: { vi: 'Đại dương', en: 'Ocean', ja: '海・自然' },
-  coffee: { vi: 'Ẩm thực', en: 'Cafe & Food', ja: 'カフェ' },
-  briefcase: { vi: 'Công việc', en: 'Career', ja: '仕事・面接' },
-  sparkles: { vi: 'Khám phá', en: 'Discovery', ja: '発見' },
-  heart: { vi: 'Cảm xúc', en: 'Mindset', ja: '気持ち' },
-  lightbulb: { vi: 'Mẹo & Học', en: 'Key Tip', ja: '学習ポイント' },
-  globe: { vi: 'Thế giới', en: 'World', ja: '世界' },
-  bar_chart: { vi: 'Số liệu', en: 'Key Stat', ja: 'データ' },
-  message_dots: { vi: 'Chi tiết', en: 'Context', ja: '詳細' },
-  megaphone: { vi: 'Mở đầu', en: 'Intro', ja: '導入' },
-  bell: { vi: 'Kết thúc', en: 'Closing', ja: 'まとめ' },
-  chat_quote: { vi: 'Đáp án', en: 'Answer', ja: '解答' },
-  hand_raise: { vi: 'Câu hỏi', en: 'Question', ja: '質問' },
-  card_text: { vi: 'Nội dung', en: 'Insight', ja: 'ポイント' },
+  alert_triangle: { vi: 'Caution', en: 'Caution', ja: 'Caution' },
+  clock: { vi: 'Timing', en: 'Timing', ja: 'Timing' },
+  waves: { vi: 'Ocean', en: 'Ocean', ja: 'Ocean' },
+  coffee: { vi: 'Cafe & Food', en: 'Cafe & Food', ja: 'Cafe & Food' },
+  briefcase: { vi: 'Career', en: 'Career', ja: 'Career' },
+  sparkles: { vi: 'Discovery', en: 'Discovery', ja: 'Discovery' },
+  heart: { vi: 'Mindset', en: 'Mindset', ja: 'Mindset' },
+  lightbulb: { vi: 'Key Tip', en: 'Key Tip', ja: 'Key Tip' },
+  globe: { vi: 'World', en: 'World', ja: 'World' },
+  bar_chart: { vi: 'Key Stat', en: 'Key Stat', ja: 'Key Stat' },
+  message_dots: { vi: 'Context', en: 'Context', ja: 'Context' },
+  megaphone: { vi: 'Intro', en: 'Intro', ja: 'Intro' },
+  bell: { vi: 'Closing', en: 'Closing', ja: 'Closing' },
+  chat_quote: { vi: 'Answer', en: 'Answer', ja: 'Answer' },
+  hand_raise: { vi: 'Question', en: 'Question', ja: 'Question' },
+  card_text: { vi: 'Insight', en: 'Insight', ja: 'Insight' },
 };
 
 const ROLE_LABELS_BY_LANG: Record<
   ScriptRoleKind,
   { vi: string; en: string; ja: string }
 > = {
-  title: { vi: 'Mở đầu', en: 'Intro', ja: '導入' },
-  outro: { vi: 'Kết bài', en: 'Closing', ja: 'まとめ' },
-  question: { vi: 'Người hỏi', en: 'Question', ja: '質問' },
-  answer: { vi: 'Người trả lời', en: 'Answer', ja: '解答' },
-  narration: { vi: 'Nội dung', en: 'Insight', ja: 'ポイント' },
+  title: { vi: 'Intro', en: 'Intro', ja: 'Intro' },
+  outro: { vi: 'Closing', en: 'Closing', ja: 'Closing' },
+  question: { vi: 'Question', en: 'Question', ja: 'Question' },
+  answer: { vi: 'Answer', en: 'Answer', ja: 'Answer' },
+  narration: { vi: 'Insight', en: 'Insight', ja: 'Insight' },
 };
 
 export function getLocalizedRoleLabel(
   roleKind: ScriptRoleKind,
-  lang: 'vi' | 'en' | 'ja' = 'vi'
+  _lang: 'vi' | 'en' | 'ja' = 'en'
 ): string {
-  return ROLE_LABELS_BY_LANG[roleKind][lang] ?? ROLE_LABELS_BY_LANG[roleKind].vi;
+  return ROLE_LABELS_BY_LANG[roleKind].en;
 }
 
 export function detectLineContextVisual(
@@ -439,7 +439,7 @@ export function analyzeScriptLinePresentation(
     cleanText,
     detectedLang,
     roleKind,
-    roleLabel: ROLE_LABELS_BY_LANG[roleKind].vi,
+    roleLabel: ROLE_LABELS_BY_LANG[roleKind].en,
     roleIconKey,
     roleTone,
     contextIconKey: ctx.contextIconKey,
@@ -1961,6 +1961,7 @@ function formatAssCueBody(
     marginV: number;
     highlightColour?: string;
     outlineColour?: string;
+    flashColour?: string;
   }
 ): string {
   if (effect === 'static') {
@@ -2025,6 +2026,7 @@ function formatAssCueBody(
   if (effect === 'laser') {
     const hiCol = pos?.highlightColour ?? '&H0015CCFA';
     const outCol = pos?.outlineColour ?? '&H00000000';
+    const flashCol = pos?.flashColour ?? '&H00FFFFFF';
     const revealWindowMs = Math.max(280, Math.round(durationSec * 820));
     const totalWeights = Math.max(
       1,
@@ -2042,9 +2044,9 @@ function formatAssCueBody(
         elapsedWeight += w;
         const escaped = escapeAssText(token);
         if (tStart === 0) {
-          return `{\\1c&HFFFFFF&\\3c${hiCol}\\blur2.2\\t(55,210,\\1c${hiCol}\\3c${outCol}\\blur0.3)}${escaped}`;
+          return `{\\1c${flashCol}&\\3c${hiCol}\\blur2.2\\t(55,210,\\1c${hiCol}\\3c${outCol}\\blur0.3)}${escaped}`;
         }
-        return `{\\alpha&HFF&\\t(${tStart},${tFlash},\\alpha&H00&\\1c&HFFFFFF&\\3c${hiCol}\\blur2.2)\\t(${tFlash},${tSettle},\\1c${hiCol}\\3c${outCol}\\blur0.3)}${escaped}`;
+        return `{\\alpha&HFF&\\t(${tStart},${tFlash},\\alpha&H00&\\1c${flashCol}&\\3c${hiCol}\\blur2.2)\\t(${tFlash},${tSettle},\\1c${hiCol}\\3c${outCol}\\blur0.3)}${escaped}`;
       })
       .join('');
   }
@@ -2103,35 +2105,62 @@ export function resolveCountdownCenterY(
     return preferredY;
   }
 
-  const unionTop = Math.min(...overlappingBands.map((b) => b.topPx));
-  const unionBottom = Math.max(...overlappingBands.map((b) => b.bottomPx));
+  // Sort & merge overlapping vertical bands so open corridors between top card and bottom subtitles are found accurately
+  const sorted = [...overlappingBands].sort((a, b) => a.topPx - b.topPx);
+  const merged: SubtitleVerticalBand[] = [];
+  for (const band of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && band.topPx <= last.bottomPx + 4) {
+      last.bottomPx = Math.max(last.bottomPx, band.bottomPx);
+    } else {
+      merged.push({ topPx: band.topPx, bottomPx: band.bottomPx });
+    }
+  }
+
+  const gapCandidates: number[] = [];
+  const topSpaceStart = Math.round(height * 0.08);
+  const bottomSpaceEnd = Math.round(height * 0.90);
+  if (merged.length > 0 && merged[0].topPx > topSpaceStart + countdownHeightPx * 0.6) {
+    gapCandidates.push(Math.round((topSpaceStart + merged[0].topPx) / 2));
+  }
+  for (let i = 0; i < merged.length - 1; i++) {
+    const gapStart = merged[i].bottomPx;
+    const gapEnd = merged[i + 1].topPx;
+    if (gapEnd > gapStart) {
+      gapCandidates.push(Math.round((gapStart + gapEnd) / 2));
+    }
+  }
+  const lastBand = merged[merged.length - 1];
+  if (lastBand && bottomSpaceEnd > lastBand.bottomPx + countdownHeightPx * 0.6) {
+    gapCandidates.push(Math.round((lastBand.bottomPx + bottomSpaceEnd) / 2));
+  }
+
+  const unionTop = merged[0]?.topPx ?? 0;
+  const unionBottom = merged[merged.length - 1]?.bottomPx ?? height;
   const subtitleCenterY = (unionTop + unionBottom) / 2;
 
   const upFromUnion = Math.max(minCenterY, Math.round(unionTop - gap - halfCd));
   const downFromUnion = Math.min(maxCenterY, Math.round(unionBottom + gap + halfCd));
 
-  const candidates =
+  const fallbackOrder =
     subtitleCenterY >= height * 0.45
       ? [upFromUnion, Math.round(height * 0.24), minCenterY, downFromUnion, Math.round(height * 0.74), maxCenterY]
       : [downFromUnion, Math.round(height * 0.74), maxCenterY, upFromUnion, Math.round(height * 0.24), minCenterY];
 
   const clampedCandidates = Array.from(
-    new Set(candidates.map((c) => Math.max(minCenterY, Math.min(maxCenterY, c))))
+    new Set([...gapCandidates, ...fallbackOrder].map((c) => Math.max(minCenterY, Math.min(maxCenterY, c))))
   );
 
-  for (const cand of clampedCandidates) {
-    if (!overlapsAny(cand, gap)) {
-      return cand;
-    }
-  }
-  for (const cand of clampedCandidates) {
-    if (!overlapsAny(cand, 4)) {
-      return cand;
+  for (const trialGap of [gap, 10, 4, 0]) {
+    for (const cand of clampedCandidates) {
+      if (!overlapsAny(cand, trialGap)) {
+        return cand;
+      }
     }
   }
 
   // Fallback: pick candidate with maximum vertical clearance from all overlapping bands
-  let bestY = upFromUnion;
+  let bestY = clampedCandidates[0] ?? upFromUnion;
   let bestClearance = -Infinity;
   for (const cand of clampedCandidates) {
     const clearance = Math.min(
@@ -2145,19 +2174,42 @@ export function resolveCountdownCenterY(
   return bestY;
 }
 
+function isBrightHexColor(hex: string): boolean {
+  const clean = hex.replace('#', '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return true;
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140;
+}
+
 export function buildAssFromCues(
   cues: SubtitleCue[],
   subtitle: SubtitleConfig,
   width: number,
-  height: number
+  height: number,
+  options?: {
+    isLightBackground?: boolean;
+    use2411CountdownStyle?: boolean;
+  }
 ): string {
   const effect: SubtitleEffect = subtitle.effect ?? 'karaoke';
-  const baseColour = hexToAssBgr(subtitle.textColor);
-  const highlightColour = hexToAssBgr(subtitle.highlightColor || '#FACC15');
+  const adaptLight = Boolean(options?.isLightBackground) && subtitle.boxStyle !== 'dark_box';
+  const resolvedBaseHex =
+    adaptLight && isBrightHexColor(subtitle.textColor) ? '#0F172A' : subtitle.textColor;
+  const resolvedHighlightHex =
+    adaptLight && isBrightHexColor(subtitle.highlightColor || '#FACC15')
+      ? '#4F46E5'
+      : subtitle.highlightColor || '#FACC15';
+  const resolvedStrokeHex =
+    adaptLight && !isBrightHexColor(subtitle.strokeColor) ? '#FFFFFF' : subtitle.strokeColor;
+
+  const baseColour = hexToAssBgr(resolvedBaseHex);
+  const highlightColour = hexToAssBgr(resolvedHighlightHex);
   const primaryColour = effect === 'karaoke' ? highlightColour : baseColour;
   const secondaryColour = effect === 'karaoke' ? baseColour : '&H000000FF';
 
-  const outlineColour = hexToAssBgr(subtitle.strokeColor);
+  const outlineColour = hexToAssBgr(resolvedStrokeHex);
   const alignment =
     subtitle.position === 'top' ? 8 : subtitle.position === 'center' ? 5 : 2;
 
@@ -2190,17 +2242,20 @@ export function buildAssFromCues(
 
   const isBox = subtitle.boxStyle === 'dark_box';
   const borderStyle = isBox ? 3 : 1;
-  const backColour = isBox ? '&H66000000' : '&H99000000';
+  const backColour = isBox ? '&H66000000' : adaptLight ? '&H44FFFFFF' : '&H99000000';
 
-  const secondaryTextColour =
-    subtitle.textColor.toUpperCase() === '#FACC15' ? '&H00F8BD38' : '&H0015CCFA';
+  const secondaryTextColour = adaptLight
+    ? hexToAssBgr('#0F172A')
+    : subtitle.textColor.toUpperCase() === '#FACC15'
+    ? '&H00F8BD38'
+    : '&H0015CCFA';
   const secPrimary = effect === 'karaoke' ? highlightColour : secondaryTextColour;
-  const secSecondary = effect === 'karaoke' ? '&H00F8BD38' : '&H000000FF';
+  const secSecondary = effect === 'karaoke' ? baseColour : '&H000000FF';
 
   const stickyFontSize = sourceLatinBudget.scaledFontSize;
   const stickyHasCjk = cues.some((c) => c.isStickySource && hasCjkChars(c.text));
   const stickyStyleFont = stickyHasCjk ? preferredCjkFont : effectiveFontName;
-  const stickyColour = hexToAssBgr('#E2E8F0');
+  const stickyColour = adaptLight ? hexToAssBgr('#334155') : hexToAssBgr('#E2E8F0');
   const stickyAlignment = subtitle.position === 'top' ? 8 : 2;
   const stickyBaseMarginV =
     subtitle.position === 'center' ? Math.round(height * 0.44) : marginV;
@@ -2208,7 +2263,8 @@ export function buildAssFromCues(
   const countdownFontSize = Math.max(36, Math.round(latinBudget.scaledFontSize * 2.25));
   const countdownOutline = Math.max(3.2, Number((latinBudget.outlineWidth * 1.65).toFixed(1)));
   const countdownShadow = Math.max(1.5, Number((latinBudget.shadowDepth * 1.4).toFixed(1)));
-  const countdownBoxHeight = Math.round(countdownFontSize * 1.18);
+  const countdownBoxHeight = Math.round(countdownFontSize * 1.48);
+  const laserFlashColour = adaptLight ? hexToAssBgr('#0D6EFD') : '&H00FFFFFF';
 
   const estimateCueBand = (cue: SubtitleCue): SubtitleVerticalBand => {
     const cueHasCjk = hasAnyCjk && hasCjkChars(cue.text);
@@ -2279,8 +2335,8 @@ export function buildAssFromCues(
     `Style: Default,${effectiveFontName},${latinBudget.scaledFontSize},${primaryColour},${secondaryColour},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
     `Style: Secondary,${effectiveFontName},${latinBudget.scaledFontSize},${secPrimary},${secSecondary},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
     `Style: StickySource,${stickyStyleFont},${stickyFontSize},${stickyColour},&H00FFFFFF,${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.3,0,${borderStyle},${sourceLatinBudget.outlineWidth.toFixed(1)},${sourceLatinBudget.shadowDepth.toFixed(1)},${stickyAlignment},${sourceLatinBudget.marginH},${sourceLatinBudget.marginH},${stickyBaseMarginV},1`,
-    `Style: Countdown,${effectiveFontName},${countdownFontSize},${highlightColour},&H00FFFFFF,${outlineColour},&H80000000,-1,0,0,0,100,100,0,0,1,${countdownOutline.toFixed(1)},${countdownShadow.toFixed(1)},5,20,20,0,1`,
-    `Style: CountdownMeta,${effectiveFontName},${Math.max(14, Math.round(latinBudget.scaledFontSize * 0.52))},&H00FFFFFF,&H00FFFFFF,&H000F172A,&H990F172A,-1,0,0,0,100,100,0.4,0,3,${Math.max(2, Math.round(4 * latinBudget.resScale))},0,5,16,16,0,1`,
+    `Style: Countdown,${effectiveFontName},${countdownFontSize},${highlightColour},&H00FFFFFF,${adaptLight ? '&H00FFFFFF' : outlineColour},&H80000000,-1,0,0,0,100,100,0,0,1,${countdownOutline.toFixed(1)},${countdownShadow.toFixed(1)},5,20,20,0,1`,
+    `Style: CountdownMeta,${effectiveFontName},${Math.max(14, Math.round(latinBudget.scaledFontSize * 0.48))},&H00FFFFFF,&H00FFFFFF,&H000F172A,&H990F172A,-1,0,0,0,100,100,0.4,0,3,${Math.max(2, Math.round(4 * latinBudget.resScale))},0,5,16,16,0,1`,
     `Style: RoleBadge,${effectiveFontName},${Math.max(14, Math.round(latinBudget.scaledFontSize * 0.52))},&H00FFFFFF,&H00FFFFFF,&H001E293B,&HAA1E293B,-1,0,0,0,100,100,0.3,0,3,${Math.max(2, Math.round(4 * latinBudget.resScale))},0,2,16,16,0,1`,
     '',
     '[Events]',
@@ -2289,31 +2345,50 @@ export function buildAssFromCues(
 
   const nonCountdownCues = cues.filter((c) => !c.isCountdown);
   const showRoleBadges = subtitle.showRoleBadges !== false;
+  const cdCardPanelFill = adaptLight ? '&H00FFFFFF' : '&H180F172A';
+  const cdCardPanelBorder = adaptLight ? hexToAssBgr('#DDD6FE') : highlightColour;
+  const cdNumColour = adaptLight ? hexToAssBgr('#4F46E5') : highlightColour;
+  const cdTrackColour = adaptLight ? hexToAssBgr('#E2E8F0') : '&H00334155';
 
   const events: string[] = [];
   for (const cue of cues) {
     if (cue.isCountdown) {
       const cleanNum = escapeAssText(cue.text.trim());
-      const overlappingBands = nonCountdownCues
+      const overlappingBands: SubtitleVerticalBand[] = nonCountdownCues
         .filter((other) => other.endSec > cue.startSec - 0.05 && other.startSec < cue.endSec + 0.05)
         .map(estimateCueBand);
+      if (options?.use2411CountdownStyle) {
+        // Reserve top card zone (0..44.5% height) so countdown component sits cleanly in the middle gap
+        overlappingBands.push({ topPx: 0, bottomPx: Math.round(height * 0.445) });
+      }
       const cdCenterY = resolveCountdownCenterY(overlappingBands, countdownBoxHeight, height);
       const cdCenterX = Math.round(width / 2);
       const totalSteps = Math.max(1, cue.countdownTotalSteps ?? 5);
       const numVal = Math.max(1, Number(cue.text.trim()) || 1);
-      const barWidth = Math.round(Math.min(width * 0.36, 180 * latinBudget.resScale));
+      const panelW = Math.round(Math.min(width * 0.46, 230 * latinBudget.resScale));
+      const panelHalfW = Math.round(panelW / 2);
+      const panelHalfH = Math.round(countdownBoxHeight * 0.56);
+      const barWidth = Math.round(panelW * 0.78);
       const fillWidth = Math.max(12, Math.round((numVal / totalSteps) * barWidth));
-      const barY = Math.min(height - 30, cdCenterY + Math.round(countdownFontSize * 0.62));
-      const labelY = Math.max(30, cdCenterY - Math.round(countdownFontSize * 0.62));
+      const barH = Math.max(7, Math.round(7 * latinBudget.resScale));
+      const barY = Math.min(height - 30, cdCenterY + Math.round(countdownFontSize * 0.64));
+      const labelY = Math.max(30, cdCenterY - Math.round(countdownFontSize * 0.66));
 
+      // Component 2411 Countdown card panel backdrop
       events.push(
-        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},Countdown,,0,0,0,,{\\an5\\pos(${cdCenterX},${cdCenterY})\\fscx62\\fscy62\\t(0,145,\\fscx120\\fscy120)\\t(145,280,\\fscx100\\fscy100)\\fad(30,110)}${cleanNum}`
+        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${cdCenterY})\\p1\\1c${cdCardPanelFill}\\3c${cdCardPanelBorder}\\bord2.5\\fad(40,80)}m ${-panelHalfW} ${-panelHalfH} l ${panelHalfW} ${-panelHalfH} l ${panelHalfW} ${panelHalfH} l ${-panelHalfW} ${panelHalfH}{\\p0}`
       );
       events.push(
-        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${labelY})\\1c${highlightColour}\\3c&H00171717&\\fad(30,100)}THINK`
+        `Dialogue: 2,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},Countdown,,0,0,0,,{\\an5\\pos(${cdCenterX},${cdCenterY})\\1c${cdNumColour}\\fscx62\\fscy62\\t(0,145,\\fscx118\\fscy118)\\t(145,280,\\fscx100\\fscy100)\\fad(30,110)}${cleanNum}`
       );
       events.push(
-        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${barY})\\p1\\1c${highlightColour}\\3c&H00000000&\\bord1\\fad(30,100)}m ${-Math.round(barWidth / 2)} 0 l ${-Math.round(barWidth / 2) + fillWidth} 0 l ${-Math.round(barWidth / 2) + fillWidth} ${Math.max(6, Math.round(7 * latinBudget.resScale))} l ${-Math.round(barWidth / 2)} ${Math.max(6, Math.round(7 * latinBudget.resScale))}{\\p0}`
+        `Dialogue: 2,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${labelY})\\1c${cdNumColour}\\3c${cdCardPanelFill}\\bord0\\fad(30,100)}THINK TIME`
+      );
+      events.push(
+        `Dialogue: 2,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${barY})\\p1\\1c${cdTrackColour}\\bord0\\fad(30,100)}m ${-Math.round(barWidth / 2)} 0 l ${Math.round(barWidth / 2)} 0 l ${Math.round(barWidth / 2)} ${barH} l ${-Math.round(barWidth / 2)} ${barH}{\\p0}`
+      );
+      events.push(
+        `Dialogue: 3,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${barY})\\p1\\1c${cdNumColour}\\bord0\\fad(30,100)}m ${-Math.round(barWidth / 2)} 0 l ${-Math.round(barWidth / 2) + fillWidth} 0 l ${-Math.round(barWidth / 2) + fillWidth} ${barH} l ${-Math.round(barWidth / 2)} ${barH}{\\p0}`
       );
       continue;
     }
@@ -2374,6 +2449,7 @@ export function buildAssFromCues(
       marginV: effectiveMarginV,
       highlightColour,
       outlineColour: isBox ? '&H66000000' : outlineColour,
+      flashColour: laserFlashColour,
     });
     const styleName = cue.voiceSlot === 'secondary' ? 'Secondary' : 'Default';
     const alignOverride = useStackedTarget && alignment !== 2 ? '{\\an2}' : '';
@@ -2387,23 +2463,19 @@ export function buildAssFromCues(
     );
 
     if (showRoleBadges && cue.roleKind && (cue.roleKind === 'question' || cue.roleKind === 'answer' || cue.roleKind === 'title')) {
-      const badgeLang: 'vi' | 'en' | 'ja' = hasCjkChars(cue.text)
-        ? 'ja'
-        : hasVietnameseDiacritics(cue.text)
-        ? 'vi'
-        : 'en';
       const badgeColor =
         cue.roleKind === 'question'
           ? '&H00FD6E0D&'
           : cue.roleKind === 'answer'
           ? '&H00548719&'
           : '&H00F0CA0D&';
+      const engFallback = ROLE_LABELS_BY_LANG[cue.roleKind].en;
       const badgeText =
         cue.roleKind === 'question'
-          ? `● ${cue.roleLabel || ROLE_LABELS_BY_LANG.question[badgeLang]}`
+          ? `● ${cue.roleLabel || engFallback}`
           : cue.roleKind === 'answer'
-          ? `● ${cue.roleLabel || ROLE_LABELS_BY_LANG.answer[badgeLang]}`
-          : `★ ${cue.roleLabel || ROLE_LABELS_BY_LANG.title[badgeLang]}`;
+          ? `● ${cue.roleLabel || engFallback}`
+          : `★ ${cue.roleLabel || engFallback}`;
       const band = estimateCueBand(cue);
       const badgeY = Math.max(28, band.topPx - Math.round(18 * latinBudget.resScale));
       events.push(
@@ -2510,19 +2582,22 @@ TÙY CHỌN STUDIO ĐANG ĐỒNG BỘ:
 
   const componentCreativeGuide = `
 6. TẠO "sceneComponents" (Kiến trúc KineticSub 2411 — sáng tạo từng cảnh, 1-1 với từng dòng script):
-   - Mỗi dòng script có 1 object { "variant", "animationIn", "title", "subtitle", "labels", "highlightWord", "formula", "speechText", "reactionText" }.
+   - Mỗi dòng script có 1 object { "variant", "animationIn", "title", "subtitle", "labels", "highlightWord", "formula", "speechText", "reactionText", "exampleText", "prevTargetText" }.
    - SÁNG TẠO & KHÔNG LẶP LẠI: Luôn đa dạng hóa "variant" giữa các câu liên tiếp (tuyệt đối KHÔNG lặp 1 variant 2 lần liền nhau):
      * "css-browser-mockup" | "bs-card-header": hợp câu mở đầu / chủ đề chính
-     * "friends-chat": CẢNH HỘI THOẠI 2 NHÂN VẬT (phỏng vấn Q&A, [V1]/[V2], đồng nghiệp/bạn bè nói chuyện — truyền "labels": ["Tên người A", "Tên người B"], "speechText": "câu thoại ngắn", "reactionText": "nhãn phản hồi")
-     * "avatar-speech": NHÂN VẬT & BÓNG THOẠI (1 người nói câu giao tiếp tự nhiên kèm "speechText": "câu thoại", "reactionText": "Polite! / Tự nhiên!")
-     * "dialogue-upgrade": NÂNG CẤP HỘI THOẠI (so sánh cách nói thô/cơ bản → tự nhiên/lịch sự — truyền "labels": ["Cách nói cơ bản", "Cách nói tự nhiên"], "speechText": "câu cơ bản", "highlightWord": "cụm nâng cấp", "reactionText": "Natural!")
-     * "css-flashcard" | "gauge-tone": hợp câu hỏi / thử thách dịch [PAUSE] hoặc đo sắc thái lịch sự/thân thiện
-     * "css-compare" | "css-equation": hợp câu đáp án / đối chiếu cấu trúc ngữ pháp (VD labels: ["Ngữ cảnh", "Mẫu câu chuẩn"], formula: "S + V + O")
+     * "friends-chat": CẢNH HỘI THOẠI 2 NHÂN VẬT (phỏng vấn Q&A, [V1]/[V2], đồng nghiệp/bạn bè nói chuyện — truyền "labels": ["Interviewer", "Candidate"], "speechText": "câu thoại hoàn chỉnh", "reactionText": "Natural!")
+     * "avatar-speech": NHÂN VẬT & BÓNG THOẠI (1 người nói câu giao tiếp tự nhiên kèm "speechText": "câu thoại đầy đủ", "reactionText": "Polite!")
+     * "dialogue-upgrade": NÂNG CẤP HỘI THOẠI (so sánh cách nói cơ bản → tự nhiên — truyền "labels": ["Basic Form", "Natural Form"], "speechText": "câu cơ bản", "highlightWord": "cụm nâng cấp", "reactionText": "Natural!")
+     * "css-flashcard" | "gauge-tone": hợp câu hỏi / thử thách dịch [PAUSE] hoặc đo sắc thái
+     * "css-compare" | "css-equation": hợp câu đáp án / đối chiếu cấu trúc ngữ pháp (labels: ["Context", "Target Form"], formula: "S + V + O")
      * "css-roadmap" | "staircase-3d" | "bs-progress-meter": hợp các bước / số liệu / thứ hạng
      * "bs-alert-callout": hợp câu cảnh báo / lưu ý quan trọng
-     * "css-glass-quote": hợp triết lý / trích dẫn / lời cảm ơn kết thúc
-   - "animationIn": chọn luân phiên từ ["pop-up", "slide-up", "drop-in", "fade-scale"].
-   - RÀNG BUỘC NGÔN NGỮ TUYỆT ĐỐI: Mọi "title", "subtitle", "labels", "highlightWord", "speechText", "reactionText" PHẢI viết 100% bằng ĐÚNG NGÔN NGỮ của câu đó (nếu câu là tiếng Anh thì 100% tiếng Anh; tiếng Nhật thì 100% tiếng Nhật; TUYỆT ĐỐI KHÔNG trộn nhãn tiếng Việt vào câu tiếng Anh/Nhật!).`;
+     * "css-glass-quote": hợp trích dẫn / lời cảm ơn kết thúc
+   - "animationIn": mặc định dùng "random" (hoặc chọn từ ["random", "pop-up", "slide-up", "drop-in", "fade-scale"]).
+   - VÍ DỤ & GỢI NHỚ CÂU TRƯỚC (LINH HOẠT):
+     * Luôn đưa câu ví dụ thực tế, hữu ích, trọn vẹn nghĩa vào "exampleText" (ví dụ: mẫu câu ứng dụng ngay trong giao tiếp thật) và có thể gán "prevTargetText" chứa câu đích của câu hỏi ngay trước đó để giúp người xem ôn nhớ liên tục.
+     * TUYỆT ĐỐI KHÔNG cắt cụt chữ bằng dấu "..." ở bất kỳ trường nào! Viết câu ngắn gọn nhưng đầy đủ trọn vẹn ý nghĩa.
+   - RÀNG BUỘC NGÔN NGỮ: Mọi nhãn hướng dẫn / cấu trúc UI bên trong thẻ ("title", "subtitle", "labels", "reactionText") PHẢI viết 100% bằng TIẾNG ANH ("Intro", "Think Time · 5s", "Target Phrase", "Interviewer", "Candidate", "Natural!", "Example", "Recall"). Riêng nội dung hội thoại/ví dụ ("speechText", "highlightWord", "exampleText", "prevTargetText") giữ đúng ngôn ngữ đang học/giao tiếp của cảnh đó.`;
 
   const strictFileContract = `
 QUY TẮC XUẤT FILE BẮT BUỘC (STRICT FILE OUTPUT):
@@ -2660,6 +2735,7 @@ const VALID_2411_VARIANTS: ReadonlySet<string> = new Set([
 ]);
 
 const VALID_2411_ANIMATIONS: ReadonlySet<string> = new Set([
+  'random',
   'pop-up',
   'slide-up',
   'drop-in',
@@ -2690,23 +2766,29 @@ export function sanitizeSceneComponentsList(
         ? { animationIn: animRaw as Studio2411AnimationIn }
         : {}),
       ...(typeof obj.title === 'string' && obj.title.trim()
-        ? { title: obj.title.trim().slice(0, 90) }
+        ? { title: obj.title.trim().slice(0, 120) }
         : {}),
       ...(typeof obj.subtitle === 'string' && obj.subtitle.trim()
-        ? { subtitle: obj.subtitle.trim().slice(0, 80) }
+        ? { subtitle: obj.subtitle.trim().slice(0, 110) }
         : {}),
       ...(labels && labels.length > 0 ? { labels } : {}),
       ...(typeof obj.highlightWord === 'string' && obj.highlightWord.trim()
-        ? { highlightWord: obj.highlightWord.trim().slice(0, 40) }
+        ? { highlightWord: obj.highlightWord.trim().slice(0, 80) }
         : {}),
       ...(typeof obj.formula === 'string' && obj.formula.trim()
-        ? { formula: obj.formula.trim().slice(0, 72) }
+        ? { formula: obj.formula.trim().slice(0, 100) }
         : {}),
       ...(typeof obj.speechText === 'string' && obj.speechText.trim()
-        ? { speechText: obj.speechText.trim().slice(0, 110) }
+        ? { speechText: obj.speechText.trim().slice(0, 160) }
         : {}),
       ...(typeof obj.reactionText === 'string' && obj.reactionText.trim()
-        ? { reactionText: obj.reactionText.trim().slice(0, 36) }
+        ? { reactionText: obj.reactionText.trim().slice(0, 48) }
+        : {}),
+      ...(typeof obj.exampleText === 'string' && obj.exampleText.trim()
+        ? { exampleText: obj.exampleText.trim().slice(0, 180) }
+        : {}),
+      ...(typeof obj.prevTargetText === 'string' && obj.prevTargetText.trim()
+        ? { prevTargetText: obj.prevTargetText.trim().slice(0, 180) }
         : {}),
       ...(typeof obj.accentColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(obj.accentColor.trim())
         ? { accentColor: obj.accentColor.trim() }

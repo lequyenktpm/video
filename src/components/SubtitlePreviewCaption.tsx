@@ -1,6 +1,11 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Clock } from 'lucide-react';
-import { ScriptStyle, SubtitleConfig, VideoAspectRatio } from '../shared/types';
+import {
+  ScriptStyle,
+  Studio2411ThemeId,
+  SubtitleConfig,
+  VideoAspectRatio,
+} from '../shared/types';
 import {
   analyzeScriptLinePresentation,
   getCanvasDimensions,
@@ -12,6 +17,7 @@ import {
   wrapSubtitleLine,
 } from '../shared/mptEngine';
 import { PresentationIcon } from './PresentationIcon';
+import { Studio2411CountdownCard } from './Studio2411StageCard';
 
 const ROLE_TONE_CLASSES: Record<PresentationRoleTone, string> = {
   indigo: 'bg-indigo-600/90 text-white border-indigo-400/50',
@@ -34,6 +40,8 @@ interface SubtitlePreviewCaptionProps {
   isSecondarySlot?: boolean;
   isIntroOrOutro?: boolean;
   isLightBackground?: boolean;
+  use2411CountdownStyle?: boolean;
+  studio2411Theme?: Studio2411ThemeId;
 }
 
 function needsDarkContrastOnLightBg(hex: string): boolean {
@@ -99,6 +107,8 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   isSecondarySlot = false,
   isIntroOrOutro = false,
   isLightBackground = false,
+  use2411CountdownStyle = false,
+  studio2411Theme,
 }) => {
   const effect = subtitle.effect ?? 'karaoke';
   const showBadges = subtitle.showRoleBadges !== false;
@@ -263,9 +273,21 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     const stageH = stageEl.clientHeight;
     const subTop = subEl.offsetTop;
     const subBottom = subTop + subEl.offsetHeight;
-    const cdHeightPx = Math.max(88, Math.round(countdownFontPx * 1.8));
+    const cdHeightPx = use2411CountdownStyle
+      ? 52
+      : Math.max(82, Math.round(countdownFontPx * 1.85));
     const bands = [{ topPx: subTop, bottomPx: subBottom }];
-    if (subTop > stageH * 0.56) {
+    const cardInnerEl = stageEl.querySelector('[data-testid="studio-2411-stage-card"] > div:last-child');
+    if (cardInnerEl) {
+      const sr = stageEl.getBoundingClientRect();
+      const cr = cardInnerEl.getBoundingClientRect();
+      bands.push({
+        topPx: Math.max(0, Math.round(cr.top - sr.top)),
+        bottomPx: Math.max(0, Math.round(cr.bottom - sr.top)),
+      });
+    } else if (use2411CountdownStyle) {
+      bands.push({ topPx: 0, bottomPx: Math.round(stageH * 0.48) });
+    } else if (subTop > stageH * 0.56) {
       bands.push({ topPx: 0, bottomPx: Math.round(stageH * 0.37) });
     }
     const safeCenterY = resolveCountdownCenterY(
@@ -273,7 +295,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
       cdHeightPx,
       stageH
     );
-    const nextPct = Math.max(18, Math.min(80, Number(((safeCenterY / stageH) * 100).toFixed(1))));
+    const nextPct = Math.max(18, Math.min(82, Number(((safeCenterY / stageH) * 100).toFixed(1))));
     setCountdownTopPct(nextPct);
   }, [
     countdownNumber,
@@ -287,6 +309,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     subtitle.boxStyle,
     aspectRatio,
     countdownFontPx,
+    use2411CountdownStyle,
   ]);
 
   const targetCaptionNode = (
@@ -456,48 +479,57 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
             transform: 'translateY(-50%)',
           }}
         >
-          <div
-            className="rounded-xl border border-amber-400/45 shadow-xl px-4 py-2.5 flex flex-col items-center gap-1.5"
-            style={{
-              minWidth: '126px',
-              backgroundColor: 'rgba(15, 23, 42, 0.88)',
-              backdropFilter: 'blur(8px)',
-            }}
-          >
-            <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-widest uppercase text-amber-300">
-              <Clock className="w-3 h-3" aria-hidden="true" />
-              <span>THINK</span>
-            </span>
-
-            <span
-              key={countdownNumber}
-              className="animate-mpt-countdown font-extrabold leading-none tabular-nums select-none"
+          {use2411CountdownStyle ? (
+            <Studio2411CountdownCard
+              countdownNumber={countdownNumber}
+              countdownTotalSec={totalCdSteps}
+              themeId={studio2411Theme}
+              accentColor={effectiveHighlightColor}
+            />
+          ) : (
+            <div
+              className="rounded-xl border border-amber-400/45 shadow-xl px-4 py-2.5 flex flex-col items-center gap-1.5"
               style={{
-                fontFamily: fontCss,
-                fontSize: `${countdownFontPx}px`,
-                color: subtitle.highlightColor || '#FACC15',
-                paintOrder: 'stroke fill',
-                WebkitTextStroke: '2.5px #000000',
-                textShadow: '0 4px 14px rgba(0,0,0,0.85)',
+                minWidth: '126px',
+                backgroundColor: 'rgba(15, 23, 42, 0.88)',
+                backdropFilter: 'blur(8px)',
               }}
             >
-              {countdownNumber}
-            </span>
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-widest uppercase text-amber-300">
+                <Clock className="w-3 h-3" aria-hidden="true" />
+                <span>THINK TIME</span>
+              </span>
 
-            <div
-              className="w-full h-1.5 rounded-full bg-slate-700/80 overflow-hidden"
-              role="progressbar"
-              aria-label="Think countdown"
-              aria-valuenow={countdownNumber}
-              aria-valuemin={0}
-              aria-valuemax={totalCdSteps}
-            >
+              <span
+                key={countdownNumber}
+                className="animate-mpt-countdown font-extrabold leading-none tabular-nums select-none"
+                style={{
+                  fontFamily: fontCss,
+                  fontSize: `${countdownFontPx}px`,
+                  color: subtitle.highlightColor || '#FACC15',
+                  paintOrder: 'stroke fill',
+                  WebkitTextStroke: '2.5px #000000',
+                  textShadow: '0 4px 14px rgba(0,0,0,0.85)',
+                }}
+              >
+                {countdownNumber}
+              </span>
+
               <div
-                className="h-full rounded-full bg-amber-400 transition-[width] duration-300 ease-out"
-                style={{ width: `${countdownPct}%` }}
-              />
+                className="w-full h-1.5 rounded-full bg-slate-700/80 overflow-hidden"
+                role="progressbar"
+                aria-label="Think countdown"
+                aria-valuenow={countdownNumber}
+                aria-valuemin={0}
+                aria-valuemax={totalCdSteps}
+              >
+                <div
+                  className="h-full rounded-full bg-amber-400 transition-[width] duration-300 ease-out"
+                  style={{ width: `${countdownPct}%` }}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 

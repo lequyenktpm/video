@@ -60,7 +60,7 @@ export type Studio2411ComponentVariant =
   | 'avatar-speech'
   | 'dialogue-upgrade';
 
-export type Studio2411AnimationIn = 'pop-up' | 'slide-up' | 'drop-in' | 'fade-scale';
+export type Studio2411AnimationIn = 'random' | 'pop-up' | 'slide-up' | 'drop-in' | 'fade-scale';
 
 export interface Studio2411SceneComponentOverride {
   variant?: Studio2411ComponentVariant;
@@ -72,6 +72,8 @@ export interface Studio2411SceneComponentOverride {
   formula?: string;
   speechText?: string;
   reactionText?: string;
+  exampleText?: string;
+  prevTargetText?: string;
   accentColor?: string;
   progressPct?: number;
 }

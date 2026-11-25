@@ -119,34 +119,34 @@ const SUBTITLE_COLOR_THEMES: Array<{
   highlightColor: string;
   strokeColor: string;
 }> = [
-  { name: 'Trắng Vàng Điện Ảnh', textColor: '#FFFFFF', highlightColor: '#FACC15', strokeColor: '#0F172A' },
-  { name: 'Xanh Ngọc Hiện Đại', textColor: '#F8FAFC', highlightColor: '#2DD4BF', strokeColor: '#0F172A' },
-  { name: 'Hồng San Hô Nổi Bật', textColor: '#FFF1F2', highlightColor: '#FB7185', strokeColor: '#1E1B4B' },
-  { name: 'Kem Ấm Hoàng Hôn', textColor: '#FEF3C7', highlightColor: '#FB923C', strokeColor: '#1C1917' },
-  { name: 'Tím Lavender Sáng Tạo', textColor: '#F5F3FF', highlightColor: '#C084FC', strokeColor: '#1E1B4B' },
-  { name: 'Xanh Bầu Trời Tươi Mát', textColor: '#F0F9FF', highlightColor: '#38BDF8', strokeColor: '#0C4A6E' },
+  { name: 'Mực Đen Indigo (Nền sáng 2411)', textColor: '#0F172A', highlightColor: '#4F46E5', strokeColor: '#FFFFFF' },
+  { name: 'Navy Sắc Nét (Nền sáng)', textColor: '#1E293B', highlightColor: '#0284C7', strokeColor: '#FFFFFF' },
+  { name: 'Ngọc Lục Bảo Đậm (Nền sáng)', textColor: '#064E3B', highlightColor: '#059669', strokeColor: '#FFFFFF' },
+  { name: 'Trắng Vàng Điện Ảnh (Nền tối)', textColor: '#FFFFFF', highlightColor: '#FACC15', strokeColor: '#0F172A' },
+  { name: 'Xanh Ngọc Hiện Đại (Nền tối)', textColor: '#F8FAFC', highlightColor: '#2DD4BF', strokeColor: '#0F172A' },
+  { name: 'Hồng San Hô Nổi Bật (Nền tối)', textColor: '#FFF1F2', highlightColor: '#FB7185', strokeColor: '#1E1B4B' },
 ];
 
 const TEXT_COLOR_SWATCHES = [
+  '#0F172A',
+  '#1E293B',
+  '#312E81',
+  '#064E3B',
   '#FFFFFF',
-  '#FEF3C7',
   '#FACC15',
   '#38BDF8',
   '#2DD4BF',
-  '#4ADE80',
-  '#FB7185',
-  '#C084FC',
 ];
 
 const KARAOKE_COLOR_SWATCHES = [
+  '#4F46E5',
+  '#0284C7',
+  '#059669',
   '#FACC15',
   '#2DD4BF',
-  '#38BDF8',
-  '#4ADE80',
   '#FB7185',
   '#C084FC',
   '#FB923C',
-  '#F472B6',
 ];
 
 interface VideoStudioViewProps {
@@ -501,6 +501,22 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const active2411Meta = getStudio2411ThemeMeta(config.studio2411Theme);
   const active2411Override =
     activeScene?.componentSpec ?? config.sceneComponents?.[safeActiveIdx];
+  let prevTargetForActive2411: string | undefined;
+  if (!activeIsSecondarySlot && !activeIsIntroOrOutro && activeRawLineIdx !== null && activeRawLineIdx > 0) {
+    for (let pi = activeRawLineIdx - 1; pi >= 0; pi--) {
+      const candidateLine = rawNonEmptyLines[pi] ?? '';
+      const candidatePres = analyzeScriptLinePresentation(candidateLine, {
+        scriptStyle: config.scriptStyle,
+      });
+      const looksSecondary =
+        candidatePres.roleKind === 'answer' ||
+        /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(candidateLine);
+      if (looksSecondary && candidatePres.cleanText) {
+        prevTargetForActive2411 = candidatePres.cleanText;
+        break;
+      }
+    }
+  }
   const active2411Spec = build2411CardSpecForLine({
     rawLine: activeRawLine,
     lineIndex: safeActiveIdx,
@@ -510,6 +526,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     scriptStyle: config.scriptStyle,
     themeId: config.studio2411Theme,
     defaultPauseSec: config.pauseBetweenLinesSec ?? 5,
+    prevTargetText: prevTargetForActive2411,
+    animationSeed: captionReplayNonce,
     override: active2411Override,
   });
   const activeCuratedBgs = selectCuratedBackgroundsForConfig({
@@ -1106,12 +1124,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 }}
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
               >
+                <option value="studio_2411">
+                  Thẻ học tập Component 2411 (14 layout: Hội thoại, Flashcard, Roadmap, Gauge, 3D...)
+                </option>
                 <option value="mixkit_video">Video B-roll HD chuyển động mượt (Mixkit Free)</option>
                 <option value="curated_preset">
                   Kho nền có sẵn (Học tập · Phỏng vấn · Đời sống — Không cần AI)
-                </option>
-                <option value="studio_2411">
-                  Thẻ học tập Component 2411 (14 layout: Hội thoại, Flashcard, Roadmap, Gauge, 3D...)
                 </option>
                 <option value="hybrid_real">B-roll HD + Cảnh minh họa chọn lọc</option>
                 <option value="neutral_css_bg">Nền Trung Tính Studio (CSS Tối giản — Chữ siêu nét)</option>
@@ -1121,7 +1139,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </option>
               </select>
               <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                Chọn <strong>Kho nền có sẵn</strong> khi không muốn dùng AI tìm ảnh, <strong>Component 2411</strong> để hiển thị 14 mẫu thẻ thông minh (có nhân vật hội thoại), hoặc <strong>Mixkit / B-roll</strong> khi cần video cảnh thật.
+                Mặc định dùng <strong>Component 2411</strong> với 14 mẫu thẻ thông minh (nhân vật hội thoại, ví dụ, gợi nhớ). Có thể đổi sang <strong>Kho nền có sẵn</strong> hoặc <strong>Mixkit / B-roll</strong> bất cứ lúc nào.
               </p>
             </div>
 
@@ -1370,7 +1388,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       </label>
                       <select
                         id="mpt-2411-scene-anim"
-                        value={active2411Spec.animationIn}
+                        value={config.sceneComponents?.[safeActiveIdx]?.animationIn ?? active2411Spec.animationIn}
                         onChange={(e) => {
                           const nextAnim = e.target.value as Studio2411AnimationIn;
                           const nextList = [...(config.sceneComponents ?? [])];
@@ -1475,6 +1493,35 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     </div>
                   </div>
                 )}
+
+                <div className="pt-2 border-t border-slate-200/80">
+                  <label
+                    htmlFor="mpt-2411-example-text"
+                    className="block text-[11px] font-medium text-slate-700 mb-1"
+                  >
+                    Ví dụ / Ghi chú gợi nhớ trên thẻ (#{safeActiveIdx + 1})
+                  </label>
+                  <input
+                    id="mpt-2411-example-text"
+                    type="text"
+                    value={config.sceneComponents?.[safeActiveIdx]?.exampleText ?? active2411Spec.exampleText ?? ''}
+                    onChange={(e) => {
+                      const nextList = [...(config.sceneComponents ?? [])];
+                      nextList[safeActiveIdx] = {
+                        ...(nextList[safeActiveIdx] ?? {}),
+                        variant: active2411Spec.variant,
+                        exampleText: e.target.value,
+                      };
+                      setPreviewScenes([]);
+                      onChangeConfig({
+                        sceneComponents: nextList,
+                        customScenes: undefined,
+                      });
+                    }}
+                    placeholder="Ví dụ giao tiếp hữu ích hoặc câu gợi nhớ..."
+                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
+                  />
+                </div>
               </div>
             )}
 
@@ -3069,7 +3116,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {(studioTab === 'learning' || (config.pauseBetweenLinesSec ?? 0) >= 1.5) && (
+              {(config.materialSource === 'studio_2411' ||
+                studioTab === 'learning' ||
+                (config.pauseBetweenLinesSec ?? 0) >= 1.5) && (
                 <button
                   type="button"
                   data-testid="preview-countdown-btn"
@@ -3164,7 +3213,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 )
               ) : config.materialSource === 'studio_2411' ? (
                 <Studio2411StageCard
-                  key={`${safeActiveIdx}_${active2411Spec.variant}_${active2411Spec.animationIn}_${captionReplayNonce}`}
+                  key={`${safeActiveIdx}_${active2411Spec.variant}_${active2411Spec.resolvedAnimationIn}_${captionReplayNonce}`}
                   rawLine={activeRawLine}
                   lineIndex={safeActiveIdx}
                   totalLines={Math.max(1, totalPreviewItems)}
@@ -3175,6 +3224,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   pauseBetweenLinesSec={config.pauseBetweenLinesSec ?? 5}
                   aspectRatio={config.aspectRatio}
                   countdownActive={previewCountdown !== null}
+                  prevTargetText={prevTargetForActive2411}
+                  animationSeed={captionReplayNonce}
                   override={active2411Override}
                 />
               ) : config.materialSource === 'curated_preset' ? (
@@ -3249,6 +3300,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   isSecondarySlot={activeIsSecondarySlot}
                   isIntroOrOutro={activeIsIntroOrOutro}
                   isLightBackground={isLightNeutralBg}
+                  use2411CountdownStyle={config.materialSource === 'studio_2411'}
+                  studio2411Theme={config.studio2411Theme}
                 />
               )}
             </div>

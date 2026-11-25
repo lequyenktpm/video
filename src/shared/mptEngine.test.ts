@@ -56,9 +56,11 @@ import {
   build2411CardSpecForLine,
   build2411CardSvg,
   buildContextualSceneComponentsForScript,
+  resolveStudio2411AnimationIn,
   STUDIO_2411_ANIMATION_OPTIONS,
   STUDIO_2411_THEMES,
   STUDIO_2411_VARIANT_OPTIONS,
+  wrapSvgCardLines,
 } from './studioComponents2411';
 import {
   buildCuratedBackgroundSvg,
@@ -565,7 +567,8 @@ test('buildCountdownCues, splitCueIntoShortSubCues, and 5s smart learning pacing
     1280
   );
   assert.ok(ass.includes('Style: Countdown,Noto Sans,'));
-  assert.ok(ass.includes('Dialogue: 1,0:00:10.00,0:00:11.00,Countdown,,0,0,0,,'));
+  assert.ok(ass.includes('Dialogue: 1,0:00:10.00,0:00:11.00,CountdownMeta,,0,0,0,,'));
+  assert.ok(ass.includes('Dialogue: 2,0:00:10.00,0:00:11.00,Countdown,,0,0,0,,'));
   assert.ok(ass.includes('5'));
 });
 
@@ -1036,6 +1039,19 @@ test('countdown avoids overlapping tall/center/top subtitles, Intro/Outro stay 1
   const assCdY = Number(posMatch[1]);
   assert.notEqual(assCdY, 640, 'Countdown must shift away from center subtitle at 640px');
 
+  const twoBandCenterY = resolveCountdownCenterY(
+    [
+      { topPx: 45, bottomPx: 220 },
+      { topPx: 295, bottomPx: 390 },
+    ],
+    52,
+    434
+  );
+  assert.ok(
+    twoBandCenterY - 26 >= 220 && twoBandCenterY + 26 <= 295,
+    `Countdown centerY=${twoBandCenterY} must sit cleanly between upper card (bottom=220) and lower subtitle (top=295)`
+  );
+
   // 2. Intro ("1-Minute Instant Translation Challenge!") and Outro only read & display strictly ONCE
   const segs = planNarrationSegments({
     subject: 'Instant Translation Interview',
@@ -1087,30 +1103,30 @@ test('countdown avoids overlapping tall/center/top subtitles, Intro/Outro stay 1
   assert.ok(interviewFilename.startsWith('💼 '));
 });
 
-test('analyzeScriptLinePresentation and detectLineContextVisual identify roles and clean icons', () => {
+test('analyzeScriptLinePresentation and detectLineContextVisual identify English instructional roles and clean icons', () => {
   const titlePres = analyzeScriptLinePresentation('Tiêu đề: 1分瞬間英作文チャレンジ！');
   assert.equal(titlePres.roleKind, 'title');
-  assert.equal(titlePres.roleLabel, 'Mở đầu');
+  assert.equal(titlePres.roleLabel, 'Intro');
   assert.equal(titlePres.roleIconKey, 'megaphone');
   assert.equal(titlePres.roleTone, 'sky');
 
   const questionPres = analyzeScriptLinePresentation('Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]');
   assert.equal(questionPres.roleKind, 'question');
-  assert.equal(questionPres.roleLabel, 'Người hỏi');
+  assert.equal(questionPres.roleLabel, 'Question');
   assert.equal(questionPres.roleIconKey, 'hand_raise');
   assert.equal(questionPres.contextIconKey, 'alert_triangle');
   assert.equal(questionPres.hasPause, true);
 
   const answerPres = analyzeScriptLinePresentation('English: Watch out for her!');
   assert.equal(answerPres.roleKind, 'answer');
-  assert.equal(answerPres.roleLabel, 'Người trả lời');
+  assert.equal(answerPres.roleLabel, 'Answer');
   assert.equal(answerPres.roleIconKey, 'chat_quote');
   assert.equal(answerPres.roleTone, 'emerald');
   assert.equal(answerPres.contextIconKey, 'alert_triangle');
 
   const outroPres = analyzeScriptLinePresentation('Outro: Hãy lưu video để ôn tập nhé!');
   assert.equal(outroPres.roleKind, 'outro');
-  assert.equal(outroPres.roleLabel, 'Kết bài');
+  assert.equal(outroPres.roleLabel, 'Closing');
   assert.equal(outroPres.roleIconKey, 'bell');
 
   assert.equal(detectLineContextVisual('Tại đáy rãnh Mariana, sinh vật biển tự phát sáng').contextIconKey, 'waves');
@@ -1172,7 +1188,7 @@ test('NEUTRAL_BG_THEMES and getNeutralBgThemeMeta cover dark and light studio th
   assert.equal(cleanGrid.isLight, true);
 });
 
-test('buildAssFromCues emits RoleBadge and CountdownMeta vector progress bar alongside Countdown', () => {
+test('buildAssFromCues emits English RoleBadge, Component 2411 countdown, and protects light background contrast', () => {
   const cues = [
     {
       index: 1,
@@ -1182,7 +1198,15 @@ test('buildAssFromCues emits RoleBadge and CountdownMeta vector progress bar alo
       voiceSlot: 'primary' as const,
       isStickySource: false,
       roleKind: 'question' as const,
-      roleLabel: 'Người hỏi',
+      roleLabel: 'Question',
+    },
+    {
+      index: 2,
+      startSec: 5,
+      endSec: 10,
+      text: '「彼女には気をつけて！」を英語で言えますか？',
+      voiceSlot: 'primary' as const,
+      isStickySource: true,
     },
     ...buildCountdownCues(5, 5, 10),
   ];
@@ -1203,20 +1227,30 @@ test('buildAssFromCues emits RoleBadge and CountdownMeta vector progress bar alo
     showRoleBadges: true,
   };
 
-  const ass = buildAssFromCues(cues, subCfg, 720, 1280);
-  assert.ok(ass.includes('Style: RoleBadge,'));
-  assert.ok(ass.includes('Style: CountdownMeta,'));
-  assert.ok(ass.includes(',RoleBadge,'));
-  assert.ok(ass.includes('● Người hỏi'));
-  assert.ok(ass.includes('THINK'));
-  assert.ok(ass.includes('\\p1'));
-  assert.ok(ass.includes('\\p0'));
+  const assDark = buildAssFromCues(cues, subCfg, 720, 1280);
+  assert.ok(assDark.includes('Style: RoleBadge,'));
+  assert.ok(assDark.includes('Style: CountdownMeta,'));
+  assert.ok(assDark.includes(',RoleBadge,'));
+  assert.ok(assDark.includes('● Question'));
+  assert.ok(assDark.includes('THINK'));
+  assert.ok(assDark.includes('\\p1'));
+  assert.ok(assDark.includes('\\p0'));
+
+  const assLight2411 = buildAssFromCues(cues, subCfg, 720, 1280, {
+    isLightBackground: true,
+    use2411CountdownStyle: true,
+  });
+  assert.ok(assLight2411.includes('Style: CountdownMeta,'));
+  assert.ok(assLight2411.includes('THINK TIME'));
+  // Bright white textColor (#FFFFFF) must auto-convert to high-contrast dark ink (&H002A170F) on light backgrounds
+  assert.ok(assLight2411.includes('&H002A170F'));
+  assert.equal(assLight2411.includes('Style: StickySource,M PLUS 1p,28,&H00F0E8E2'), false);
 
   const assNoBadges = buildAssFromCues(cues, { ...subCfg, showRoleBadges: false }, 720, 1280);
   assert.equal(assNoBadges.includes(',RoleBadge,'), false);
 });
 
-test('STUDIO_2411_THEMES, build2411CardSpecForLine, and build2411CardSvg build clean study card SVGs', () => {
+test('STUDIO_2411_THEMES, build2411CardSpecForLine, and build2411CardSvg build non-truncated English study card SVGs', () => {
   assert.equal(STUDIO_2411_THEMES.length, 5);
   const spec = build2411CardSpecForLine({
     rawLine: 'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
@@ -1228,9 +1262,19 @@ test('STUDIO_2411_THEMES, build2411CardSpecForLine, and build2411CardSvg build c
   });
   assert.equal(spec.layoutKind, 'quiz_prompt');
   assert.equal(spec.kickerLabel, 'LISTEN & TRANSLATE');
+  assert.equal(spec.animationIn, 'random');
+  assert.notEqual(spec.resolvedAnimationIn, 'random');
   assert.equal(spec.iconKey, 'alert_triangle');
   assert.equal(spec.hasPause, true);
   assert.equal(spec.pauseSec, 5);
+
+  const wrappedLong = wrapSvgCardLines(
+    'My weakness is that I sometimes focus too much on small details before stepping back to review the big picture.',
+    32
+  );
+  assert.ok(wrappedLong.length >= 3);
+  assert.equal(wrappedLong.join(' ').includes('…'), false);
+  assert.equal(wrappedLong.join(' ').includes('...'), false);
 
   const svg = build2411CardSvg({
     spec,
@@ -1239,9 +1283,10 @@ test('STUDIO_2411_THEMES, build2411CardSpecForLine, and build2411CardSvg build c
   });
   assert.ok(svg.startsWith('<svg '));
   assert.ok(svg.includes('LISTEN &amp; TRANSLATE'));
-  assert.ok(svg.includes('思考タイム · 5s'));
+  assert.ok(svg.includes('THINK TIME · 5S'));
   assert.ok(svg.includes('#F5F3FF'));
   assert.equal(svg.includes('undefined'), false);
+  assert.equal(svg.includes('…'), false);
 });
 
 test('splitTtsTextChunks and planXfadeMergeBatches safely scale long videos', () => {
@@ -1276,9 +1321,15 @@ test('splitTtsTextChunks and planXfadeMergeBatches safely scale long videos', ()
   assert.equal(batches30.flat().length, 30);
 });
 
-test('all 14 Studio 2411 variants (including dialogue avatars) render distinct SVGs and AI planner avoids repetition', () => {
+test('all 14 Studio 2411 variants render distinct SVGs without truncation, support random animations, and track examples/prevTargetText', () => {
   assert.equal(STUDIO_2411_VARIANT_OPTIONS.length, 14);
-  assert.equal(STUDIO_2411_ANIMATION_OPTIONS.length, 4);
+  assert.equal(STUDIO_2411_ANIMATION_OPTIONS.length, 5);
+  assert.equal(STUDIO_2411_ANIMATION_OPTIONS[0].id, 'random');
+
+  const resolved0 = resolveStudio2411AnimationIn('random', 0);
+  const resolved1 = resolveStudio2411AnimationIn('random', 1);
+  assert.notEqual(resolved0, 'random');
+  assert.notEqual(resolved0, resolved1);
 
   const svgsByVariant = new Set<string>();
   const animChoices: Studio2411AnimationIn[] = STUDIO_2411_ANIMATION_OPTIONS.map((o) => o.id);
@@ -1286,33 +1337,42 @@ test('all 14 Studio 2411 variants (including dialogue avatars) render distinct S
     const v = STUDIO_2411_VARIANT_OPTIONS[i].id;
     const anim: Studio2411AnimationIn = animChoices[i % animChoices.length];
     const spec = build2411CardSpecForLine({
-      rawLine: 'A: 私の長所は積極性です。 [PAUSE]',
+      rawLine: 'A: 私の長所は積極性です。学生時代にはスピーチ大会やチーム発表にも進んで参加しました。 [PAUSE]',
       lineIndex: i,
       totalLines: 14,
       scriptStyle: 'language_challenge',
       themeId: i % 2 === 0 ? 'cards_pastel' : 'word_reveal_dark',
       defaultPauseSec: 5,
+      prevTargetText: i > 0 ? 'Watch out for her!' : undefined,
       override: {
         variant: v,
         animationIn: anim,
-        title: `Tiêu đề ${v}`,
+        title: `Scene ${v}`,
         labels: ['Interviewer', 'Candidate', 'Follow-up'],
         highlightWord: 'Proactive',
         formula: 'Subject + Verb',
-        speechText: 'What is your biggest strength?',
+        speechText: 'What is your biggest strength when leading a cross-functional project under tight deadlines?',
         reactionText: 'Natural!',
+        exampleText: 'e.g. I proactively organized our weekly team check-ins.',
+        prevTargetText: i > 0 ? 'Watch out for her!' : undefined,
         progressPct: 72,
       },
     });
     assert.equal(spec.variant, v);
     assert.equal(spec.animationIn, anim);
-    assert.equal(spec.speechText, 'What is your biggest strength?');
+    assert.equal(
+      spec.speechText,
+      'What is your biggest strength when leading a cross-functional project under tight deadlines?'
+    );
     assert.equal(spec.reactionText, 'Natural!');
+    assert.equal(spec.exampleText, 'e.g. I proactively organized our weekly team check-ins.');
 
     const svg = build2411CardSvg({ spec, width: 720, height: 1280 });
     assert.ok(svg.startsWith('<svg '));
     assert.equal(svg.includes('undefined'), false);
     assert.equal(svg.includes('NaN'), false);
+    assert.equal(svg.includes('…'), false, `Variant ${v} truncated text with ellipsis`);
+    assert.ok(svg.includes('e.g. I proactively'), `Variant ${v} should include exampleText footer strip`);
     svgsByVariant.add(svg);
   }
   assert.equal(svgsByVariant.size, 14, 'All 14 variants must produce distinct SVG visuals');
@@ -1321,8 +1381,8 @@ test('all 14 Studio 2411 variants (including dialogue avatars) render distinct S
     'Tiêu đề: Phỏng vấn tiếng Nhật - Anh [PAUSE]',
     'Q: あなたの長所と短所を教えてください。 [PAUSE]',
     'English: Please tell me your strengths and weaknesses.',
-    'A: 私の長所は積極性です。',
-    'English: Instead of very good, say proactive!',
+    'A: 私の長所は積極性です。 [PAUSE]',
+    'English: My strength is proactiveness.',
     'Outro: ありがとうございました！',
   ].join('\n');
 
@@ -1335,6 +1395,14 @@ test('all 14 Studio 2411 variants (including dialogue avatars) render distinct S
   for (let i = 1; i < planned.length; i++) {
     assert.notEqual(planned[i].variant, planned[i - 1].variant, 'Planner avoids consecutive duplicate variants');
   }
+  assert.ok(
+    planned[3].prevTargetText?.includes('Please tell me your strengths'),
+    'Later question/scene remembers previous target phrase for learner recall'
+  );
+  assert.ok(
+    planned.some((p) => Boolean(p.exampleText && !p.exampleText.includes('...'))),
+    'Planner provides concrete exampleText without placeholder ellipsis'
+  );
   const usedVariants = new Set(planned.map((p) => p.variant));
   assert.ok(
     usedVariants.has('friends-chat') || usedVariants.has('avatar-speech') || usedVariants.has('dialogue-upgrade'),
@@ -1344,10 +1412,12 @@ test('all 14 Studio 2411 variants (including dialogue avatars) render distinct S
   const sanitized = sanitizeSceneComponentsList([
     {
       variant: 'friends-chat',
-      animationIn: 'pop-up',
+      animationIn: 'random',
       labels: ['Alex', 'Mia'],
       speechText: 'Could I get an iced latte?',
       reactionText: 'Polite!',
+      exampleText: 'e.g. Could I have one to go?',
+      prevTargetText: 'Wait a second!',
     },
     {
       variant: 'dialogue-upgrade',
@@ -1358,8 +1428,11 @@ test('all 14 Studio 2411 variants (including dialogue avatars) render distinct S
   ]);
   assert.ok(sanitized && sanitized.length === 2);
   assert.equal(sanitized[0].variant, 'friends-chat');
+  assert.equal(sanitized[0].animationIn, 'random');
   assert.equal(sanitized[0].speechText, 'Could I get an iced latte?');
   assert.equal(sanitized[0].reactionText, 'Polite!');
+  assert.equal(sanitized[0].exampleText, 'e.g. Could I have one to go?');
+  assert.equal(sanitized[0].prevTargetText, 'Wait a second!');
   assert.equal(sanitized[1].variant, 'dialogue-upgrade');
 });
 

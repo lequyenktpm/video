@@ -1,12 +1,115 @@
 import React from 'react';
+import { Clock } from 'lucide-react';
 import {
   ScriptStyle,
   Studio2411SceneComponentOverride,
   Studio2411ThemeId,
   VideoAspectRatio,
 } from '../shared/types';
-import { build2411CardSpecForLine } from '../shared/studioComponents2411';
+import {
+  build2411CardSpecForLine,
+  getStudio2411ThemeMeta,
+} from '../shared/studioComponents2411';
 import { PresentationIcon } from './PresentationIcon';
+
+interface Studio2411CountdownCardProps {
+  countdownNumber: number;
+  countdownTotalSec: number;
+  themeId?: Studio2411ThemeId;
+  accentColor?: string;
+}
+
+export const Studio2411CountdownCard: React.FC<Studio2411CountdownCardProps> = ({
+  countdownNumber,
+  countdownTotalSec,
+  themeId,
+  accentColor,
+}) => {
+  const theme = getStudio2411ThemeMeta(themeId);
+  const totalSteps = Math.max(1, Math.round(countdownTotalSec || 5));
+  const pct = Math.max(6, Math.min(100, Math.round((countdownNumber / totalSteps) * 100)));
+  const primaryHex = accentColor || theme.accentHex;
+  const secondaryHex = theme.secondaryAccentHex;
+  const radius = 15;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference * (1 - pct / 100);
+
+  return (
+    <div
+      data-testid="studio-2411-countdown-card"
+      className="rounded-xl border shadow-lg px-3 py-1.5 flex items-center gap-2.5"
+      style={{
+        minWidth: '154px',
+        backgroundColor: theme.isLight ? 'rgba(255,255,255,0.97)' : 'rgba(15,23,42,0.93)',
+        borderColor: theme.cardBorderHex,
+      }}
+    >
+      <div className="relative w-9 h-9 flex items-center justify-center shrink-0">
+        <svg viewBox="0 0 38 38" className="w-9 h-9 -rotate-90" aria-hidden="true">
+          <circle
+            cx="19"
+            cy="19"
+            r={radius}
+            fill="none"
+            stroke={theme.cardBorderHex}
+            strokeWidth="3.5"
+          />
+          <circle
+            cx="19"
+            cy="19"
+            r={radius}
+            fill="none"
+            stroke={primaryHex}
+            strokeWidth="3.5"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={dashOffset}
+            style={{ transition: 'stroke-dashoffset 260ms ease-out' }}
+          />
+        </svg>
+        <span
+          key={countdownNumber}
+          className="animate-mpt-countdown absolute inset-0 flex items-center justify-center text-sm font-extrabold tabular-nums select-none"
+          style={{ color: theme.textHex }}
+        >
+          {countdownNumber}
+        </span>
+      </div>
+
+      <div className="flex-1 min-w-[78px] space-y-1">
+        <div
+          className="flex items-center justify-between gap-1.5 text-[8.5px] font-bold tracking-wider uppercase"
+          style={{ color: primaryHex }}
+        >
+          <span className="inline-flex items-center gap-1">
+            <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+            <span>THINK TIME</span>
+          </span>
+          <span className="tabular-nums" style={{ color: theme.mutedTextHex }}>
+            {countdownNumber}s
+          </span>
+        </div>
+        <div
+          className="w-full h-1.5 rounded-full overflow-hidden"
+          style={{ backgroundColor: theme.cardBorderHex }}
+          role="progressbar"
+          aria-label="Think time countdown"
+          aria-valuenow={countdownNumber}
+          aria-valuemin={0}
+          aria-valuemax={totalSteps}
+        >
+          <div
+            className="h-full rounded-full transition-[width] duration-300 ease-out"
+            style={{
+              width: `${pct}%`,
+              background: `linear-gradient(90deg, ${primaryHex}, ${secondaryHex})`,
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
 
 interface Studio2411StageCardProps {
   rawLine: string;
@@ -19,6 +122,8 @@ interface Studio2411StageCardProps {
   pauseBetweenLinesSec?: number;
   aspectRatio?: VideoAspectRatio;
   countdownActive?: boolean;
+  prevTargetText?: string;
+  animationSeed?: number;
   override?: Studio2411SceneComponentOverride;
 }
 
@@ -35,6 +140,8 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
   pauseBetweenLinesSec = 5,
   aspectRatio = '9:16',
   countdownActive = false,
+  prevTargetText,
+  animationSeed = 0,
   override,
 }) => {
   const spec = build2411CardSpecForLine({
@@ -46,6 +153,8 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
     scriptStyle,
     themeId,
     defaultPauseSec: pauseBetweenLinesSec,
+    prevTargetText,
+    animationSeed,
     override,
   });
 
@@ -58,48 +167,51 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
   const isLandscape = aspectRatio === '16:9';
 
   const animClass =
-    spec.animationIn === 'pop-up'
+    spec.resolvedAnimationIn === 'pop-up'
       ? 'animate-2411-pop-up'
-      : spec.animationIn === 'drop-in'
+      : spec.resolvedAnimationIn === 'drop-in'
       ? 'animate-2411-drop-in'
-      : spec.animationIn === 'fade-scale'
+      : spec.resolvedAnimationIn === 'fade-scale'
       ? 'animate-2411-fade-scale'
       : 'animate-2411-slide-up';
+
+  const dynamicTextCls = (str: string, base: string, compact: string) =>
+    str.length > 34 ? compact : base;
 
   const renderVariantBody = () => {
     switch (spec.variant) {
       case 'css-compare':
         return (
-          <div className="p-2.5 grid grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+          <div className="p-2 grid grid-cols-[1fr_auto_1fr] items-stretch gap-1.5">
             <div
-              className="rounded-lg border p-2 text-center"
+              className="rounded-lg border p-1.5 text-center flex flex-col justify-center min-w-0"
               style={{ backgroundColor: theme.surfaceTintHex, borderColor: theme.cardBorderHex }}
             >
-              <div className="text-[8px] font-bold uppercase truncate" style={{ color: theme.mutedTextHex }}>
-                {spec.labels[0] ?? 'Source'}
+              <div className="text-[7.5px] font-bold uppercase break-words" style={{ color: theme.mutedTextHex }}>
+                {spec.labels[0] ?? 'Prompt'}
               </div>
-              <div className="text-[10px] font-bold truncate mt-0.5" style={{ color: theme.textHex }}>
-                {spec.subtitle}
+              <div className="text-[9px] font-bold leading-snug break-words mt-0.5" style={{ color: theme.textHex }}>
+                {spec.contextLabel || spec.subtitle}
               </div>
             </div>
             <span
-              className="w-5 h-5 rounded-full text-[8px] font-bold text-white flex items-center justify-center shrink-0"
+              className="w-5 h-5 rounded-full text-[8px] font-bold text-white flex items-center justify-center shrink-0 self-center"
               style={{ backgroundColor: secondaryAccent }}
             >
               VS
             </span>
             <div
-              className="rounded-lg border p-2 text-center"
+              className="rounded-lg border p-1.5 text-center flex flex-col justify-center min-w-0"
               style={{
                 backgroundColor: `${primaryAccent}1A`,
                 borderColor: primaryAccent,
               }}
             >
-              <div className="text-[8px] font-bold uppercase truncate" style={{ color: primaryAccent }}>
+              <div className="text-[7.5px] font-bold uppercase break-words" style={{ color: primaryAccent }}>
                 {spec.labels[1] ?? 'Target'}
               </div>
-              <div className="text-[10px] font-bold truncate mt-0.5" style={{ color: theme.textHex }}>
-                {spec.highlightWord}
+              <div className={dynamicTextCls(spec.speechText || spec.highlightWord, 'text-[9.5px] font-bold leading-snug break-words mt-0.5', 'text-[8.5px] font-bold leading-snug break-words mt-0.5')} style={{ color: theme.textHex }}>
+                {spec.speechText || spec.highlightWord}
               </div>
             </div>
           </div>
@@ -107,14 +219,14 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'css-roadmap': {
         const steps = [
-          spec.labels[0] ?? 'Step 1',
-          spec.labels[1] ?? 'Step 2',
-          spec.labels[2] ?? 'Step 3',
+          spec.labels[0] ?? 'Listen',
+          spec.labels[1] ?? 'Recall',
+          spec.labels[2] ?? 'Speak',
         ];
         const activeStep = spec.stepIndex % 3;
         return (
-          <div className="p-2.5 space-y-2">
-            <div className="relative flex items-center justify-between px-2">
+          <div className="p-2 space-y-1.5">
+            <div className="relative flex items-start justify-between px-2">
               <div
                 className="absolute left-4 right-4 top-2.5 h-0.5"
                 style={{ backgroundColor: theme.cardBorderHex }}
@@ -122,9 +234,9 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
               {steps.map((lbl, idx) => {
                 const active = idx <= activeStep;
                 return (
-                  <div key={idx} className="relative z-10 flex flex-col items-center gap-1 min-w-0 max-w-[32%]">
+                  <div key={idx} className="relative z-10 flex flex-col items-center gap-0.5 min-w-0 max-w-[32%]">
                     <span
-                      className="w-5 h-5 rounded-full border text-[8px] font-mono font-bold flex items-center justify-center"
+                      className="w-5 h-5 rounded-full border text-[8px] font-mono font-bold flex items-center justify-center shrink-0"
                       style={{
                         backgroundColor: active ? primaryAccent : theme.cardBgHex,
                         borderColor: active ? primaryAccent : theme.cardBorderHex,
@@ -134,7 +246,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                       0{idx + 1}
                     </span>
                     <span
-                      className="text-[8px] font-semibold truncate max-w-full"
+                      className="text-[8px] font-semibold text-center leading-tight break-words"
                       style={{ color: active ? theme.textHex : theme.mutedTextHex }}
                     >
                       {lbl}
@@ -143,7 +255,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 );
               })}
             </div>
-            <div className="text-[9px] font-medium text-center truncate" style={{ color: theme.mutedTextHex }}>
+            <div className="text-[9px] font-medium text-center leading-snug break-words" style={{ color: theme.mutedTextHex }}>
               {spec.title}
             </div>
           </div>
@@ -152,20 +264,23 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'css-glass-quote':
         return (
-          <div className="p-2.5 flex items-start gap-2">
+          <div className="p-2 flex items-start gap-2">
             <div className="w-1 self-stretch rounded-full shrink-0" style={{ backgroundColor: primaryAccent }} />
             <div className="min-w-0 flex-1 space-y-1">
-              <div className="text-base leading-none font-serif font-bold" style={{ color: secondaryAccent }}>
+              <div className="text-sm leading-none font-serif font-bold" style={{ color: secondaryAccent }}>
                 “
               </div>
-              <div className="text-[10px] font-bold leading-snug truncate" style={{ color: theme.textHex }}>
+              <div
+                className={`${dynamicTextCls(spec.title, 'text-[10px]', 'text-[9px]')} font-bold leading-snug break-words`}
+                style={{ color: theme.textHex }}
+              >
                 {spec.title}
               </div>
-              <div className="text-[9px] truncate" style={{ color: theme.mutedTextHex }}>
+              <div className="text-[8.5px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
                 {spec.subtitle}
               </div>
               <span
-                className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold"
+                className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold break-words"
                 style={{ backgroundColor: `${primaryAccent}20`, color: primaryAccent }}
               >
                 {spec.highlightWord}
@@ -176,13 +291,13 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'css-equation':
         return (
-          <div className="p-2.5 space-y-1.5">
-            <div className="text-[8px] font-mono font-semibold truncate" style={{ color: primaryAccent }}>
+          <div className="p-2 space-y-1.5">
+            <div className="text-[8px] font-mono font-semibold leading-snug break-words" style={{ color: primaryAccent }}>
               {spec.formula}
             </div>
-            <div className="flex items-center gap-1 text-[9px] font-bold">
+            <div className="flex items-stretch gap-1 text-[8.5px] font-bold">
               <div
-                className="flex-1 min-w-0 px-1.5 py-1.5 rounded border text-center truncate"
+                className="flex-1 min-w-0 px-1.5 py-1 rounded border text-center flex items-center justify-center break-words leading-tight"
                 style={{
                   backgroundColor: theme.surfaceTintHex,
                   borderColor: theme.cardBorderHex,
@@ -191,9 +306,9 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
               >
                 {spec.labels[0] ?? 'A'}
               </div>
-              <span style={{ color: secondaryAccent }}>+</span>
+              <span className="self-center shrink-0" style={{ color: secondaryAccent }}>+</span>
               <div
-                className="flex-1 min-w-0 px-1.5 py-1.5 rounded border text-center truncate"
+                className="flex-1 min-w-0 px-1.5 py-1 rounded border text-center flex items-center justify-center break-words leading-tight"
                 style={{
                   backgroundColor: theme.surfaceTintHex,
                   borderColor: theme.cardBorderHex,
@@ -202,9 +317,9 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
               >
                 {spec.labels[1] ?? 'B'}
               </div>
-              <span style={{ color: primaryAccent }}>=</span>
+              <span className="self-center shrink-0" style={{ color: primaryAccent }}>=</span>
               <div
-                className="flex-1 min-w-0 px-1.5 py-1.5 rounded border text-center truncate"
+                className="flex-1 min-w-0 px-1.5 py-1 rounded border text-center flex items-center justify-center break-words leading-tight"
                 style={{
                   backgroundColor: `${primaryAccent}22`,
                   borderColor: primaryAccent,
@@ -219,9 +334,9 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'css-flashcard':
         return (
-          <div className="p-2.5">
+          <div className="p-2">
             <div
-              className="rounded-lg border p-2.5 text-center space-y-1 shadow-xs"
+              className="rounded-lg border p-2 text-center space-y-1 shadow-xs"
               style={{
                 backgroundColor: theme.surfaceTintHex,
                 borderColor: primaryAccent,
@@ -229,12 +344,15 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             >
               <div className="flex items-center justify-between text-[8px] font-bold uppercase">
                 <span style={{ color: primaryAccent }}>{spec.labels[0] ?? 'FLASHCARD'}</span>
-                <PresentationIcon iconKey={spec.iconKey} className="w-3.5 h-3.5" />
+                <PresentationIcon iconKey={spec.iconKey} className="w-3.5 h-3.5 shrink-0" />
               </div>
-              <div className="text-xs font-bold truncate" style={{ color: theme.textHex }}>
+              <div
+                className={`${dynamicTextCls(spec.highlightWord, 'text-[11px]', 'text-[9.5px]')} font-bold leading-snug break-words`}
+                style={{ color: theme.textHex }}
+              >
                 {spec.highlightWord}
               </div>
-              <div className="text-[9px] truncate" style={{ color: theme.mutedTextHex }}>
+              <div className="text-[8.5px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
                 {spec.subtitle}
               </div>
             </div>
@@ -243,12 +361,12 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'bs-progress-meter':
         return (
-          <div className="p-2.5 space-y-1.5">
+          <div className="p-2 space-y-1.5">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[10px] font-bold truncate" style={{ color: theme.textHex }}>
+              <span className="text-[9.5px] font-bold leading-snug break-words" style={{ color: theme.textHex }}>
                 {spec.title}
               </span>
-              <span className="text-xs font-mono font-bold tabular-nums" style={{ color: primaryAccent }}>
+              <span className="text-xs font-mono font-bold tabular-nums shrink-0" style={{ color: primaryAccent }}>
                 {spec.progressPct}%
               </span>
             </div>
@@ -265,7 +383,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 />
               ))}
             </div>
-            <div className="text-[8px] font-mono truncate" style={{ color: theme.mutedTextHex }}>
+            <div className="text-[8px] font-mono leading-snug break-words" style={{ color: theme.mutedTextHex }}>
               {spec.labels.join(' · ')}
             </div>
           </div>
@@ -273,7 +391,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'bs-alert-callout':
         return (
-          <div className="p-2.5">
+          <div className="p-2">
             <div
               className="rounded-lg border-l-4 border p-2 flex items-center gap-2"
               style={{
@@ -283,16 +401,16 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
               }}
             >
               <div
-                className="w-8 h-8 rounded-md flex items-center justify-center shrink-0"
+                className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
                 style={{ backgroundColor: theme.cardBgHex, color: secondaryAccent }}
               >
                 <PresentationIcon iconKey="alert_triangle" className="w-4 h-4" />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-[10px] font-bold truncate" style={{ color: theme.textHex }}>
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="text-[9.5px] font-bold leading-snug break-words" style={{ color: theme.textHex }}>
                   {spec.title}
                 </div>
-                <div className="text-[9px] truncate" style={{ color: theme.mutedTextHex }}>
+                <div className="text-[8.5px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
                   {spec.subtitle}
                 </div>
               </div>
@@ -303,8 +421,8 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
       case 'gauge-tone': {
         const angleDeg = -90 + Math.round((spec.progressPct / 100) * 180);
         return (
-          <div className="p-2.5 flex items-center gap-2.5">
-            <svg viewBox="0 0 80 48" className="w-16 h-10 shrink-0" aria-hidden="true">
+          <div className="p-2 flex items-center gap-2">
+            <svg viewBox="0 0 80 48" className="w-14 h-9 shrink-0" aria-hidden="true">
               <path
                 d="M 10 42 A 30 30 0 0 1 70 42"
                 fill="none"
@@ -324,11 +442,11 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
               </g>
               <circle cx="40" cy="42" r="3.5" fill={secondaryAccent} />
             </svg>
-            <div className="min-w-0 flex-1">
-              <div className="text-[10px] font-bold truncate" style={{ color: theme.textHex }}>
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="text-[9.5px] font-bold leading-snug break-words" style={{ color: theme.textHex }}>
                 {spec.title}
               </div>
-              <div className="text-[9px] font-semibold truncate" style={{ color: primaryAccent }}>
+              <div className="text-[8.5px] font-semibold leading-snug break-words" style={{ color: primaryAccent }}>
                 {spec.highlightWord} · {spec.progressPct}%
               </div>
             </div>
@@ -338,24 +456,24 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'staircase-3d': {
         const blocks = [
-          { lbl: spec.labels[0] ?? 'Step 1', h: 22 },
-          { lbl: spec.labels[1] ?? 'Step 2', h: 32 },
-          { lbl: spec.labels[2] ?? 'Step 3', h: 42 },
+          { lbl: spec.labels[0] ?? 'Step 1', h: 24 },
+          { lbl: spec.labels[1] ?? 'Step 2', h: 34 },
+          { lbl: spec.labels[2] ?? 'Step 3', h: 44 },
         ];
         return (
-          <div className="p-2.5 flex items-end gap-1.5 h-[62px]">
+          <div className="p-2 flex items-end gap-1.5 min-h-[54px]">
             {blocks.map((b, idx) => (
               <div
                 key={idx}
-                className="flex-1 rounded-md border flex items-center justify-center px-1 text-center shadow-xs"
+                className="flex-1 min-w-0 rounded-md border flex items-center justify-center px-1 py-1 text-center shadow-xs"
                 style={{
-                  height: `${b.h}px`,
+                  minHeight: `${b.h}px`,
                   backgroundColor: idx === 2 ? primaryAccent : theme.surfaceTintHex,
                   borderColor: idx === 2 ? primaryAccent : theme.cardBorderHex,
                   color: idx === 2 ? '#FFFFFF' : theme.textHex,
                 }}
               >
-                <span className="text-[8px] font-bold truncate">{b.lbl}</span>
+                <span className="text-[8px] font-bold leading-tight break-words">{b.lbl}</span>
               </div>
             ))}
           </div>
@@ -366,9 +484,9 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
         const spkA = spec.labels[0] ?? 'Speaker A';
         const spkB = spec.labels[1] ?? 'Speaker B';
         return (
-          <div className="p-2.5 grid grid-cols-[auto_1fr_auto] items-center gap-2">
-            <div className="flex flex-col items-center gap-1 shrink-0">
-              <svg viewBox="-26 -24 52 58" className="w-9 h-10" aria-hidden="true">
+          <div className="p-2 grid grid-cols-[auto_1fr_auto] items-center gap-1.5">
+            <div className="flex flex-col items-center gap-0.5 shrink-0">
+              <svg viewBox="-26 -24 52 58" className="w-8 h-9" aria-hidden="true">
                 <path d="M-22 30 C-20 14 20 14 22 30 Z" fill={primaryAccent} />
                 <circle cx="0" cy="0" r="16" fill="#FDE68A" />
                 <path d="M-17 -6 C-16 -22 16 -22 17 -6 C10 -11 -10 -11 -17 -6 Z" fill="#1E293B" />
@@ -377,7 +495,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 <path d="M-5 7 Q0 11 5 7" fill="none" stroke="#1E293B" strokeWidth="1.8" strokeLinecap="round" />
               </svg>
               <span
-                className="px-1.5 py-0.5 rounded-full text-[7.5px] font-bold text-white truncate max-w-[60px]"
+                className="px-1.5 py-0.5 rounded-full text-[7px] font-bold text-white text-center leading-tight"
                 style={{ backgroundColor: primaryAccent }}
               >
                 {spkA}
@@ -385,7 +503,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             </div>
 
             <div
-              className="rounded-xl border px-2 py-1.5 text-center space-y-1 min-w-0"
+              className="rounded-xl border px-2 py-1.5 text-center space-y-0.5 min-w-0"
               style={{
                 backgroundColor: theme.surfaceTintHex,
                 borderColor: primaryAccent,
@@ -396,16 +514,19 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: secondaryAccent }} />
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: primaryAccent }} />
               </div>
-              <div className="text-[9.5px] font-bold leading-snug line-clamp-2" style={{ color: theme.textHex }}>
+              <div
+                className={`${dynamicTextCls(spec.speechText, 'text-[9px]', 'text-[8px]')} font-bold leading-snug break-words whitespace-normal`}
+                style={{ color: theme.textHex }}
+              >
                 {spec.speechText}
               </div>
-              <div className="text-[8px] font-bold truncate" style={{ color: secondaryAccent }}>
+              <div className="text-[7.5px] font-bold break-words" style={{ color: secondaryAccent }}>
                 {spec.reactionText}
               </div>
             </div>
 
-            <div className="flex flex-col items-center gap-1 shrink-0">
-              <svg viewBox="-26 -24 52 58" className="w-9 h-10" aria-hidden="true">
+            <div className="flex flex-col items-center gap-0.5 shrink-0">
+              <svg viewBox="-26 -24 52 58" className="w-8 h-9" aria-hidden="true">
                 <path d="M-22 30 C-20 14 20 14 22 30 Z" fill={secondaryAccent} />
                 <circle cx="0" cy="0" r="16" fill="#FDE68A" />
                 <path d="M-20 -4 C-22 -24 22 -24 20 -4 L20 10 C15 6 11 -4 0 -6 C-11 -4 -15 6 -20 10 Z" fill="#78350F" />
@@ -414,7 +535,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 <path d="M-5 7 Q0 12 5 7" fill="none" stroke="#1E293B" strokeWidth="1.8" strokeLinecap="round" />
               </svg>
               <span
-                className="px-1.5 py-0.5 rounded-full text-[7.5px] font-bold text-white truncate max-w-[60px]"
+                className="px-1.5 py-0.5 rounded-full text-[7px] font-bold text-white text-center leading-tight"
                 style={{ backgroundColor: secondaryAccent }}
               >
                 {spkB}
@@ -426,13 +547,13 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'avatar-speech':
         return (
-          <div className="p-2.5 flex items-center gap-2.5">
-            <div className="flex flex-col items-center gap-1 shrink-0">
+          <div className="p-2 flex items-center gap-2">
+            <div className="flex flex-col items-center gap-0.5 shrink-0">
               <div
-                className="w-12 h-12 rounded-full flex items-center justify-center"
+                className="w-10 h-10 rounded-full flex items-center justify-center"
                 style={{ backgroundColor: `${primaryAccent}20` }}
               >
-                <svg viewBox="-24 -22 48 54" className="w-10 h-10" aria-hidden="true">
+                <svg viewBox="-24 -22 48 54" className="w-8 h-8" aria-hidden="true">
                   <path d="M-20 28 C-18 14 18 14 20 28 Z" fill={primaryAccent} />
                   <circle cx="0" cy="0" r="15" fill="#FDE68A" />
                   <path d="M-16 -6 C-15 -20 15 -20 16 -6 C9 -10 -9 -10 -16 -6 Z" fill="#1E293B" />
@@ -442,7 +563,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 </svg>
               </div>
               <span
-                className="px-1.5 py-0.5 rounded-full text-[7.5px] font-bold text-white truncate max-w-[64px]"
+                className="px-1.5 py-0.5 rounded-full text-[7px] font-bold text-white text-center leading-tight"
                 style={{ backgroundColor: primaryAccent }}
               >
                 {spec.labels[0] ?? 'Speaker'}
@@ -451,21 +572,24 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
             <div className="relative min-w-0 flex-1">
               <div
-                className="rounded-xl border px-2.5 py-2 space-y-1"
+                className="rounded-xl border px-2 py-1.5 space-y-1"
                 style={{
                   backgroundColor: theme.surfaceTintHex,
                   borderColor: primaryAccent,
                 }}
               >
-                <div className="text-[10px] font-bold leading-snug line-clamp-2" style={{ color: theme.textHex }}>
+                <div
+                  className={`${dynamicTextCls(spec.speechText, 'text-[9.5px]', 'text-[8.5px]')} font-bold leading-snug break-words whitespace-normal`}
+                  style={{ color: theme.textHex }}
+                >
                   {spec.speechText}
                 </div>
                 <div className="flex items-center justify-between gap-1.5 pt-0.5">
-                  <span className="text-[8px] truncate" style={{ color: theme.mutedTextHex }}>
+                  <span className="text-[7.5px] leading-tight break-words" style={{ color: theme.mutedTextHex }}>
                     {spec.subtitle}
                   </span>
                   <span
-                    className="px-1.5 py-0.5 rounded-full text-[7.5px] font-bold text-white shrink-0"
+                    className="px-1.5 py-0.5 rounded-full text-[7px] font-bold text-white shrink-0"
                     style={{ backgroundColor: secondaryAccent }}
                   >
                     {spec.reactionText}
@@ -478,35 +602,35 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'dialogue-upgrade':
         return (
-          <div className="p-2.5 grid grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+          <div className="p-2 grid grid-cols-[1fr_auto_1fr] items-stretch gap-1.5">
             <div
-              className="rounded-lg border p-2 min-w-0"
+              className="rounded-lg border p-1.5 min-w-0 flex flex-col justify-center"
               style={{ backgroundColor: theme.surfaceTintHex, borderColor: theme.cardBorderHex }}
             >
-              <div className="text-[7.5px] font-bold uppercase truncate" style={{ color: theme.mutedTextHex }}>
-                {spec.labels[0] ?? 'Basic'}
+              <div className="text-[7px] font-bold uppercase break-words" style={{ color: theme.mutedTextHex }}>
+                {spec.labels[0] ?? 'Basic Form'}
               </div>
-              <div className="text-[9.5px] font-semibold truncate mt-0.5" style={{ color: theme.textHex }}>
+              <div className="text-[8.5px] font-semibold leading-snug break-words mt-0.5" style={{ color: theme.textHex }}>
                 {spec.speechText}
               </div>
             </div>
             <span
-              className="w-5 h-5 rounded-full text-[10px] font-bold text-white flex items-center justify-center shrink-0"
+              className="w-5 h-5 rounded-full text-[9px] font-bold text-white flex items-center justify-center shrink-0 self-center"
               style={{ backgroundColor: primaryAccent }}
             >
               →
             </span>
             <div
-              className="rounded-lg border p-2 min-w-0"
+              className="rounded-lg border p-1.5 min-w-0 flex flex-col justify-center"
               style={{
                 backgroundColor: `${primaryAccent}1A`,
                 borderColor: primaryAccent,
               }}
             >
-              <div className="text-[7.5px] font-bold uppercase truncate" style={{ color: primaryAccent }}>
-                ✓ {spec.labels[1] ?? 'Natural'}
+              <div className="text-[7px] font-bold uppercase break-words" style={{ color: primaryAccent }}>
+                ✓ {spec.labels[1] ?? 'Natural Form'}
               </div>
-              <div className="text-[10px] font-bold truncate mt-0.5" style={{ color: theme.textHex }}>
+              <div className="text-[9px] font-bold leading-snug break-words mt-0.5" style={{ color: theme.textHex }}>
                 {spec.highlightWord}
               </div>
             </div>
@@ -517,32 +641,32 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
       case 'bs-card-header':
       default:
         return (
-          <div className="p-2.5 flex items-center gap-2.5">
+          <div className="p-2 flex items-center gap-2">
             <div
-              className="w-10 h-10 rounded-lg border flex items-center justify-center shrink-0"
+              className="w-9 h-9 rounded-lg border flex items-center justify-center shrink-0"
               style={{
                 backgroundColor: theme.surfaceTintHex,
                 borderColor: theme.cardBorderHex,
                 color: primaryAccent,
               }}
             >
-              <PresentationIcon iconKey={spec.iconKey} className="w-5 h-5" />
+              <PresentationIcon iconKey={spec.iconKey} className="w-4 h-4" />
             </div>
 
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="text-[10px] font-bold truncate" style={{ color: theme.textHex }}>
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="text-[9.5px] font-bold leading-snug break-words" style={{ color: theme.textHex }}>
                 {spec.title}
               </div>
-              <div className="text-[9px] font-mono tracking-wide uppercase truncate" style={{ color: theme.mutedTextHex }}>
+              <div className="text-[8px] font-mono tracking-wide uppercase leading-snug break-words" style={{ color: theme.mutedTextHex }}>
                 {spec.subtitle}
               </div>
-              <div className="flex items-end gap-1 h-3 pt-0.5">
+              <div className="flex items-end gap-1 h-2.5 pt-0.5">
                 {WAVE_BARS.map((ratio, idx) => (
                   <span
                     key={idx}
                     className="w-1 rounded-full"
                     style={{
-                      height: `${Math.max(4, Math.round(ratio * 11))}px`,
+                      height: `${Math.max(3, Math.round(ratio * 9))}px`,
                       backgroundColor: idx % 2 === 0 ? primaryAccent : secondaryAccent,
                       opacity: 0.55 + ratio * 0.4,
                     }}
@@ -562,6 +686,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
       data-theme={theme.id}
       data-variant={spec.variant}
       data-animation={spec.animationIn}
+      data-resolved-animation={spec.resolvedAnimationIn}
       className="animate-mpt-scene-fade absolute inset-0 overflow-hidden select-none pointer-events-none"
       style={{
         background: `linear-gradient(145deg, ${theme.bgTopHex}, ${theme.bgBottomHex})`,
@@ -581,9 +706,17 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
       />
 
       <div
-        className={`relative z-10 mx-auto transition-opacity duration-200 ${animClass} ${
-          countdownActive ? 'opacity-70' : 'opacity-100'
-        } ${isLandscape ? 'w-[74%] mt-[10%]' : 'w-[86%] mt-[16%]'}`}
+        className={`relative z-10 mx-auto transition-all duration-200 ${animClass} ${
+          countdownActive ? 'opacity-95' : 'opacity-100'
+        } ${
+          isLandscape
+            ? countdownActive
+              ? 'w-[76%] mt-[4.5%]'
+              : 'w-[76%] mt-[7.5%]'
+            : countdownActive
+            ? 'w-[89%] mt-[8.5%]'
+            : 'w-[89%] mt-[11.5%]'
+        }`}
       >
         <div
           className="rounded-xl overflow-hidden border shadow-lg"
@@ -594,13 +727,13 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
         >
           {spec.variant === 'bs-card-header' && (
             <div
-              className="h-1.5 w-full"
+              className="h-1 w-full"
               style={{ background: `linear-gradient(90deg, ${primaryAccent}, ${secondaryAccent})` }}
             />
           )}
 
           <div
-            className="flex items-center justify-between gap-2 px-3 py-2 border-b"
+            className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b"
             style={{
               backgroundColor: theme.surfaceTintHex,
               borderColor: theme.cardBorderHex,
@@ -613,7 +746,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 <span className="w-2 h-2 rounded-full shrink-0 bg-emerald-500" />
               )}
               <span
-                className="text-[8.5px] font-bold tracking-wider uppercase truncate ml-0.5"
+                className="text-[8px] font-bold tracking-wider uppercase break-words ml-0.5"
                 style={{ color: primaryAccent }}
               >
                 {spec.variant === 'css-browser-mockup'
@@ -622,20 +755,56 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
               </span>
             </div>
             <span
-              className="text-[8.5px] font-mono font-semibold tabular-nums shrink-0"
+              className="text-[8px] font-mono font-semibold tabular-nums shrink-0"
               style={{ color: theme.mutedTextHex }}
             >
               {String(spec.stepIndex).padStart(2, '0')} / {String(spec.totalSteps).padStart(2, '0')}
             </span>
           </div>
 
-          <div className="py-1.5">{renderVariantBody()}</div>
+          <div className="py-1">{renderVariantBody()}</div>
 
-          <div className="px-3 pb-2.5 space-y-1.5">
-            <div className="flex items-center justify-between gap-2 text-[8.5px]" style={{ color: theme.mutedTextHex }}>
-              <span className="font-semibold truncate">{spec.title}</span>
+          {(spec.prevTargetText || spec.exampleText) && (
+            <div className="px-2.5 pb-1.5">
+              <div
+                data-testid="studio-2411-context-strip"
+                className="rounded-md border px-2 py-1 text-[8px] leading-snug break-words space-y-0.5"
+                style={{
+                  backgroundColor: `${primaryAccent}12`,
+                  borderColor: theme.cardBorderHex,
+                }}
+              >
+                {spec.prevTargetText && (
+                  <div>
+                    <span className="font-bold uppercase mr-1" style={{ color: primaryAccent }}>
+                      Recall Prev:
+                    </span>
+                    <span className="font-semibold" style={{ color: theme.textHex }}>
+                      {spec.prevTargetText}
+                    </span>
+                  </div>
+                )}
+                {spec.exampleText && (
+                  <div>
+                    <span className="font-bold uppercase mr-1" style={{ color: theme.mutedTextHex }}>
+                      Example:
+                    </span>
+                    <span className="font-semibold" style={{ color: theme.textHex }}>
+                      {spec.exampleText}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="px-2.5 pb-2 space-y-1">
+            <div className="flex items-center justify-between gap-2 text-[8px]" style={{ color: theme.mutedTextHex }}>
+              <span className="font-semibold break-words min-w-0">{spec.title}</span>
               <span className="font-mono uppercase shrink-0" style={{ color: primaryAccent }}>
-                {spec.animationIn}
+                {spec.animationIn === 'random'
+                  ? `random → ${spec.resolvedAnimationIn}`
+                  : spec.animationIn}
               </span>
             </div>
             <div

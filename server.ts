@@ -1982,6 +1982,7 @@ async function resolveSceneAssets(params: {
     const fontFilePath = fs.existsSync(jpFontPath) ? jpFontPath : undefined;
     const assets2411: ResolvedSceneAsset[] = [];
     let prevVariant: Studio2411ComponentVariant | undefined;
+    let lastTargetText: string | undefined;
 
     for (let idx = 0; idx < effectiveSentences.length; idx++) {
       const sentence = effectiveSentences[idx];
@@ -1989,21 +1990,29 @@ async function resolveSceneAssets(params: {
       const linePres = analyzeScriptLinePresentation(rawLine, {
         scriptStyle: params.scriptStyle,
       });
+      const isSecondary =
+        linePres.roleKind === 'answer' ||
+        /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(rawLine);
+      const showRecall = !isSecondary && linePres.roleKind !== 'title' ? lastTargetText : undefined;
       const customComp = params.customScenes?.[idx]?.componentSpec;
       const lineOverride = customComp ?? params.sceneComponents?.[idx];
       const spec = build2411CardSpecForLine({
         rawLine,
         lineIndex: idx,
         totalLines: effectiveSentences.length,
-        isSecondarySlot: linePres.roleKind === 'answer',
+        isSecondarySlot: isSecondary,
         isIntroOrOutro: linePres.roleKind === 'title' || linePres.roleKind === 'outro',
         scriptStyle: params.scriptStyle,
         themeId: themeMeta.id,
         defaultPauseSec: params.pauseBetweenLinesSec ?? 5,
         override: lineOverride,
         prevVariant,
+        prevTargetText: showRecall,
       });
       prevVariant = spec.variant;
+      if (isSecondary && linePres.cleanText) {
+        lastTargetText = linePres.cleanText;
+      }
 
       const resolvedCompSpec: Studio2411SceneComponentOverride = {
         variant: spec.variant,
@@ -2015,6 +2024,8 @@ async function resolveSceneAssets(params: {
         formula: spec.formula,
         speechText: spec.speechText,
         reactionText: spec.reactionText,
+        ...(spec.exampleText ? { exampleText: spec.exampleText } : {}),
+        ...(spec.prevTargetText ? { prevTargetText: spec.prevTargetText } : {}),
         progressPct: spec.progressPct,
         ...(spec.accentOverrideHex ? { accentColor: spec.accentOverrideHex } : {}),
       };
@@ -3033,7 +3044,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           isThinkingCountdown &&
           (config.scriptStyle === 'language_challenge' ||
             config.scriptStyle === 'quiz_riddle' ||
-            config.clockTickEnabled)
+            config.clockTickEnabled !== false)
         ) {
           countdownStartSec = cursorSec;
           countdownEndSec = cursorSec + pauseDur;
@@ -3488,7 +3499,10 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           strokeColor: '#FFFFFF',
         }
       : config.subtitle;
-    const assContent = buildAssFromCues(shortSubCues, effectiveSubtitleForAss, width, height);
+    const assContent = buildAssFromCues(shortSubCues, effectiveSubtitleForAss, width, height, {
+      isLightBackground: isLightNeutralExport,
+      use2411CountdownStyle: config.materialSource === 'studio_2411',
+    });
     fs.writeFileSync(assPath, assContent, 'utf-8');
 
     let bgmPath: string | null = null;
