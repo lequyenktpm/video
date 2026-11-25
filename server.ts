@@ -4458,8 +4458,16 @@ async function startServer() {
   }
 
   const port = Number(process.env.PORT || 3000);
-  app.listen(port, '0.0.0.0', () => {
+  const srv = app.listen(port, '0.0.0.0', () => {
     console.log(`MoneyPrinterTurbo VN server listening on http://localhost:${port}`);
+  });
+  srv.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[LOI] Cong ${port} dang duoc su dung boi ung dung khac. Hay dong tien trinh cu hoac doi PORT.`);
+    } else {
+      console.error(`[LOI] Khong the khoi dong server tren cong ${port}:`, err.message);
+    }
+    process.exit(1);
   });
 }
 
