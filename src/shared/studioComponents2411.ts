@@ -180,7 +180,9 @@ export interface Studio2411CardSpec {
   speechText: string;
   reactionText: string;
   exampleText?: string;
+  hintKind?: 'caution' | 'tip' | 'recall' | 'example';
   prevTargetText?: string;
+  promptPreviewText?: string;
   accentOverrideHex?: string;
   contextLabel: string;
   roleLabel: string;
@@ -241,10 +243,14 @@ function defaultLabelsForLine(
   variant: Studio2411ComponentVariant,
   hasPause: boolean,
   isSecondarySlot: boolean,
-  isQaInterview: boolean
+  _isQaInterview: boolean,
+  layoutKind?: Studio2411CardLayoutKind
 ): string[] {
   if (variant === 'friends-chat') {
-    return isQaInterview ? ['Interviewer', 'Candidate'] : ['Speaker A', 'Speaker B'];
+    if (layoutKind === 'intro_hero') return ['Host', 'Challenge'];
+    if (layoutKind === 'outro_recap') return ['Summary', 'Practice'];
+    if (hasPause || !isSecondarySlot) return ['Prompt', 'Your Turn'];
+    return ['Prompt', 'Reply'];
   }
   if (variant === 'avatar-speech') {
     return isSecondarySlot ? ['Candidate', 'Natural'] : ['Speaker', 'Context'];
@@ -275,46 +281,74 @@ function buildContextualExampleForLine(params: {
   highlightWord: string;
   isDialogue: boolean;
   pauseSec: number;
-}): string {
-  const { cleanText, roleKind, layoutKind, highlightWord, isDialogue, pauseSec } = params;
+}): { text: string; hintKind: 'caution' | 'tip' | 'recall' | 'example' } {
+  const { cleanText, roleKind, layoutKind, highlightWord, pauseSec } = params;
   const lower = cleanText.toLowerCase();
 
   if (roleKind === 'title') {
-    return `Listen closely and respond naturally within ${pauseSec} seconds.`;
+    return {
+      text: `Listen & translate aloud in ${pauseSec}s`,
+      hintKind: 'tip',
+    };
   }
   if (roleKind === 'outro') {
-    return 'Save this drill and repeat out loud daily for instant recall.';
+    return {
+      text: 'Save & repeat aloud daily',
+      hintKind: 'tip',
+    };
   }
+
+  // On prompt / quiz scenes, NEVER spoil upcoming target words. Keep hints to 1-2 words + semantic icon.
+  if (layoutKind === 'quiz_prompt') {
+    if (/watch out|careful|気をつけて|cẩn thận/i.test(cleanText)) {
+      return { text: 'Hint: Short warning', hintKind: 'caution' };
+    }
+    if (/take it easy|push yourself|無理しないで|quá sức/i.test(cleanText)) {
+      return { text: 'Hint: Gentle advice', hintKind: 'tip' };
+    }
+    if (/take your time|no rush|ゆっくり|từ từ/i.test(cleanText)) {
+      return { text: 'Hint: No rush', hintKind: 'tip' };
+    }
+    if (/strength|proactive|長所|điểm mạnh/i.test(cleanText)) {
+      return { text: 'Hint: Key strength', hintKind: 'tip' };
+    }
+    if (/weakness|短所|điểm yếu/i.test(cleanText)) {
+      return { text: 'Hint: Honest balance', hintKind: 'caution' };
+    }
+    if (/latte|coffee|order|カフェ|コーヒー|cà phê/i.test(cleanText)) {
+      return { text: 'Hint: Polite order', hintKind: 'tip' };
+    }
+    if (/thank|appreciate|cảm ơn|ありがとう/i.test(cleanText)) {
+      return { text: 'Hint: Warm thanks', hintKind: 'tip' };
+    }
+    return { text: 'Hint: 5s recall', hintKind: 'tip' };
+  }
+
   if (/watch out/i.test(lower) || /気をつけて/i.test(cleanText)) {
-    return 'Ex: Watch out for the deadline on Friday morning.';
+    return { text: 'Ex: Watch out for the deadline on Friday.', hintKind: 'caution' };
   }
   if (/take it easy|don['’]t push/i.test(lower) || /無理しないで/i.test(cleanText)) {
-    return 'Ex: Take it easy tonight — you already finished the hard part.';
+    return { text: 'Ex: Take it easy tonight after work.', hintKind: 'example' };
   }
   if (/take your time|no rush/i.test(lower)) {
-    return 'Ex: Take your time checking the details, there is no rush.';
+    return { text: 'Ex: Take your time checking the details.', hintKind: 'example' };
   }
   if (/strength|proactive|長所/i.test(lower)) {
-    return 'Ex: I am proactive when spotting issues early in team projects.';
+    return { text: 'Ex: I stay proactive when solving team issues.', hintKind: 'example' };
   }
   if (/weakness|短所/i.test(lower)) {
-    return 'Ex: I sometimes double-check details, so I set clear timeboxes.';
+    return { text: 'Ex: I double-check work, so I set timeboxes.', hintKind: 'caution' };
   }
   if (/latte|coffee|order|カフェ|コーヒー/i.test(lower)) {
-    return 'Ex: Could I get a medium oat latte to go, please?';
+    return { text: 'Ex: Could I get a hot oat latte, please?', hintKind: 'example' };
   }
   if (/thank|appreciate|cảm ơn|ありがとう/i.test(lower)) {
-    return 'Ex: I really appreciate your help with the presentation!';
+    return { text: 'Ex: I really appreciate your help today!', hintKind: 'example' };
   }
   if (layoutKind === 'answer_reveal') {
-    return `Try in context: "${cleanText}"`;
+    return { text: `Use aloud: "${cleanText}"`, hintKind: 'example' };
   }
-  if (layoutKind === 'quiz_prompt') {
-    return isDialogue
-      ? `Think how a native speaker responds using "${highlightWord}".`
-      : `Say the target phrase out loud before the ${pauseSec}s timer ends.`;
-  }
-  return `Key focus: ${highlightWord}`;
+  return { text: `Key focus: ${highlightWord}`, hintKind: 'tip' };
 }
 
 function pickAutoVariant(params: {
@@ -323,6 +357,7 @@ function pickAutoVariant(params: {
   isSecondarySlot: boolean;
   isDialogue: boolean;
   isUpgradeCue: boolean;
+  dualVoiceEnabled?: boolean;
   iconKey: PresentationIconKey;
   lineIndex: number;
   prevVariant?: Studio2411ComponentVariant;
@@ -333,10 +368,18 @@ function pickAutoVariant(params: {
     isSecondarySlot,
     isDialogue,
     isUpgradeCue,
+    dualVoiceEnabled = false,
     iconKey,
     lineIndex,
     prevVariant,
   } = params;
+
+  // In 2-voice mode, keep all slides consistently focused on 2-speaker chat bubbles
+  // rather than randomizing or rotating different Component 2411 card layouts between slides.
+  if (dualVoiceEnabled) {
+    return 'friends-chat';
+  }
+
   let candidates: Studio2411ComponentVariant[];
   if (roleKind === 'title') {
     candidates = ['css-browser-mockup', 'bs-card-header'];
@@ -381,12 +424,14 @@ export function build2411CardSpecForLine(params: {
   totalLines: number;
   isSecondarySlot?: boolean;
   isIntroOrOutro?: boolean;
+  dualVoiceEnabled?: boolean;
   scriptStyle?: ScriptStyle;
   themeId?: Studio2411ThemeId;
   defaultPauseSec?: number;
   override?: Studio2411SceneComponentOverride;
   prevVariant?: Studio2411ComponentVariant;
   prevTargetText?: string;
+  promptPreviewText?: string;
   animationSeed?: number;
 }): Studio2411CardSpec {
   const {
@@ -395,12 +440,14 @@ export function build2411CardSpecForLine(params: {
     totalLines,
     isSecondarySlot = false,
     isIntroOrOutro = false,
+    dualVoiceEnabled = false,
     scriptStyle,
     themeId,
     defaultPauseSec = 5,
     override,
     prevVariant,
     prevTargetText,
+    promptPreviewText,
     animationSeed = 0,
   } = params;
 
@@ -458,6 +505,7 @@ export function build2411CardSpecForLine(params: {
       isSecondarySlot,
       isDialogue,
       isUpgradeCue,
+      dualVoiceEnabled,
       iconKey: pres.contextIconKey,
       lineIndex,
       prevVariant,
@@ -489,30 +537,72 @@ export function build2411CardSpecForLine(params: {
   const labels =
     override?.labels && override.labels.length > 0
       ? override.labels.slice(0, 3)
-      : defaultLabelsForLine(variant, pres.hasPause, isSecondarySlot, isQaInterview);
+      : defaultLabelsForLine(variant, pres.hasPause, isSecondarySlot, isQaInterview, layoutKind);
 
-  const highlightWord = override?.highlightWord?.trim() || extractHighlightToken(cleanText);
+  const rawOverrideHw = override?.highlightWord?.trim();
+  const cleanHasCjk = hasCjkChars(cleanText);
+  const isHwTargetLeak =
+    layoutKind === 'quiz_prompt' &&
+    Boolean(
+      rawOverrideHw &&
+        cleanHasCjk &&
+        /^[A-Za-z0-9\s'".,!?’\-]+$/.test(rawOverrideHw) &&
+        !cleanText.toLowerCase().includes(rawOverrideHw.toLowerCase())
+    );
+  const highlightWord = (!isHwTargetLeak && rawOverrideHw) || extractHighlightToken(cleanText);
+  const rawOverrideFormula = override?.formula?.trim();
+  const isFormulaTargetLeak =
+    layoutKind === 'quiz_prompt' &&
+    Boolean(
+      rawOverrideFormula &&
+        cleanHasCjk &&
+        !/[\u3000-\u9FFF]/.test(rawOverrideFormula) &&
+        /[A-Za-z]{3,}/.test(rawOverrideFormula.replace(/Prompt|Your Turn|Input|Context|Recall|Listen/gi, ''))
+    );
   const formula =
-    override?.formula?.trim() ||
+    (!isFormulaTargetLeak && rawOverrideFormula) ||
     (labels.length >= 2 ? `${labels[0]} + ${labels[1]} = ${highlightWord}` : `Input + Context = ${highlightWord}`);
-  const speechText = override?.speechText?.trim() || cleanText || title;
+
+  const rawOverrideSpeech = override?.speechText?.trim();
+  const speechMatchesLine =
+    !rawOverrideSpeech ||
+    !cleanText ||
+    rawOverrideSpeech === cleanText ||
+    cleanText.includes(rawOverrideSpeech) ||
+    rawOverrideSpeech.includes(cleanText);
+  const speechText = (speechMatchesLine && rawOverrideSpeech ? rawOverrideSpeech : cleanText) || title;
+
   const reactionText =
     override?.reactionText?.trim() ||
     defaultReactionForLine(layoutKind, pres.hasPause, isSecondarySlot);
 
+  const rawOverrideExample = override?.exampleText?.trim();
+  const hasQuotedTargetLeak =
+    layoutKind === 'quiz_prompt' &&
+    Boolean(
+      rawOverrideExample &&
+        (/["“][^"”]{1,24}\.\.\.["”]|\.{3}|^(?:Ex|Example|Use in context):/i.test(rawOverrideExample) ||
+          rawOverrideExample.replace(/^Hint:\s*/i, '').trim().split(/\s+/).length > 4)
+    );
+
+  const autoContextual = buildContextualExampleForLine({
+    cleanText,
+    roleKind: pres.roleKind,
+    layoutKind,
+    highlightWord,
+    isDialogue,
+    pauseSec,
+  });
   const exampleText =
-    override?.exampleText?.trim() ||
-    buildContextualExampleForLine({
-      cleanText,
-      roleKind: pres.roleKind,
-      layoutKind,
-      highlightWord,
-      isDialogue,
-      pauseSec,
-    });
+    (!hasQuotedTargetLeak && rawOverrideExample) || autoContextual.text;
+  const hintKind = prevTargetText
+    ? 'recall'
+    : autoContextual.hintKind;
 
   const resolvedPrevTarget =
     override?.prevTargetText?.trim() || prevTargetText?.trim() || undefined;
+  const resolvedPromptPreview =
+    override?.promptPreviewText?.trim() || promptPreviewText?.trim() || undefined;
 
   return {
     variant,
@@ -528,7 +618,9 @@ export function build2411CardSpecForLine(params: {
     speechText,
     reactionText,
     exampleText,
+    hintKind,
     prevTargetText: resolvedPrevTarget,
+    promptPreviewText: resolvedPromptPreview,
     accentOverrideHex: override?.accentColor,
     contextLabel: pres.contextLabel,
     roleLabel: pres.roleLabel,
@@ -544,13 +636,14 @@ export function build2411CardSpecForLine(params: {
 }
 
 /**
- * Generates a full 1-to-1 context-aware array of Studio 2411 component overrides
- * (selecting dialogue/chat components for Q&A or two-speaker lines, comparison/equation for answers,
- * roadmap/progress for steps, non-repeating variants, useful examples, and previous-target recall).
+ * Generates a full 1-to-1 context-aware array of Studio 2411 component overrides.
+ * When dualVoiceEnabled is true, locks auto-planned variants consistently to 'friends-chat' speaker bubbles
+ * across slides instead of randomizing layouts between slides.
  */
 export function buildContextualSceneComponentsForScript(params: {
   script: string;
   scriptStyle?: ScriptStyle;
+  dualVoiceEnabled?: boolean;
   pauseBetweenLinesSec?: number;
   existingOverrides?: Studio2411SceneComponentOverride[];
 }): Studio2411SceneComponentOverride[] {
@@ -563,6 +656,7 @@ export function buildContextualSceneComponentsForScript(params: {
   const result: Studio2411SceneComponentOverride[] = [];
   let prevVariant: Studio2411ComponentVariant | undefined;
   let lastTargetText: string | undefined;
+  let lastPromptText: string | undefined;
 
   for (let idx = 0; idx < lines.length; idx++) {
     const rawLine = lines[idx];
@@ -573,8 +667,13 @@ export function buildContextualSceneComponentsForScript(params: {
       /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(rawLine);
     const isSecondary =
       hasExplicitTargetTag || (pres.roleKind === 'answer' && !pres.hasPause);
-    const existing = params.existingOverrides?.[idx];
+    const rawExisting = params.existingOverrides?.[idx];
+    const existing =
+      params.dualVoiceEnabled && rawExisting && rawExisting.variant !== 'friends-chat'
+        ? { ...rawExisting, variant: 'friends-chat' as Studio2411ComponentVariant, labels: undefined }
+        : rawExisting;
     const showRecall = !isSecondary && pres.roleKind !== 'title' ? lastTargetText : undefined;
+    const showPromptCtx = isSecondary && pres.roleKind !== 'outro' ? lastPromptText : undefined;
 
     const spec = build2411CardSpecForLine({
       rawLine,
@@ -582,14 +681,19 @@ export function buildContextualSceneComponentsForScript(params: {
       totalLines: lines.length,
       isSecondarySlot: isSecondary,
       isIntroOrOutro: pres.roleKind === 'title' || pres.roleKind === 'outro',
+      dualVoiceEnabled: params.dualVoiceEnabled,
       scriptStyle: params.scriptStyle,
       defaultPauseSec: params.pauseBetweenLinesSec ?? 5,
       override: existing,
       prevVariant,
       prevTargetText: showRecall,
+      promptPreviewText: showPromptCtx,
     });
     prevVariant = spec.variant;
 
+    if (!isSecondary && pres.roleKind !== 'title' && pres.roleKind !== 'outro' && pres.cleanText) {
+      lastPromptText = pres.cleanText;
+    }
     if (isSecondary && pres.cleanText) {
       lastTargetText = pres.cleanText;
     }
@@ -606,6 +710,7 @@ export function buildContextualSceneComponentsForScript(params: {
       reactionText: spec.reactionText,
       ...(spec.exampleText ? { exampleText: spec.exampleText } : {}),
       ...(spec.prevTargetText ? { prevTargetText: spec.prevTargetText } : {}),
+      ...(spec.promptPreviewText ? { promptPreviewText: spec.promptPreviewText } : {}),
       progressPct: spec.progressPct,
       ...(spec.accentOverrideHex ? { accentColor: spec.accentOverrideHex } : {}),
     });
@@ -630,17 +735,13 @@ function charVisualUnits(ch: string): number {
 }
 
 /**
- * Wraps card copy across multiple clean lines without appending "..." truncation,
- * keeping Latin words intact and breaking CJK runs smoothly.
+ * Wraps text strictly inside `maxUnitsPerLine` across as many lines as needed,
+ * never appending "..." truncation and never overflowing a line's horizontal budget.
  */
-export function wrapSvgCardLines(
-  text: string,
-  maxUnitsPerLine: number,
-  maxLines = 4
-): string[] {
+function wrapAllSvgLines(text: string, maxUnitsPerLine: number): string[] {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (!clean) return [''];
-  const budget = Math.max(8, maxUnitsPerLine);
+  const budget = Math.max(6, maxUnitsPerLine);
 
   const tokens = clean.split(' ');
   const lines: string[] = [];
@@ -659,14 +760,13 @@ export function wrapSvgCardLines(
     const word = tokens[ti];
     const wordUnits = Array.from(word).reduce((sum, ch) => sum + charVisualUnits(ch), 0);
 
-    // Handle long unspaced runs (like Japanese sentences) character-by-character
     if (wordUnits > budget) {
       if (current) flushLine();
       let chunk = '';
       let chunkUnits = 0;
       for (const ch of Array.from(word)) {
         const u = charVisualUnits(ch);
-        if (chunk && chunkUnits + u > budget && lines.length < maxLines - 1) {
+        if (chunk && chunkUnits + u > budget) {
           lines.push(chunk);
           chunk = ch;
           chunkUnits = u;
@@ -682,17 +782,11 @@ export function wrapSvgCardLines(
       continue;
     }
 
-    const spaceCost = current ? 0.55 : 0;
+    const spaceCost = current ? 0.52 : 0;
     if (current && currentUnits + spaceCost + wordUnits > budget) {
-      if (lines.length < maxLines - 1) {
-        flushLine();
-        current = word;
-        currentUnits = wordUnits;
-      } else {
-        // On last allowed line: append rather than dropping words with "..."
-        current = `${current} ${word}`;
-        currentUnits += spaceCost + wordUnits;
-      }
+      flushLine();
+      current = word;
+      currentUnits = wordUnits;
     } else {
       current = current ? `${current} ${word}` : word;
       currentUnits += spaceCost + wordUnits;
@@ -701,7 +795,85 @@ export function wrapSvgCardLines(
   if (current.trim()) {
     lines.push(current.trim());
   }
-  return lines.slice(0, maxLines);
+  return lines.length > 0 ? lines : [''];
+}
+
+/**
+ * Wraps card copy cleanly across multiple lines without appending "..." truncation
+ * and without dumping unbounded overflow onto the final line.
+ */
+export function wrapSvgCardLines(
+  text: string,
+  maxUnitsPerLine: number,
+  maxLines = 6
+): string[] {
+  const safeMax = Math.max(1, maxLines);
+  const rawWrapped = wrapAllSvgLines(text, maxUnitsPerLine);
+  if (rawWrapped.length <= safeMax) {
+    return rawWrapped;
+  }
+  // Spread across safeMax lines only by modest budget relaxation, otherwise keep all wrapped lines cleanly bounded
+  const totalUnits = Array.from(text.replace(/\s+/g, ' ').trim()).reduce(
+    (s, ch) => s + charVisualUnits(ch),
+    0
+  );
+  const balancedBudget = Math.max(maxUnitsPerLine, Math.ceil((totalUnits / safeMax) * 1.08));
+  return wrapAllSvgLines(text, balancedBudget);
+}
+
+interface FittedSvgTextBlock {
+  lines: string[];
+  fontSize: number;
+  lineHeight: number;
+  totalHeight: number;
+}
+
+/**
+ * Fits text inside a bounded SVG box (boxW x boxH) by stepping down fontSize cleanly
+ * until both line widths and vertical block height stay strictly inside bounds — zero truncation, zero overflow.
+ */
+function fitTextToBox(opts: {
+  text: string;
+  boxW: number;
+  boxH: number;
+  baseFontSize: number;
+  minFontSize?: number;
+  maxLines?: number;
+  lineHeightRatio?: number;
+}): FittedSvgTextBlock {
+  const {
+    text,
+    boxW,
+    boxH,
+    baseFontSize,
+    minFontSize = 11,
+    maxLines = 5,
+    lineHeightRatio = 1.24,
+  } = opts;
+  const clean = text.replace(/\s+/g, ' ').trim() || '';
+  const safeW = Math.max(48, boxW);
+  const safeH = Math.max(20, boxH);
+
+  for (let fs = Math.round(baseFontSize); fs >= minFontSize; fs--) {
+    const unitsBudget = Math.max(6, Math.floor(safeW / (fs * 0.59)));
+    const lines = wrapAllSvgLines(clean, unitsBudget);
+    const lh = Math.max(fs + 2, Math.round(fs * lineHeightRatio));
+    const totalH = lines.length * lh;
+    if (lines.length <= maxLines && totalH <= safeH) {
+      return { lines, fontSize: fs, lineHeight: lh, totalHeight: totalH };
+    }
+  }
+
+  const finalFs = minFontSize;
+  const unitsBudget = Math.max(6, Math.floor(safeW / (finalFs * 0.59)));
+  const finalLines = wrapAllSvgLines(clean, unitsBudget);
+  const finalLh = Math.max(finalFs + 2, Math.round(finalFs * lineHeightRatio));
+  return {
+    lines: finalLines,
+    fontSize: finalFs,
+    lineHeight: finalLh,
+    totalHeight: finalLines.length * finalLh,
+  };
 }
 
 function renderSvgTextLines(opts: {
@@ -726,18 +898,9 @@ function renderSvgTextLines(opts: {
     .join('');
 }
 
-function adaptiveLineFontSize(baseSize: number, lines: string[], maxUnits: number): number {
-  const longestUnits = Math.max(
-    1,
-    ...lines.map((l) => Array.from(l).reduce((s, ch) => s + charVisualUnits(ch), 0))
-  );
-  let factor = 1;
-  if (lines.length >= 3) factor *= 0.84;
-  else if (lines.length === 2) factor *= 0.92;
-  if (longestUnits > maxUnits * 1.05) {
-    factor *= Math.max(0.68, maxUnits / longestUnits);
-  }
-  return Math.max(10, Math.round(baseSize * factor));
+function centeredBlockStartY(boxY: number, boxH: number, fitted: FittedSvgTextBlock): number {
+  const topOffset = Math.max(4, Math.round((boxH - fitted.totalHeight) / 2));
+  return boxY + topOffset + Math.round(fitted.fontSize * 0.85);
 }
 
 function getSvgVectorIllustration(
@@ -840,19 +1003,65 @@ function buildSvgCharacterAvatar(opts: {
   tagHex?: string;
   fontFamily: string;
   smallSize: number;
+  pose?: 'talking' | 'thinking' | 'idle';
+  animFrame?: 0 | 1 | 2 | 3;
+  side?: 'left' | 'right';
 }): string {
-  const { cx, cy, scale, shirtHex, hairHex, hairStyle, tagText, tagHex, fontFamily, smallSize } = opts;
+  const {
+    cx,
+    cy,
+    scale,
+    shirtHex,
+    hairHex,
+    hairStyle,
+    tagText,
+    tagHex,
+    fontFamily,
+    smallSize,
+    pose = 'idle',
+    animFrame = 0,
+    side = 'left',
+  } = opts;
   const hairSvg =
     hairStyle === 'bob'
       ? `<path d="M-24 -6 C-26 -28 26 -28 24 -6 L24 10 C18 6 14 -6 0 -8 C-14 -6 -18 6 -24 10 Z" fill="${hairHex}"/>`
       : `<path d="M-21 -8 C-20 -26 20 -26 21 -8 C12 -14 -12 -14 -21 -8 Z" fill="${hairHex}"/>`;
   const pillText = (tagText ?? '').trim();
-  const pillW = Math.max(92, Math.min(130, pillText.length * 8 + 22));
-  const pillFont = Math.max(9, Math.round(smallSize * 0.72));
+  const pillFont = Math.max(11, Math.round(smallSize * 0.78));
+  const pillW = Math.max(90, Math.min(136, Math.round(pillText.length * pillFont * 0.7 + 24)));
+  const pillH = Math.max(22, Math.round(pillFont * 1.65));
   const namePill = pillText
-    ? `<rect x="${-Math.round(pillW / 2)}" y="34" width="${pillW}" height="22" rx="11" fill="${tagHex ?? shirtHex}"/>
-       <text x="0" y="49" text-anchor="middle" font-family="${fontFamily}" font-size="${pillFont}" font-weight="700" fill="#FFFFFF">${escapeXml(pillText)}</text>`
+    ? `<rect x="${-Math.round(pillW / 2)}" y="34" width="${pillW}" height="${pillH}" rx="${Math.round(pillH / 2)}" fill="${tagHex ?? shirtHex}"/>
+       <text x="0" y="${34 + Math.round(pillH * 0.70)}" text-anchor="middle" font-family="${fontFamily}" font-size="${pillFont}" font-weight="700" fill="#FFFFFF">${escapeXml(pillText)}</text>`
     : '';
+
+  const phase = animFrame % 4;
+  let mouthSvg = `<path d="M-6 6 Q0 12 6 6" fill="none" stroke="#1E293B" stroke-width="2.2" stroke-linecap="round"/>`;
+  let handSvg = '';
+
+  if (pose === 'talking') {
+    if (phase === 0 || phase === 2) {
+      const rx = phase === 0 ? 5.6 : 4.4;
+      const ry = phase === 0 ? 4.4 : 2.9;
+      mouthSvg = `<ellipse cx="0" cy="8.2" rx="${rx}" ry="${ry}" fill="#991B1B" stroke="#1E293B" stroke-width="1.6"/>
+        <path d="M-${(rx * 0.65).toFixed(1)} ${(8.2 - ry * 0.55).toFixed(1)} Q0 ${(8.2 - ry * 0.15).toFixed(1)} ${(rx * 0.65).toFixed(1)} ${(8.2 - ry * 0.55).toFixed(1)}" fill="none" stroke="#FFFFFF" stroke-width="1.4" stroke-linecap="round"/>`;
+    } else {
+      mouthSvg = `<path d="M-6 6.5 Q0 13 6 6.5 Z" fill="#B91C1C" stroke="#1E293B" stroke-width="1.6" stroke-linejoin="round"/>`;
+    }
+    const dir = side === 'right' ? -1 : 1;
+    const armLift = phase % 2 === 0 ? -4 : 1;
+    const wx = dir * 24;
+    const wy = 10 + armLift;
+    handSvg = `<path d="M${dir * 16} 21 Q${dir * 22} 16 ${wx} ${wy}" fill="none" stroke="${shirtHex}" stroke-width="5.2" stroke-linecap="round"/>
+      <circle cx="${wx}" cy="${wy - 2}" r="4.8" fill="#FDE68A" stroke="#1E293B" stroke-width="1.1"/>`;
+  } else if (pose === 'thinking') {
+    mouthSvg = `<path d="M-4 8.5 Q1 7 5 9.5" fill="none" stroke="#1E293B" stroke-width="2" stroke-linecap="round"/>`;
+    const bob = phase % 2 === 0 ? -1.5 : 0.5;
+    handSvg = `<path d="M-17 24 Q-13 18 -6 ${14 + bob}" fill="none" stroke="${shirtHex}" stroke-width="4.8" stroke-linecap="round"/>
+      <circle cx="-5" cy="${13 + bob}" r="4.2" fill="#FDE68A" stroke="#1E293B" stroke-width="1.1"/>
+      <circle cx="-22" cy="${-14 + bob}" r="2.2" fill="${tagHex ?? shirtHex}" fill-opacity="0.65"/>
+      <circle cx="-26" cy="${-21 + bob}" r="3.2" fill="${tagHex ?? shirtHex}" fill-opacity="0.45"/>`;
+  }
 
   return `<g transform="translate(${cx},${cy}) scale(${scale})">
     <path d="M-26 32 C-24 14 24 14 26 32 Z" fill="${shirtHex}"/>
@@ -860,24 +1069,28 @@ function buildSvgCharacterAvatar(opts: {
     ${hairSvg}
     <circle cx="-6" cy="-2" r="2.2" fill="#1E293B"/>
     <circle cx="6" cy="-2" r="2.2" fill="#1E293B"/>
-    <path d="M-6 6 Q0 12 6 6" fill="none" stroke="#1E293B" stroke-width="2.2" stroke-linecap="round"/>
+    ${mouthSvg}
+    ${handSvg}
     ${namePill}
   </g>`;
 }
 
 /**
  * Generates high-DPI SVG cards for ALL 14 lequyenktpm/2411 variants with multi-line wrapping
- * (zero "..." truncation, zero box overflow) + optional example and recall memory footer.
+ * (zero "..." truncation, zero box overflow), balanced readable typography across 9:16, 16:9, and 1:1,
+ * plus optional non-spoiling hint/example and previous-target recall footer.
  */
 export function build2411CardSvg(params: {
   spec: Studio2411CardSpec;
   width: number;
   height: number;
   fontFilePath?: string;
+  animFrame?: 0 | 1 | 2 | 3;
 }): string {
-  const { spec, width, height, fontFilePath } = params;
+  const { spec, width, height, fontFilePath, animFrame = 0 } = params;
   const { theme } = spec;
   const isLandscape = width > height;
+  const isSquare = width === height;
 
   const fontFaceCss = fontFilePath
     ? `@font-face { font-family: 'Studio2411Font'; src: url('file://${fontFilePath.replace(/\\/g, '/')}'); font-weight: 700; }`
@@ -886,11 +1099,23 @@ export function build2411CardSvg(params: {
     ? `'Studio2411Font', 'M PLUS 1p', 'Noto Sans', sans-serif`
     : `'M PLUS 1p', 'Noto Sans', sans-serif`;
 
-  const cardW = isLandscape ? Math.round(width * 0.76) : Math.round(width * 0.88);
-  const cardH = isLandscape ? Math.round(height * 0.44) : Math.round(height * 0.31);
+  const cardW = isLandscape
+    ? Math.round(width * 0.72)
+    : isSquare
+    ? Math.round(width * 0.86)
+    : Math.round(width * 0.90);
+  const cardH = isLandscape
+    ? Math.round(height * 0.43)
+    : isSquare
+    ? Math.round(height * 0.40)
+    : Math.round(height * 0.35);
   const cardX = Math.round((width - cardW) / 2);
-  const cardY = isLandscape ? Math.round(height * 0.055) : Math.round(height * 0.072);
-  const cardR = Math.max(18, Math.round(Math.min(width, height) * 0.03));
+  const cardY = isLandscape
+    ? Math.round(height * 0.045)
+    : isSquare
+    ? Math.round(height * 0.05)
+    : Math.round(height * 0.052);
+  const cardR = Math.max(16, Math.round(Math.min(width, height) * 0.028));
 
   const gridStep = Math.max(28, Math.round(Math.min(width, height) * 0.055));
   const dotLines: string[] = [];
@@ -901,12 +1126,13 @@ export function build2411CardSvg(params: {
     dotLines.push(`<line x1="0" y1="${gy}" x2="${width}" y2="${gy}" stroke="${theme.gridColorRgba}" stroke-width="1"/>`);
   }
 
-  const headerH = Math.round(cardH * 0.17);
-  const padX = Math.round(cardW * 0.048);
+  const headerH = Math.max(32, Math.round(cardH * 0.145));
+  const padX = Math.max(18, Math.round(cardW * 0.042));
   const stepText = `${String(spec.stepIndex).padStart(2, '0')} / ${String(spec.totalSteps).padStart(2, '0')}`;
-  const titleSize = Math.max(14, Math.round(Math.min(width, height) * 0.023));
-  const smallSize = Math.max(11, Math.round(titleSize * 0.78));
-  const bigSize = Math.max(17, Math.round(titleSize * 1.18));
+  const cardScaleDim = Math.min(cardW * 0.85, cardH * 1.65);
+  const titleSize = Math.max(20, Math.round(cardScaleDim * 0.046));
+  const smallSize = Math.max(15, Math.round(titleSize * 0.72));
+  const bigSize = Math.max(24, Math.round(titleSize * 1.20));
 
   const modePrimaryHex =
     spec.accentOverrideHex ??
@@ -914,51 +1140,99 @@ export function build2411CardSvg(params: {
   const modeSecondaryHex =
     spec.layoutKind === 'answer_reveal' ? theme.accentHex : theme.secondaryAccentHex;
 
-  const hasFooterContext = Boolean(spec.prevTargetText || spec.exampleText);
-  const footerReserve = hasFooterContext ? Math.round(cardH * 0.18) : Math.round(cardH * 0.06);
-  const bodyTop = cardY + headerH + Math.round(cardH * 0.05);
-  const bodyH = cardH - headerH - footerReserve - Math.round(cardH * 0.08);
   const innerW = cardW - padX * 2;
-  const iconScale = Math.max(0.65, Math.min(1.25, Math.min(cardW, cardH) / 280));
+  const hasFooterContext = Boolean(spec.prevTargetText || spec.exampleText);
+  const stripText =
+    spec.prevTargetText && spec.exampleText
+      ? `RECALL PREV: ${spec.prevTargetText} · ${spec.exampleText}`
+      : spec.prevTargetText
+      ? `RECALL PREV: ${spec.prevTargetText}`
+      : spec.exampleText ?? '';
+  const fittedStrip = hasFooterContext
+    ? fitTextToBox({
+        text: stripText,
+        boxW: innerW - 28,
+        boxH: Math.round(cardH * 0.165),
+        baseFontSize: Math.max(15, Math.round(smallSize * 0.94)),
+        minFontSize: 13,
+        maxLines: 2,
+        lineHeightRatio: 1.2,
+      })
+    : null;
+  const stripH = fittedStrip ? Math.max(30, fittedStrip.totalHeight + 12) : 0;
+  const bottomBarReserve = 20;
+  const bodyTop = cardY + headerH + Math.round(cardH * 0.032);
+  const bodyBottom = cardY + cardH - bottomBarReserve - (hasFooterContext ? stripH + 8 : 4);
+  const bodyH = Math.max(96, bodyBottom - bodyTop);
+  const iconScale = Math.max(0.62, Math.min(1.16, Math.min(cardW, cardH) / 290));
 
   let variantBodySvg = '';
 
   switch (spec.variant) {
     case 'css-compare': {
-      const colW = Math.round((innerW - 28) / 2);
-      const colH = Math.round(bodyH * 0.90);
-      const leftLabel = spec.labels[0] ?? 'Prompt';
+      const gap = 26;
+      const colW = Math.round((innerW - gap) / 2);
+      const colH = bodyH;
+      const leftLabel = spec.labels[0] ?? 'Source Prompt';
       const rightLabel = spec.labels[1] ?? 'Target Phrase';
-      const leftBudget = Math.max(10, Math.floor((colW - 24) / (smallSize * 0.62)));
-      const leftLines = wrapSvgCardLines(spec.contextLabel || spec.subtitle, leftBudget, 3);
-      const rightLines = wrapSvgCardLines(spec.speechText || spec.highlightWord, leftBudget, 3);
-      const leftFont = adaptiveLineFontSize(titleSize, leftLines, leftBudget);
-      const rightFont = adaptiveLineFontSize(titleSize, rightLines, leftBudget);
+      const labelH = Math.round(smallSize * 1.5);
+      const leftFit = fitTextToBox({
+        text: spec.contextLabel || spec.subtitle,
+        boxW: colW - 24,
+        boxH: colH - labelH - 14,
+        baseFontSize: bigSize,
+        minFontSize: 13,
+        maxLines: 5,
+      });
+      const rightFit = fitTextToBox({
+        text: spec.speechText || spec.highlightWord,
+        boxW: colW - 24,
+        boxH: colH - labelH - 14,
+        baseFontSize: bigSize,
+        minFontSize: 13,
+        maxLines: 5,
+      });
+      const leftLabelFit = fitTextToBox({
+        text: leftLabel,
+        boxW: colW - 20,
+        boxH: labelH,
+        baseFontSize: Math.max(14, Math.round(smallSize * 0.92)),
+        minFontSize: 12,
+        maxLines: 1,
+      });
+      const rightLabelFit = fitTextToBox({
+        text: rightLabel,
+        boxW: colW - 20,
+        boxH: labelH,
+        baseFontSize: Math.max(14, Math.round(smallSize * 0.92)),
+        minFontSize: 12,
+        maxLines: 1,
+      });
       variantBodySvg = `
         <rect x="${cardX + padX}" y="${bodyTop}" width="${colW}" height="${colH}" rx="12" fill="${theme.surfaceTintHex}" stroke="${theme.cardBorderHex}" stroke-width="1.5"/>
-        <rect x="${cardX + padX + colW + 28}" y="${bodyTop}" width="${colW}" height="${colH}" rx="12" fill="${modePrimaryHex}" fill-opacity="0.11" stroke="${modePrimaryHex}" stroke-width="2"/>
-        <circle cx="${cardX + padX + colW + 14}" cy="${bodyTop + Math.round(colH / 2)}" r="14" fill="${modeSecondaryHex}"/>
-        <text x="${cardX + padX + colW + 14}" y="${bodyTop + Math.round(colH / 2) + 4}" text-anchor="middle" font-family="${fontFamily}" font-size="${Math.max(10, Math.round(smallSize * 0.85))}" font-weight="700" fill="#FFFFFF">VS</text>
-        <text x="${cardX + padX + Math.round(colW / 2)}" y="${bodyTop + Math.round(smallSize * 1.4)}" text-anchor="middle" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${theme.mutedTextHex}">${escapeXml(leftLabel)}</text>
+        <rect x="${cardX + padX + colW + gap}" y="${bodyTop}" width="${colW}" height="${colH}" rx="12" fill="${modePrimaryHex}" fill-opacity="0.11" stroke="${modePrimaryHex}" stroke-width="2"/>
+        <circle cx="${cardX + padX + colW + Math.round(gap / 2)}" cy="${bodyTop + Math.round(colH / 2)}" r="15" fill="${modeSecondaryHex}"/>
+        <text x="${cardX + padX + colW + Math.round(gap / 2)}" y="${bodyTop + Math.round(colH / 2) + 5}" text-anchor="middle" font-family="${fontFamily}" font-size="${Math.max(12, Math.round(smallSize * 0.78))}" font-weight="700" fill="#FFFFFF">VS</text>
+        <text x="${cardX + padX + Math.round(colW / 2)}" y="${bodyTop + Math.round(leftLabelFit.fontSize * 1.45)}" text-anchor="middle" font-family="${fontFamily}" font-size="${leftLabelFit.fontSize}" font-weight="700" fill="${theme.mutedTextHex}">${escapeXml(leftLabelFit.lines[0] ?? leftLabel)}</text>
         ${renderSvgTextLines({
-          lines: leftLines,
+          lines: leftFit.lines,
           x: cardX + padX + Math.round(colW / 2),
-          startY: bodyTop + Math.round(colH * 0.48),
-          lineHeight: Math.round(leftFont * 1.24),
+          startY: centeredBlockStartY(bodyTop + labelH, colH - labelH - 8, leftFit),
+          lineHeight: leftFit.lineHeight,
           fontFamily,
-          fontSize: leftFont,
+          fontSize: leftFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
           anchor: 'middle',
         })}
-        <text x="${cardX + padX + colW + 28 + Math.round(colW / 2)}" y="${bodyTop + Math.round(smallSize * 1.4)}" text-anchor="middle" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${modePrimaryHex}">${escapeXml(rightLabel)}</text>
+        <text x="${cardX + padX + colW + gap + Math.round(colW / 2)}" y="${bodyTop + Math.round(rightLabelFit.fontSize * 1.45)}" text-anchor="middle" font-family="${fontFamily}" font-size="${rightLabelFit.fontSize}" font-weight="700" fill="${modePrimaryHex}">${escapeXml(rightLabelFit.lines[0] ?? rightLabel)}</text>
         ${renderSvgTextLines({
-          lines: rightLines,
-          x: cardX + padX + colW + 28 + Math.round(colW / 2),
-          startY: bodyTop + Math.round(colH * 0.48),
-          lineHeight: Math.round(rightFont * 1.24),
+          lines: rightFit.lines,
+          x: cardX + padX + colW + gap + Math.round(colW / 2),
+          startY: centeredBlockStartY(bodyTop + labelH, colH - labelH - 8, rightFit),
+          lineHeight: rightFit.lineHeight,
           fontFamily,
-          fontSize: rightFont,
+          fontSize: rightFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
           anchor: 'middle',
@@ -974,12 +1248,20 @@ export function build2411CardSvg(params: {
         spec.labels[2] ?? 'Speak',
       ];
       const activeNode = spec.stepIndex % 3;
-      const lineY = bodyTop + Math.round(bodyH * 0.28);
+      const lineY = bodyTop + Math.round(bodyH * 0.24);
       const startX = cardX + padX + Math.round(innerW * 0.14);
       const endX = cardX + padX + Math.round(innerW * 0.86);
       const stepDx = Math.round((endX - startX) / 2);
-      const titleBudget = Math.max(16, Math.floor(innerW / (smallSize * 0.6)));
-      const titleLines = wrapSvgCardLines(spec.title, titleBudget, 2);
+      const titleBoxY = lineY + 46;
+      const titleBoxH = Math.max(40, bodyTop + bodyH - titleBoxY);
+      const titleFit = fitTextToBox({
+        text: spec.title,
+        boxW: innerW - 20,
+        boxH: titleBoxH,
+        baseFontSize: bigSize,
+        minFontSize: 14,
+        maxLines: 3,
+      });
       variantBodySvg = `
         <line x1="${startX}" y1="${lineY}" x2="${endX}" y2="${lineY}" stroke="${theme.cardBorderHex}" stroke-width="4" stroke-linecap="round"/>
         <line x1="${startX}" y1="${lineY}" x2="${startX + activeNode * stepDx}" y2="${lineY}" stroke="${modePrimaryHex}" stroke-width="5" stroke-linecap="round"/>
@@ -987,20 +1269,28 @@ export function build2411CardSvg(params: {
           .map((lbl, ni) => {
             const nx = startX + ni * stepDx;
             const active = ni <= activeNode;
-            return `<circle cx="${nx}" cy="${lineY}" r="15" fill="${active ? modePrimaryHex : theme.cardBgHex}" stroke="${active ? modePrimaryHex : theme.cardBorderHex}" stroke-width="3"/>
-              <text x="${nx}" y="${lineY + 5}" text-anchor="middle" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${active ? '#FFFFFF' : theme.mutedTextHex}">0${ni + 1}</text>
-              <text x="${nx}" y="${lineY + 34}" text-anchor="middle" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${active ? theme.textHex : theme.mutedTextHex}">${escapeXml(lbl)}</text>`;
+            const lblFit = fitTextToBox({
+              text: lbl,
+              boxW: Math.max(82, Math.round(innerW * 0.28)),
+              boxH: 26,
+              baseFontSize: Math.max(14, Math.round(smallSize * 0.92)),
+              minFontSize: 12,
+              maxLines: 1,
+            });
+            return `<circle cx="${nx}" cy="${lineY}" r="18" fill="${active ? modePrimaryHex : theme.cardBgHex}" stroke="${active ? modePrimaryHex : theme.cardBorderHex}" stroke-width="3"/>
+              <text x="${nx}" y="${lineY + 5}" text-anchor="middle" font-family="${fontFamily}" font-size="${Math.max(13, Math.round(smallSize * 0.85))}" font-weight="700" fill="${active ? '#FFFFFF' : theme.mutedTextHex}">0${ni + 1}</text>
+              <text x="${nx}" y="${lineY + 40}" text-anchor="middle" font-family="${fontFamily}" font-size="${lblFit.fontSize}" font-weight="700" fill="${active ? theme.textHex : theme.mutedTextHex}">${escapeXml(lblFit.lines[0] ?? lbl)}</text>`;
           })
           .join('')}
         ${renderSvgTextLines({
-          lines: titleLines,
+          lines: titleFit.lines,
           x: cardX + Math.round(cardW / 2),
-          startY: bodyTop + Math.round(bodyH * 0.74),
-          lineHeight: Math.round(smallSize * 1.24),
+          startY: centeredBlockStartY(titleBoxY, titleBoxH, titleFit),
+          lineHeight: titleFit.lineHeight,
           fontFamily,
-          fontSize: smallSize,
-          fontWeight: 600,
-          fill: theme.mutedTextHex,
+          fontSize: titleFit.fontSize,
+          fontWeight: 700,
+          fill: theme.textHex,
           anchor: 'middle',
         })}
       `;
@@ -1008,36 +1298,64 @@ export function build2411CardSvg(params: {
     }
 
     case 'css-glass-quote': {
-      const qBudget = Math.max(14, Math.floor((innerW - 72) / (titleSize * 0.6)));
-      const qLines = wrapSvgCardLines(spec.title, qBudget, 2);
-      const subLines = wrapSvgCardLines(spec.subtitle, qBudget + 4, 2);
-      const qFont = adaptiveLineFontSize(titleSize, qLines, qBudget);
-      const pillW = Math.min(innerW - 70, Math.max(110, spec.highlightWord.length * 9 + 34));
+      const contentX = cardX + padX + 46;
+      const contentW = innerW - 54;
+      const qBoxH = Math.round(bodyH * 0.48);
+      const subBoxH = Math.round(bodyH * 0.26);
+      const pillBoxH = Math.max(28, Math.round(bodyH * 0.22));
+      const qFit = fitTextToBox({
+        text: spec.speechText || spec.title,
+        boxW: contentW,
+        boxH: qBoxH,
+        baseFontSize: bigSize,
+        minFontSize: 14,
+        maxLines: 3,
+      });
+      const subFit = fitTextToBox({
+        text: spec.subtitle,
+        boxW: contentW,
+        boxH: subBoxH,
+        baseFontSize: smallSize,
+        minFontSize: 13,
+        maxLines: 2,
+      });
+      const hwFit = fitTextToBox({
+        text: spec.highlightWord,
+        boxW: contentW - 24,
+        boxH: pillBoxH,
+        baseFontSize: Math.max(15, Math.round(smallSize * 0.94)),
+        minFontSize: 13,
+        maxLines: 1,
+      });
+      const pillText = hwFit.lines[0] ?? spec.highlightWord;
+      const pillW = Math.min(contentW, Math.max(110, Math.round(pillText.length * hwFit.fontSize * 0.64 + 28)));
+      const pillH = Math.max(28, Math.round(hwFit.fontSize * 1.75));
+      const pillY = bodyTop + qBoxH + subBoxH + 2;
       variantBodySvg = `
-        <rect x="${cardX + padX}" y="${bodyTop}" width="6" height="${Math.round(bodyH * 0.88)}" rx="3" fill="${modePrimaryHex}"/>
-        <text x="${cardX + padX + 18}" y="${bodyTop + Math.round(bigSize * 0.88)}" font-family="${fontFamily}" font-size="${Math.round(bigSize * 1.35)}" font-weight="700" fill="${modeSecondaryHex}" fill-opacity="0.55">“</text>
+        <rect x="${cardX + padX}" y="${bodyTop}" width="6" height="${bodyH}" rx="3" fill="${modePrimaryHex}"/>
+        <text x="${cardX + padX + 16}" y="${bodyTop + Math.round(bigSize * 0.88)}" font-family="${fontFamily}" font-size="${Math.round(bigSize * 1.28)}" font-weight="700" fill="${modeSecondaryHex}" fill-opacity="0.55">“</text>
         ${renderSvgTextLines({
-          lines: qLines,
-          x: cardX + padX + 50,
-          startY: bodyTop + Math.round(qFont * 1.2),
-          lineHeight: Math.round(qFont * 1.25),
+          lines: qFit.lines,
+          x: contentX,
+          startY: centeredBlockStartY(bodyTop, qBoxH, qFit),
+          lineHeight: qFit.lineHeight,
           fontFamily,
-          fontSize: qFont,
+          fontSize: qFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
         })}
         ${renderSvgTextLines({
-          lines: subLines,
-          x: cardX + padX + 50,
-          startY: bodyTop + Math.round(bodyH * 0.56),
-          lineHeight: Math.round(smallSize * 1.2),
+          lines: subFit.lines,
+          x: contentX,
+          startY: centeredBlockStartY(bodyTop + qBoxH, subBoxH, subFit),
+          lineHeight: subFit.lineHeight,
           fontFamily,
-          fontSize: smallSize,
-          fontWeight: 500,
+          fontSize: subFit.fontSize,
+          fontWeight: 600,
           fill: theme.mutedTextHex,
         })}
-        <rect x="${cardX + padX + 50}" y="${bodyTop + Math.round(bodyH * 0.72)}" width="${pillW}" height="${Math.round(smallSize * 1.65)}" rx="8" fill="${modePrimaryHex}" fill-opacity="0.14"/>
-        <text x="${cardX + padX + 62}" y="${bodyTop + Math.round(bodyH * 0.72) + Math.round(smallSize * 1.15)}" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${modePrimaryHex}">${escapeXml(spec.highlightWord)}</text>
+        <rect x="${contentX}" y="${pillY}" width="${pillW}" height="${pillH}" rx="8" fill="${modePrimaryHex}" fill-opacity="0.14"/>
+        <text x="${contentX + 14}" y="${pillY + Math.round(pillH * 0.68)}" font-family="${fontFamily}" font-size="${hwFit.fontSize}" font-weight="700" fill="${modePrimaryHex}">${escapeXml(pillText)}</text>
       `;
       break;
     }
@@ -1046,63 +1364,79 @@ export function build2411CardSvg(params: {
       const partA = spec.labels[0] ?? 'Pattern A';
       const partB = spec.labels[1] ?? 'Context B';
       const resC = spec.highlightWord;
-      const boxW = Math.round((innerW - 56) / 3);
-      const boxH = Math.round(bodyH * 0.62);
-      const boxY = bodyTop + Math.round(bodyH * 0.25);
-      const fBudget = Math.max(16, Math.floor(innerW / (smallSize * 0.6)));
-      const fLines = wrapSvgCardLines(spec.formula, fBudget, 1);
-      const boxBudget = Math.max(8, Math.floor((boxW - 14) / (smallSize * 0.62)));
-      const aLines = wrapSvgCardLines(partA, boxBudget, 2);
-      const bLines = wrapSvgCardLines(partB, boxBudget, 2);
-      const cLines = wrapSvgCardLines(resC, boxBudget, 2);
-      const boxFontA = adaptiveLineFontSize(smallSize, aLines, boxBudget);
-      const boxFontB = adaptiveLineFontSize(smallSize, bLines, boxBudget);
-      const boxFontC = adaptiveLineFontSize(smallSize, cLines, boxBudget);
+      const opGap = 28;
+      const boxW = Math.round((innerW - opGap * 2) / 3);
+      const topH = Math.round(smallSize * 1.7);
+      const boxY = bodyTop + topH + 4;
+      const boxH = Math.max(60, bodyH - topH - 6);
+      const fFit = fitTextToBox({
+        text: spec.formula,
+        boxW: innerW,
+        boxH: topH,
+        baseFontSize: smallSize,
+        minFontSize: 13,
+        maxLines: 1,
+      });
+      const aFit = fitTextToBox({
+        text: partA,
+        boxW: boxW - 18,
+        boxH: boxH - 12,
+        baseFontSize: titleSize,
+        minFontSize: 13,
+        maxLines: 4,
+      });
+      const bFit = fitTextToBox({
+        text: partB,
+        boxW: boxW - 18,
+        boxH: boxH - 12,
+        baseFontSize: titleSize,
+        minFontSize: 13,
+        maxLines: 4,
+      });
+      const cFit = fitTextToBox({
+        text: resC,
+        boxW: boxW - 18,
+        boxH: boxH - 12,
+        baseFontSize: titleSize,
+        minFontSize: 13,
+        maxLines: 4,
+      });
       variantBodySvg = `
-        ${renderSvgTextLines({
-          lines: fLines,
-          x: cardX + padX,
-          startY: bodyTop + Math.round(smallSize * 1.15),
-          lineHeight: Math.round(smallSize * 1.2),
-          fontFamily,
-          fontSize: smallSize,
-          fontWeight: 700,
-          fill: modePrimaryHex,
-        })}
+        <text x="${cardX + padX}" y="${bodyTop + Math.round(fFit.fontSize * 1.15)}" font-family="${fontFamily}" font-size="${fFit.fontSize}" font-weight="700" fill="${modePrimaryHex}">${escapeXml(fFit.lines[0] ?? spec.formula)}</text>
         <rect x="${cardX + padX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="10" fill="${theme.surfaceTintHex}" stroke="${theme.cardBorderHex}" stroke-width="1.5"/>
         ${renderSvgTextLines({
-          lines: aLines,
+          lines: aFit.lines,
           x: cardX + padX + Math.round(boxW / 2),
-          startY: boxY + Math.round(boxH * 0.46),
-          lineHeight: Math.round(boxFontA * 1.2),
+          startY: centeredBlockStartY(boxY, boxH, aFit),
+          lineHeight: aFit.lineHeight,
           fontFamily,
-          fontSize: boxFontA,
+          fontSize: aFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
           anchor: 'middle',
         })}
-        <text x="${cardX + padX + boxW + 14}" y="${boxY + Math.round(boxH * 0.56)}" text-anchor="middle" font-family="${fontFamily}" font-size="${bigSize}" font-weight="700" fill="${modeSecondaryHex}">+</text>
-        <rect x="${cardX + padX + boxW + 28}" y="${boxY}" width="${boxW}" height="${boxH}" rx="10" fill="${theme.surfaceTintHex}" stroke="${theme.cardBorderHex}" stroke-width="1.5"/>
+        <text x="${cardX + padX + boxW + Math.round(opGap / 2)}" y="${boxY + Math.round(boxH * 0.56)}" text-anchor="middle" font-family="${fontFamily}" font-size="${bigSize}" font-weight="700" fill="${modeSecondaryHex}">+</text>
+        <rect x="${cardX + padX + boxW + opGap}" y="${boxY}" width="${boxW}" height="${boxH}" rx="10" fill="${theme.surfaceTintHex}" stroke="${theme.cardBorderHex}" stroke-width="1.5"/>
         ${renderSvgTextLines({
-          lines: bLines,
-          x: cardX + padX + boxW + 28 + Math.round(boxW / 2),
-          startY: boxY + Math.round(boxH * 0.46),
-          lineHeight: Math.round(boxFontB * 1.2),
+          lines: bFit.lines,
+          x: cardX + padX + boxW + opGap + Math.round(boxW / 2),
+          startY: centeredBlockStartY(boxY, boxH, bFit),
+          lineHeight: bFit.lineHeight,
           fontFamily,
-          fontSize: boxFontB,
+          fontSize: bFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
           anchor: 'middle',
         })}
-        <text x="${cardX + padX + boxW * 2 + 42}" y="${boxY + Math.round(boxH * 0.56)}" text-anchor="middle" font-family="${fontFamily}" font-size="${bigSize}" font-weight="700" fill="${modePrimaryHex}">=</text>
-        <rect x="${cardX + padX + boxW * 2 + 56}" y="${boxY}" width="${boxW}" height="${boxH}" rx="10" fill="${modePrimaryHex}" fill-opacity="0.16" stroke="${modePrimaryHex}" stroke-width="2"/>
+        <text x="${cardX + padX + boxW * 2 + opGap + Math.round(opGap / 2)}" y="${boxY + Math.round(boxH * 0.56)}" text-anchor="middle" font-family="${fontFamily}" font-size="${bigSize}" font-weight="700" fill="${modePrimaryHex}">=</text>
+        <rect x="${cardX + padX + boxW * 2 + opGap * 2}" y="${boxY}" width="${boxW}" height="${boxH}" rx="10" fill="${modePrimaryHex}" fill-opacity="0.16" stroke="${modePrimaryHex}" stroke-width="2"/>
         ${renderSvgTextLines({
-          lines: cLines,
-          x: cardX + padX + boxW * 2 + 56 + Math.round(boxW / 2),
-          startY: boxY + Math.round(boxH * 0.46),
-          lineHeight: Math.round(boxFontC * 1.2),
+          lines: cFit.lines,
+          x: cardX + padX + boxW * 2 + opGap * 2 + Math.round(boxW / 2),
+          startY: centeredBlockStartY(boxY, boxH, cFit),
+          lineHeight: cFit.lineHeight,
           fontFamily,
-          fontSize: boxFontC,
+          fontSize: cFit.fontSize,
           fontWeight: 700,
           fill: modePrimaryHex,
           anchor: 'middle',
@@ -1112,34 +1446,48 @@ export function build2411CardSvg(params: {
     }
 
     case 'css-flashcard': {
-      const boxH = Math.round(bodyH * 0.90);
-      const fcBudget = Math.max(14, Math.floor((innerW - 36) / (bigSize * 0.58)));
-      const hwLines = wrapSvgCardLines(spec.highlightWord, fcBudget, 2);
-      const hwFont = adaptiveLineFontSize(bigSize, hwLines, fcBudget);
-      const subBudget = Math.max(16, Math.floor((innerW - 36) / (smallSize * 0.58)));
-      const subLines = wrapSvgCardLines(spec.subtitle, subBudget, 2);
+      const boxH = bodyH;
+      const topLabelH = Math.round(smallSize * 1.5);
+      const mainBoxH = Math.round((boxH - topLabelH) * 0.64);
+      const subBoxH = Math.max(26, boxH - topLabelH - mainBoxH - 6);
+      const hwFit = fitTextToBox({
+        text: spec.highlightWord,
+        boxW: innerW - 36,
+        boxH: mainBoxH,
+        baseFontSize: Math.round(bigSize * 1.08),
+        minFontSize: 15,
+        maxLines: 3,
+      });
+      const subFit = fitTextToBox({
+        text: spec.subtitle,
+        boxW: innerW - 36,
+        boxH: subBoxH,
+        baseFontSize: smallSize,
+        minFontSize: 13,
+        maxLines: 2,
+      });
       variantBodySvg = `
-        <rect x="${cardX + padX + 6}" y="${bodyTop + 5}" width="${innerW - 6}" height="${boxH}" rx="14" fill="${modeSecondaryHex}" fill-opacity="0.12" stroke="${theme.cardBorderHex}" stroke-width="1"/>
-        <rect x="${cardX + padX}" y="${bodyTop}" width="${innerW - 6}" height="${boxH}" rx="14" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2"/>
-        <text x="${cardX + padX + 18}" y="${bodyTop + Math.round(smallSize * 1.5)}" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${modePrimaryHex}">${escapeXml(spec.labels[0] ?? 'FLASHCARD')}</text>
+        <rect x="${cardX + padX + 6}" y="${bodyTop + 5}" width="${innerW - 6}" height="${boxH - 5}" rx="14" fill="${modeSecondaryHex}" fill-opacity="0.12" stroke="${theme.cardBorderHex}" stroke-width="1"/>
+        <rect x="${cardX + padX}" y="${bodyTop}" width="${innerW - 6}" height="${boxH - 5}" rx="14" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2"/>
+        <text x="${cardX + padX + 18}" y="${bodyTop + Math.round(smallSize * 1.25)}" font-family="${fontFamily}" font-size="${Math.max(14, Math.round(smallSize * 0.92))}" font-weight="700" fill="${modePrimaryHex}">${escapeXml(spec.labels[0] ?? 'FLASHCARD')}</text>
         ${renderSvgTextLines({
-          lines: hwLines,
+          lines: hwFit.lines,
           x: cardX + Math.round(cardW / 2),
-          startY: bodyTop + Math.round(boxH * 0.48),
-          lineHeight: Math.round(hwFont * 1.22),
+          startY: centeredBlockStartY(bodyTop + topLabelH, mainBoxH, hwFit),
+          lineHeight: hwFit.lineHeight,
           fontFamily,
-          fontSize: hwFont,
+          fontSize: hwFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
           anchor: 'middle',
         })}
         ${renderSvgTextLines({
-          lines: subLines,
+          lines: subFit.lines,
           x: cardX + Math.round(cardW / 2),
-          startY: bodyTop + Math.round(boxH * 0.80),
-          lineHeight: Math.round(smallSize * 1.2),
+          startY: centeredBlockStartY(bodyTop + topLabelH + mainBoxH, subBoxH, subFit),
+          lineHeight: subFit.lineHeight,
           fontFamily,
-          fontSize: smallSize,
+          fontSize: subFit.fontSize,
           fontWeight: 600,
           fill: theme.mutedTextHex,
           anchor: 'middle',
@@ -1150,61 +1498,99 @@ export function build2411CardSvg(params: {
 
     case 'bs-progress-meter': {
       const meterW = innerW;
-      const meterH = Math.max(16, Math.round(bodyH * 0.20));
-      const meterY = bodyTop + Math.round(bodyH * 0.46);
+      const meterH = Math.max(18, Math.round(bodyH * 0.16));
+      const titleBoxH = Math.round(bodyH * 0.46);
+      const meterY = bodyTop + titleBoxH + 8;
       const fillW = Math.max(20, Math.round((spec.progressPct / 100) * meterW));
-      const tBudget = Math.max(14, Math.floor((innerW - 80) / (titleSize * 0.6)));
-      const tLines = wrapSvgCardLines(spec.title, tBudget, 2);
-      const tFont = adaptiveLineFontSize(titleSize, tLines, tBudget);
+      const tFit = fitTextToBox({
+        text: spec.title,
+        boxW: innerW - 96,
+        boxH: titleBoxH,
+        baseFontSize: bigSize,
+        minFontSize: 15,
+        maxLines: 3,
+      });
+      const lblFit = fitTextToBox({
+        text: spec.labels.join(' · '),
+        boxW: innerW,
+        boxH: Math.max(26, bodyTop + bodyH - (meterY + meterH + 6)),
+        baseFontSize: smallSize,
+        minFontSize: 13,
+        maxLines: 2,
+      });
       variantBodySvg = `
         ${renderSvgTextLines({
-          lines: tLines,
+          lines: tFit.lines,
           x: cardX + padX,
-          startY: bodyTop + Math.round(tFont * 1.1),
-          lineHeight: Math.round(tFont * 1.2),
+          startY: centeredBlockStartY(bodyTop, titleBoxH, tFit),
+          lineHeight: tFit.lineHeight,
           fontFamily,
-          fontSize: tFont,
+          fontSize: tFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
         })}
-        <text x="${cardX + cardW - padX}" y="${bodyTop + Math.round(bigSize * 1.05)}" text-anchor="end" font-family="${fontFamily}" font-size="${bigSize}" font-weight="700" fill="${modePrimaryHex}">${spec.progressPct}%</text>
+        <text x="${cardX + cardW - padX}" y="${bodyTop + Math.round(bigSize * 1.15)}" text-anchor="end" font-family="${fontFamily}" font-size="${bigSize}" font-weight="700" fill="${modePrimaryHex}">${spec.progressPct}%</text>
         <rect x="${cardX + padX}" y="${meterY}" width="${meterW}" height="${meterH}" rx="${Math.round(meterH / 2)}" fill="${theme.cardBorderHex}" fill-opacity="0.55"/>
         <rect x="${cardX + padX}" y="${meterY}" width="${fillW}" height="${meterH}" rx="${Math.round(meterH / 2)}" fill="url(#accentBar)"/>
-        <text x="${cardX + padX}" y="${meterY + meterH + Math.round(smallSize * 1.45)}" font-family="${fontFamily}" font-size="${smallSize}" font-weight="600" fill="${theme.mutedTextHex}">${escapeXml(spec.labels.join(' · '))}</text>
+        ${renderSvgTextLines({
+          lines: lblFit.lines,
+          x: cardX + padX,
+          startY: meterY + meterH + Math.round(lblFit.fontSize * 1.4),
+          lineHeight: lblFit.lineHeight,
+          fontFamily,
+          fontSize: lblFit.fontSize,
+          fontWeight: 600,
+          fill: theme.mutedTextHex,
+        })}
       `;
       break;
     }
 
     case 'bs-alert-callout': {
-      const iconCx = cardX + padX + Math.round(cardW * 0.12);
-      const iconCy = bodyTop + Math.round(bodyH * 0.44);
-      const textX = cardX + padX + Math.round(cardW * 0.24);
-      const textBudget = Math.max(14, Math.floor((innerW - cardW * 0.25) / (titleSize * 0.6)));
-      const tLines = wrapSvgCardLines(spec.title, textBudget, 2);
-      const sLines = wrapSvgCardLines(spec.subtitle, textBudget + 4, 2);
-      const tFont = adaptiveLineFontSize(titleSize, tLines, textBudget);
+      const iconCx = cardX + padX + Math.round(cardW * 0.11);
+      const iconCy = bodyTop + Math.round(bodyH * 0.48);
+      const textX = cardX + padX + Math.round(cardW * 0.23);
+      const textW = innerW - Math.round(cardW * 0.24) - 10;
+      const tBoxH = Math.round(bodyH * 0.58);
+      const sBoxH = Math.max(28, bodyH - tBoxH - 10);
+      const tFit = fitTextToBox({
+        text: spec.speechText || spec.title,
+        boxW: textW,
+        boxH: tBoxH,
+        baseFontSize: bigSize,
+        minFontSize: 15,
+        maxLines: 3,
+      });
+      const sFit = fitTextToBox({
+        text: spec.subtitle,
+        boxW: textW,
+        boxH: sBoxH,
+        baseFontSize: smallSize,
+        minFontSize: 13,
+        maxLines: 2,
+      });
       variantBodySvg = `
-        <rect x="${cardX + padX}" y="${bodyTop}" width="${innerW}" height="${Math.round(bodyH * 0.90)}" rx="12" fill="${modeSecondaryHex}" fill-opacity="0.10" stroke="${modeSecondaryHex}" stroke-width="1.5"/>
-        <rect x="${cardX + padX}" y="${bodyTop}" width="9" height="${Math.round(bodyH * 0.90)}" rx="4" fill="${modeSecondaryHex}"/>
+        <rect x="${cardX + padX}" y="${bodyTop}" width="${innerW}" height="${bodyH}" rx="12" fill="${modeSecondaryHex}" fill-opacity="0.10" stroke="${modeSecondaryHex}" stroke-width="1.5"/>
+        <rect x="${cardX + padX}" y="${bodyTop}" width="9" height="${bodyH}" rx="4" fill="${modeSecondaryHex}"/>
         ${getSvgVectorIllustration('alert_triangle', iconCx, iconCy, iconScale * 0.85, modeSecondaryHex, modePrimaryHex, theme.cardBgHex)}
         ${renderSvgTextLines({
-          lines: tLines,
+          lines: tFit.lines,
           x: textX,
-          startY: bodyTop + Math.round(bodyH * 0.30),
-          lineHeight: Math.round(tFont * 1.22),
+          startY: centeredBlockStartY(bodyTop + 4, tBoxH, tFit),
+          lineHeight: tFit.lineHeight,
           fontFamily,
-          fontSize: tFont,
+          fontSize: tFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
         })}
         ${renderSvgTextLines({
-          lines: sLines,
+          lines: sFit.lines,
           x: textX,
-          startY: bodyTop + Math.round(bodyH * 0.64),
-          lineHeight: Math.round(smallSize * 1.2),
+          startY: centeredBlockStartY(bodyTop + tBoxH + 2, sBoxH, sFit),
+          lineHeight: sFit.lineHeight,
           fontFamily,
-          fontSize: smallSize,
-          fontWeight: 500,
+          fontSize: sFit.fontSize,
+          fontWeight: 600,
           fill: theme.mutedTextHex,
         })}
       `;
@@ -1212,82 +1598,195 @@ export function build2411CardSvg(params: {
     }
 
     case 'gauge-tone': {
-      const gcx = cardX + Math.round(cardW * 0.25);
-      const gcy = bodyTop + Math.round(bodyH * 0.66);
-      const r = Math.max(32, Math.round(Math.min(cardW * 0.16, bodyH * 0.52)));
-      const rightX = cardX + Math.round(cardW * 0.48);
-      const rightBudget = Math.max(12, Math.floor((cardW * 0.44) / (titleSize * 0.6)));
-      const tLines = wrapSvgCardLines(spec.title, rightBudget, 2);
-      const tFont = adaptiveLineFontSize(titleSize, tLines, rightBudget);
-      const hwLines = wrapSvgCardLines(spec.highlightWord, rightBudget + 3, 2);
+      const gcx = cardX + Math.round(cardW * 0.22);
+      const gcy = bodyTop + Math.round(bodyH * 0.64);
+      const r = Math.max(32, Math.round(Math.min(cardW * 0.145, bodyH * 0.48)));
+      const rightX = cardX + Math.round(cardW * 0.42);
+      const rightW = cardX + cardW - padX - rightX;
+      const tBoxH = Math.round(bodyH * 0.44);
+      const hwBoxH = Math.round(bodyH * 0.30);
+      const subBoxH = Math.max(22, bodyH - tBoxH - hwBoxH);
+      const tFit = fitTextToBox({
+        text: spec.title,
+        boxW: rightW,
+        boxH: tBoxH,
+        baseFontSize: bigSize,
+        minFontSize: 14,
+        maxLines: 3,
+      });
+      const hwFit = fitTextToBox({
+        text: spec.highlightWord,
+        boxW: rightW,
+        boxH: hwBoxH,
+        baseFontSize: titleSize,
+        minFontSize: 13,
+        maxLines: 2,
+      });
+      const subFit = fitTextToBox({
+        text: spec.subtitle,
+        boxW: rightW,
+        boxH: subBoxH,
+        baseFontSize: smallSize,
+        minFontSize: 13,
+        maxLines: 1,
+      });
       variantBodySvg = `
         <path d="M ${gcx - r} ${gcy} A ${r} ${r} 0 0 1 ${gcx + r} ${gcy}" fill="none" stroke="${theme.cardBorderHex}" stroke-width="10" stroke-linecap="round"/>
         <path d="M ${gcx - r} ${gcy} A ${r} ${r} 0 0 1 ${gcx + Math.round(r * 0.45)} ${gcy - Math.round(r * 0.88)}" fill="none" stroke="url(#accentBar)" stroke-width="10" stroke-linecap="round"/>
         <circle cx="${gcx}" cy="${gcy}" r="6" fill="${modePrimaryHex}"/>
         <line x1="${gcx}" y1="${gcy}" x2="${gcx + Math.round(r * 0.35)}" y2="${gcy - Math.round(r * 0.62)}" stroke="${theme.textHex}" stroke-width="4" stroke-linecap="round"/>
-        <text x="${gcx}" y="${gcy + 20}" text-anchor="middle" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${modePrimaryHex}">${spec.progressPct}%</text>
+        <text x="${gcx}" y="${gcy + 24}" text-anchor="middle" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${modePrimaryHex}">${spec.progressPct}%</text>
         ${renderSvgTextLines({
-          lines: tLines,
+          lines: tFit.lines,
           x: rightX,
-          startY: bodyTop + Math.round(bodyH * 0.24),
-          lineHeight: Math.round(tFont * 1.2),
+          startY: centeredBlockStartY(bodyTop, tBoxH, tFit),
+          lineHeight: tFit.lineHeight,
           fontFamily,
-          fontSize: tFont,
+          fontSize: tFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
         })}
         ${renderSvgTextLines({
-          lines: hwLines,
+          lines: hwFit.lines,
           x: rightX,
-          startY: bodyTop + Math.round(bodyH * 0.56),
-          lineHeight: Math.round(smallSize * 1.18),
+          startY: centeredBlockStartY(bodyTop + tBoxH, hwBoxH, hwFit),
+          lineHeight: hwFit.lineHeight,
           fontFamily,
-          fontSize: smallSize,
+          fontSize: hwFit.fontSize,
           fontWeight: 600,
           fill: modeSecondaryHex,
         })}
-        <text x="${rightX}" y="${bodyTop + Math.round(bodyH * 0.84)}" font-family="${fontFamily}" font-size="${smallSize}" font-weight="500" fill="${theme.mutedTextHex}">${escapeXml(spec.subtitle)}</text>
+        <text x="${rightX}" y="${bodyTop + tBoxH + hwBoxH + Math.round(subFit.fontSize * 1.1)}" font-family="${fontFamily}" font-size="${subFit.fontSize}" font-weight="600" fill="${theme.mutedTextHex}">${escapeXml(subFit.lines[0] ?? spec.subtitle)}</text>
       `;
       break;
     }
 
     case 'staircase-3d': {
       const stepW = Math.round((innerW - 24) / 3);
-      const baseBottom = bodyTop + Math.round(bodyH * 0.90);
-      const heights = [0.36, 0.58, 0.82];
+      const baseBottom = bodyTop + Math.round(bodyH * 0.94);
+      const heights = [0.42, 0.64, 0.88];
       variantBodySvg = heights
         .map((hr, si) => {
           const sh = Math.round(bodyH * hr);
           const sx = cardX + padX + si * (stepW + 12);
           const sy = baseBottom - sh;
           const lbl = spec.labels[si] ?? `Step ${si + 1}`;
+          const lblFit = fitTextToBox({
+            text: lbl,
+            boxW: stepW - 16,
+            boxH: sh - 12,
+            baseFontSize: titleSize,
+            minFontSize: 13,
+            maxLines: 3,
+          });
           return `<rect x="${sx + 4}" y="${sy + 4}" width="${stepW}" height="${sh}" rx="8" fill="${modeSecondaryHex}" fill-opacity="0.18"/>
             <rect x="${sx}" y="${sy}" width="${stepW}" height="${sh}" rx="8" fill="${si === 2 ? modePrimaryHex : theme.surfaceTintHex}" stroke="${si === 2 ? modePrimaryHex : theme.cardBorderHex}" stroke-width="2"/>
-            <text x="${sx + Math.round(stepW / 2)}" y="${sy + Math.round(sh * 0.56)}" text-anchor="middle" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="${si === 2 ? '#FFFFFF' : theme.textHex}">${escapeXml(lbl)}</text>`;
+            ${renderSvgTextLines({
+              lines: lblFit.lines,
+              x: sx + Math.round(stepW / 2),
+              startY: centeredBlockStartY(sy, sh, lblFit),
+              lineHeight: lblFit.lineHeight,
+              fontFamily,
+              fontSize: lblFit.fontSize,
+              fontWeight: 700,
+              fill: si === 2 ? '#FFFFFF' : theme.textHex,
+              anchor: 'middle',
+            })}`;
         })
         .join('');
       break;
     }
 
     case 'friends-chat': {
-      const spkA = spec.labels[0] ?? 'Speaker A';
-      const spkB = spec.labels[1] ?? 'Speaker B';
-      const avScale = Math.max(0.76, Math.min(1.12, bodyH / 160));
-      const leftCx = cardX + padX + Math.round(innerW * 0.11);
-      const rightCx = cardX + padX + Math.round(innerW * 0.89);
-      const avCy = bodyTop + Math.round(bodyH * 0.44);
-      const bubbleX = cardX + padX + Math.round(innerW * 0.24);
-      const bubbleW = Math.round(innerW * 0.52);
-      const bubbleH = Math.round(bodyH * 0.90);
-      const bubbleY = bodyTop + Math.round(bodyH * 0.04);
-      const bubbleBudget = Math.max(12, Math.floor((bubbleW - 24) / (smallSize * 0.6)));
-      const speechLines = wrapSvgCardLines(spec.speechText, bubbleBudget, 3);
-      const speechFont = adaptiveLineFontSize(smallSize, speechLines, bubbleBudget);
+      const isIntro = spec.layoutKind === 'intro_hero';
+      const isOutro = spec.layoutKind === 'outro_recap';
+      const isQuizPrompt = spec.layoutKind === 'quiz_prompt';
+      const isAnswerReveal = spec.layoutKind === 'answer_reveal';
+      const spkA = spec.labels[0] ?? (isIntro ? 'Host' : isOutro ? 'Summary' : 'Prompt');
+      const spkB =
+        spec.labels[1] ??
+        (isIntro ? 'Challenge' : isOutro ? 'Practice' : isQuizPrompt ? 'Your Turn' : 'Reply');
+      const avScale = Math.max(0.68, Math.min(0.95, bodyH / 185));
+      const rowGap = 10;
+      const rowH = Math.max(46, Math.floor((bodyH - rowGap) / 2));
+      const row1Y = bodyTop;
+      const row2Y = bodyTop + rowH + rowGap;
+      const avColW = Math.round(innerW * 0.16);
+
+      // Left Speaker A bubble (source sentence, intro rule, or prompt sentence)
+      const leftAvCx = cardX + padX + Math.round(avColW * 0.5);
+      const leftAvCy = row1Y + Math.round(rowH * 0.42);
+      const b1X = cardX + padX + avColW + 10;
+      const b1W = innerW - avColW - 14;
+      const promptBubbleText =
+        isAnswerReveal && spec.promptPreviewText ? spec.promptPreviewText : spec.speechText;
+      const b1Fit = fitTextToBox({
+        text: promptBubbleText,
+        boxW: b1W - 26,
+        boxH: rowH - 12,
+        baseFontSize: Math.round(titleSize * 1.02),
+        minFontSize: 13,
+        maxLines: 3,
+      });
+
+      // Right Speaker B bubble (5s turn prompt, translated reply, or intro/outro action cue)
+      const rightAvCx = cardX + padX + innerW - Math.round(avColW * 0.5);
+      const rightAvCy = row2Y + Math.round(rowH * 0.42);
+      const b2W = innerW - avColW - 14;
+      const b2X = cardX + padX;
+      const replyBubbleText = isIntro
+        ? `Listen & translate aloud in ${Math.max(1, spec.pauseSec || 5)}s!`
+        : isOutro
+        ? 'Save & repeat aloud daily for mastery!'
+        : isQuizPrompt
+        ? `Your turn · Translate in ${Math.max(1, spec.pauseSec || 5)}s`
+        : isAnswerReveal
+        ? spec.speechText
+        : spec.subtitle && spec.subtitle !== promptBubbleText
+        ? spec.subtitle
+        : spec.highlightWord;
+      const b2Fit = fitTextToBox({
+        text: replyBubbleText,
+        boxW: b2W - 26,
+        boxH: rowH - 12,
+        baseFontSize: Math.round(titleSize * 1.02),
+        minFontSize: 13,
+        maxLines: 3,
+      });
+
+      const speakerAPose: 'talking' | 'idle' =
+        isIntro || isOutro || isQuizPrompt ? 'talking' : 'idle';
+      const speakerBPose: 'talking' | 'thinking' | 'idle' =
+        isQuizPrompt ? 'thinking' : isAnswerReveal || isOutro ? 'talking' : 'idle';
+
+      const thinkingBubbleContent = (() => {
+        const dotCenterY = row2Y + Math.round(rowH * 0.5);
+        const dotStartX = b2X + 28;
+        const dotStep = 18;
+        const activeDot = animFrame % 3;
+        const dotsSvg = [0, 1, 2]
+          .map((di) => {
+            const isActive = di === activeDot;
+            const cy = dotCenterY + (isActive ? -4 : 1);
+            const r = isActive ? 5.8 : 4.5;
+            const op = isActive ? '1' : '0.45';
+            return `<circle cx="${dotStartX + di * dotStep}" cy="${cy}" r="${r}" fill="${modeSecondaryHex}" fill-opacity="${op}"/>`;
+          })
+          .join('');
+        const chipW = Math.min(b2W - 96, 128);
+        const chipH = Math.max(24, Math.round(smallSize * 1.6));
+        const chipX = b2X + b2W - chipW - 14;
+        const chipY = dotCenterY - Math.round(chipH / 2);
+        const thinkLabel = `Think ${Math.max(1, spec.pauseSec || 5)}s`;
+        return `${dotsSvg}
+          <rect x="${chipX}" y="${chipY}" width="${chipW}" height="${chipH}" rx="${Math.round(chipH / 2)}" fill="${modeSecondaryHex}" fill-opacity="0.16" stroke="${modeSecondaryHex}" stroke-width="1"/>
+          <text x="${chipX + Math.round(chipW / 2)}" y="${chipY + Math.round(chipH * 0.69)}" text-anchor="middle" font-family="${fontFamily}" font-size="${Math.max(12, Math.round(smallSize * 0.84))}" font-weight="700" fill="${modeSecondaryHex}">${escapeXml(thinkLabel)}</text>`;
+      })();
 
       variantBodySvg = `
         ${buildSvgCharacterAvatar({
-          cx: leftCx,
-          cy: avCy,
+          cx: leftAvCx,
+          cy: leftAvCy,
           scale: avScale,
           shirtHex: modePrimaryHex,
           hairHex: '#1E293B',
@@ -1296,10 +1795,26 @@ export function build2411CardSvg(params: {
           tagHex: modePrimaryHex,
           fontFamily,
           smallSize,
+          pose: speakerAPose,
+          animFrame,
+          side: 'left',
         })}
+        <polygon points="${b1X},${row1Y + Math.round(rowH * 0.34)} ${b1X - 10},${row1Y + Math.round(rowH * 0.48)} ${b1X},${row1Y + Math.round(rowH * 0.62)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="1.8"/>
+        <rect x="${b1X}" y="${row1Y}" width="${b1W}" height="${rowH}" rx="14" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="1.8"/>
+        ${renderSvgTextLines({
+          lines: b1Fit.lines,
+          x: b1X + 14,
+          startY: centeredBlockStartY(row1Y, rowH, b1Fit),
+          lineHeight: b1Fit.lineHeight,
+          fontFamily,
+          fontSize: b1Fit.fontSize,
+          fontWeight: 700,
+          fill: theme.textHex,
+        })}
+
         ${buildSvgCharacterAvatar({
-          cx: rightCx,
-          cy: avCy,
+          cx: rightAvCx,
+          cy: rightAvCy,
           scale: avScale,
           shirtHex: modeSecondaryHex,
           hairHex: '#78350F',
@@ -1308,39 +1823,62 @@ export function build2411CardSvg(params: {
           tagHex: modeSecondaryHex,
           fontFamily,
           smallSize,
+          pose: speakerBPose,
+          animFrame,
+          side: 'right',
         })}
-        <rect x="${bubbleX}" y="${bubbleY}" width="${bubbleW}" height="${bubbleH}" rx="16" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2"/>
-        <circle cx="${bubbleX + Math.round(bubbleW / 2) - 14}" cy="${bubbleY + 12}" r="3.5" fill="${modePrimaryHex}"/>
-        <circle cx="${bubbleX + Math.round(bubbleW / 2)}" cy="${bubbleY + 12}" r="3.5" fill="${modeSecondaryHex}"/>
-        <circle cx="${bubbleX + Math.round(bubbleW / 2) + 14}" cy="${bubbleY + 12}" r="3.5" fill="${modePrimaryHex}"/>
-        ${renderSvgTextLines({
-          lines: speechLines,
-          x: bubbleX + Math.round(bubbleW / 2),
-          startY: bubbleY + Math.round(bubbleH * 0.40),
-          lineHeight: Math.round(speechFont * 1.24),
-          fontFamily,
-          fontSize: speechFont,
-          fontWeight: 700,
-          fill: theme.textHex,
-          anchor: 'middle',
-        })}
-        <text x="${bubbleX + Math.round(bubbleW / 2)}" y="${bubbleY + bubbleH - 12}" text-anchor="middle" font-family="${fontFamily}" font-size="${Math.max(10, Math.round(smallSize * 0.85))}" font-weight="700" fill="${modeSecondaryHex}">${escapeXml(spec.reactionText)}</text>
+        <polygon points="${b2X + b2W},${row2Y + Math.round(rowH * 0.34)} ${b2X + b2W + 10},${row2Y + Math.round(rowH * 0.48)} ${b2X + b2W},${row2Y + Math.round(rowH * 0.62)}" fill="${modeSecondaryHex}" fill-opacity="0.14" stroke="${modeSecondaryHex}" stroke-width="1.8"/>
+        <rect x="${b2X}" y="${row2Y}" width="${b2W}" height="${rowH}" rx="14" fill="${modeSecondaryHex}" fill-opacity="0.14" stroke="${modeSecondaryHex}" stroke-width="1.8" ${isQuizPrompt ? 'stroke-dasharray="6 4"' : ''}/>
+        ${
+          isQuizPrompt
+            ? thinkingBubbleContent
+            : renderSvgTextLines({
+                lines: b2Fit.lines,
+                x: b2X + 14,
+                startY: centeredBlockStartY(row2Y, rowH, b2Fit),
+                lineHeight: b2Fit.lineHeight,
+                fontFamily,
+                fontSize: b2Fit.fontSize,
+                fontWeight: 700,
+                fill: isIntro ? modeSecondaryHex : theme.textHex,
+              })
+        }
       `;
       break;
     }
 
     case 'avatar-speech': {
-      const avX = cardX + padX + Math.round(innerW * 0.14);
-      const avY = bodyTop + Math.round(bodyH * 0.44);
-      const avScale = Math.max(0.78, Math.min(1.20, bodyH / 155));
-      const bX = cardX + padX + Math.round(innerW * 0.28);
-      const bY = bodyTop + Math.round(bodyH * 0.04);
-      const bW = Math.round(innerW * 0.72);
-      const bH = Math.round(bodyH * 0.82);
-      const pillW = Math.min(bW - 12, Math.max(96, spec.reactionText.length * 9 + 26));
-      const speechBudget = Math.max(14, Math.floor((bW - 32) / (titleSize * 0.58)));
-      const speechLines = wrapSvgCardLines(spec.speechText, speechBudget, 3);
-      const speechFont = adaptiveLineFontSize(titleSize, speechLines, speechBudget);
+      const avX = cardX + padX + Math.round(innerW * 0.13);
+      const avY = bodyTop + Math.round(bodyH * 0.46);
+      const avScale = Math.max(0.75, Math.min(1.12, bodyH / 160));
+      const bX = cardX + padX + Math.round(innerW * 0.27);
+      const bY = bodyTop + 2;
+      const bW = Math.round(innerW * 0.73);
+      const bH = Math.max(82, bodyH - 8);
+      const pillFont = Math.max(12, Math.round(smallSize * 0.82));
+      const pillH = Math.max(24, Math.round(pillFont * 1.68));
+      const pillW = Math.min(bW - 24, Math.max(96, Math.round(spec.reactionText.length * pillFont * 0.68 + 26)));
+      const metaRowH = pillH + 12;
+      const speechH = Math.max(44, bH - metaRowH - 8);
+      const spFit = fitTextToBox({
+        text: spec.speechText,
+        boxW: bW - 32,
+        boxH: speechH,
+        baseFontSize: bigSize,
+        minFontSize: 14,
+        maxLines: 4,
+      });
+      const subFit = fitTextToBox({
+        text: spec.subtitle,
+        boxW: Math.max(84, bW - pillW - 36),
+        boxH: metaRowH,
+        baseFontSize: Math.max(14, Math.round(smallSize * 0.90)),
+        minFontSize: 12,
+        maxLines: 1,
+      });
+      const pillX = bX + bW - pillW - 12;
+      const pillY = bY + bH - pillH - 10;
+      const subY = pillY + Math.round(pillH * 0.68);
       variantBodySvg = `
         <circle cx="${avX}" cy="${avY - 4}" r="${Math.round(32 * avScale)}" fill="${modePrimaryHex}" fill-opacity="0.14"/>
         ${buildSvgCharacterAvatar({
@@ -1354,62 +1892,78 @@ export function build2411CardSvg(params: {
           tagHex: modePrimaryHex,
           fontFamily,
           smallSize,
+          pose: 'talking',
+          animFrame,
+          side: 'left',
         })}
-        <polygon points="${bX},${bY + Math.round(bH * 0.42)} ${bX - 16},${bY + Math.round(bH * 0.54)} ${bX},${bY + Math.round(bH * 0.66)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2"/>
+        <polygon points="${bX},${bY + Math.round(bH * 0.38)} ${bX - 14},${bY + Math.round(bH * 0.50)} ${bX},${bY + Math.round(bH * 0.62)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2"/>
         <rect x="${bX}" y="${bY}" width="${bW}" height="${bH}" rx="14" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2"/>
         ${renderSvgTextLines({
-          lines: speechLines,
-          x: bX + 16,
-          startY: bY + Math.round(speechFont * 1.4),
-          lineHeight: Math.round(speechFont * 1.24),
+          lines: spFit.lines,
+          x: bX + 18,
+          startY: centeredBlockStartY(bY + 6, speechH, spFit),
+          lineHeight: spFit.lineHeight,
           fontFamily,
-          fontSize: speechFont,
+          fontSize: spFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
         })}
-        <text x="${bX + 16}" y="${bY + bH - 12}" font-family="${fontFamily}" font-size="${smallSize}" font-weight="600" fill="${theme.mutedTextHex}">${escapeXml(spec.subtitle)}</text>
-        <rect x="${bX + bW - pillW}" y="${bY + bH - 12}" width="${pillW}" height="${Math.round(smallSize * 1.65)}" rx="12" fill="${modeSecondaryHex}"/>
-        <text x="${bX + bW - Math.round(pillW / 2)}" y="${bY + bH - 12 + Math.round(smallSize * 1.12)}" text-anchor="middle" font-family="${fontFamily}" font-size="${Math.max(10, Math.round(smallSize * 0.85))}" font-weight="700" fill="#FFFFFF">${escapeXml(spec.reactionText)}</text>
+        <text x="${bX + 18}" y="${subY}" font-family="${fontFamily}" font-size="${subFit.fontSize}" font-weight="700" fill="${theme.mutedTextHex}">${escapeXml(subFit.lines[0] ?? spec.subtitle)}</text>
+        <rect x="${pillX}" y="${pillY}" width="${pillW}" height="${pillH}" rx="${Math.round(pillH / 2)}" fill="${modeSecondaryHex}"/>
+        <text x="${pillX + Math.round(pillW / 2)}" y="${subY}" text-anchor="middle" font-family="${fontFamily}" font-size="${pillFont}" font-weight="700" fill="#FFFFFF">${escapeXml(spec.reactionText)}</text>
       `;
       break;
     }
 
     case 'dialogue-upgrade': {
-      const boxW = Math.round((innerW - 38) / 2);
-      const boxH = Math.round(bodyH * 0.88);
-      const boxY = bodyTop + Math.round(bodyH * 0.04);
+      const gap = 34;
+      const boxW = Math.round((innerW - gap) / 2);
+      const boxH = bodyH;
+      const boxY = bodyTop;
       const leftX = cardX + padX;
-      const rightX = cardX + padX + boxW + 38;
-      const midX = cardX + padX + boxW + 19;
-      const colBudget = Math.max(10, Math.floor((boxW - 24) / (smallSize * 0.6)));
-      const speechLines = wrapSvgCardLines(spec.speechText, colBudget, 3);
-      const hwLines = wrapSvgCardLines(spec.highlightWord, colBudget, 3);
-      const spFont = adaptiveLineFontSize(smallSize, speechLines, colBudget);
-      const hwFont = adaptiveLineFontSize(titleSize, hwLines, colBudget);
+      const rightX = cardX + padX + boxW + gap;
+      const midX = cardX + padX + boxW + Math.round(gap / 2);
+      const labelH = Math.round(smallSize * 1.5);
+      const spFit = fitTextToBox({
+        text: spec.speechText,
+        boxW: boxW - 24,
+        boxH: boxH - labelH - 12,
+        baseFontSize: titleSize,
+        minFontSize: 13,
+        maxLines: 5,
+      });
+      const hwFit = fitTextToBox({
+        text: spec.highlightWord,
+        boxW: boxW - 24,
+        boxH: boxH - labelH - 12,
+        baseFontSize: bigSize,
+        minFontSize: 13,
+        maxLines: 5,
+      });
       variantBodySvg = `
         <rect x="${leftX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="12" fill="${theme.surfaceTintHex}" stroke="${theme.cardBorderHex}" stroke-width="1.5"/>
-        <text x="${leftX + 14}" y="${boxY + Math.round(smallSize * 1.4)}" font-family="${fontFamily}" font-size="${Math.max(10, Math.round(smallSize * 0.85))}" font-weight="700" fill="${theme.mutedTextHex}">${escapeXml(spec.labels[0] ?? 'Basic Form')}</text>
+        <text x="${leftX + 14}" y="${boxY + Math.round(smallSize * 1.3)}" font-family="${fontFamily}" font-size="${Math.max(13, Math.round(smallSize * 0.90))}" font-weight="700" fill="${theme.mutedTextHex}">${escapeXml(spec.labels[0] ?? 'Basic Form')}</text>
         ${renderSvgTextLines({
-          lines: speechLines,
+          lines: spFit.lines,
           x: leftX + 14,
-          startY: boxY + Math.round(boxH * 0.48),
-          lineHeight: Math.round(spFont * 1.22),
+          startY: centeredBlockStartY(boxY + labelH, boxH - labelH - 8, spFit),
+          lineHeight: spFit.lineHeight,
           fontFamily,
-          fontSize: spFont,
+          fontSize: spFit.fontSize,
           fontWeight: 600,
           fill: theme.textHex,
         })}
-        <circle cx="${midX}" cy="${boxY + Math.round(boxH / 2)}" r="13" fill="${modePrimaryHex}"/>
+        <circle cx="${midX}" cy="${boxY + Math.round(boxH / 2)}" r="14" fill="${modePrimaryHex}"/>
         <text x="${midX}" y="${boxY + Math.round(boxH / 2) + 5}" text-anchor="middle" font-family="${fontFamily}" font-size="${smallSize}" font-weight="700" fill="#FFFFFF">→</text>
         <rect x="${rightX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="12" fill="${modePrimaryHex}" fill-opacity="0.14" stroke="${modePrimaryHex}" stroke-width="2"/>
-        <text x="${rightX + 14}" y="${boxY + Math.round(smallSize * 1.4)}" font-family="${fontFamily}" font-size="${Math.max(10, Math.round(smallSize * 0.85))}" font-weight="700" fill="${modePrimaryHex}">✓ ${escapeXml(spec.labels[1] ?? 'Natural Form')}</text>
+        <text x="${rightX + 14}" y="${boxY + Math.round(smallSize * 1.3)}" font-family="${fontFamily}" font-size="${Math.max(13, Math.round(smallSize * 0.90))}" font-weight="700" fill="${modePrimaryHex}">✓ ${escapeXml(spec.labels[1] ?? 'Natural Form')}</text>
         ${renderSvgTextLines({
-          lines: hwLines,
+          lines: hwFit.lines,
           x: rightX + 14,
-          startY: boxY + Math.round(boxH * 0.48),
-          lineHeight: Math.round(hwFont * 1.22),
+          startY: centeredBlockStartY(boxY + labelH, boxH - labelH - 8, hwFit),
+          lineHeight: hwFit.lineHeight,
           fontFamily,
-          fontSize: hwFont,
+          fontSize: hwFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
         })}
@@ -1420,17 +1974,50 @@ export function build2411CardSvg(params: {
     case 'css-browser-mockup':
     case 'bs-card-header':
     default: {
-      const iconCx = cardX + Math.round(cardW * 0.18);
-      const iconCy = bodyTop + Math.round(bodyH * 0.46);
-      const rightColX = cardX + Math.round(cardW * 0.35);
-      const rightColW = Math.round(cardW * 0.59);
+      const leftBoxW = Math.round(innerW * 0.25);
+      const iconCx = cardX + padX + Math.round(leftBoxW / 2);
+      const iconCy = bodyTop + Math.round(bodyH * 0.50);
+      const rightColX = cardX + padX + leftBoxW + 20;
+      const rightColW = innerW - leftBoxW - 20;
       const waveHeights = [0.34, 0.68, 0.95, 0.52, 0.82, 0.44, 0.72, 0.38];
-      const waveBaseY = bodyTop + Math.round(bodyH * 0.88);
-      const waveMaxH = Math.round(bodyH * 0.22);
+      const waveMaxH = Math.max(18, Math.round(bodyH * 0.14));
+
+      const mainHeadline =
+        spec.speechText && spec.speechText.length > spec.title.length
+          ? spec.speechText
+          : spec.title;
+      const tBoxH = Math.round(bodyH * 0.54);
+      const subBoxH = Math.max(24, Math.round(bodyH * 0.22));
+      const tFit = fitTextToBox({
+        text: mainHeadline,
+        boxW: rightColW,
+        boxH: tBoxH,
+        baseFontSize: bigSize,
+        minFontSize: 15,
+        maxLines: 3,
+      });
+      const subFit = fitTextToBox({
+        text: spec.subtitle,
+        boxW: rightColW - 24,
+        boxH: subBoxH,
+        baseFontSize: Math.max(15, Math.round(smallSize * 0.94)),
+        minFontSize: 13,
+        maxLines: 1,
+      });
+
+      const groupGap = 10;
+      const pillH = Math.max(26, Math.round(subFit.fontSize * 1.65));
+      const totalGroupH = tFit.totalHeight + groupGap + pillH + groupGap + waveMaxH;
+      const groupTopY = bodyTop + Math.max(4, Math.round((bodyH - totalGroupH) / 2));
+      const titleStartY = groupTopY + Math.round(tFit.fontSize * 0.85);
+      const pillY = groupTopY + tFit.totalHeight + groupGap;
+      const pillText = subFit.lines[0] ?? spec.subtitle;
+      const pillW = Math.min(rightColW, Math.max(112, Math.round(pillText.length * subFit.fontSize * 0.66 + 26)));
+      const waveBaseY = pillY + pillH + groupGap + waveMaxH;
       const waveSvg = waveHeights
         .map((ratio, idx) => {
-          const bw = Math.max(5, Math.round(rightColW * 0.05));
-          const gap = Math.max(4, Math.round(rightColW * 0.03));
+          const bw = Math.max(6, Math.min(10, Math.round(rightColW * 0.025)));
+          const gap = Math.max(5, Math.min(8, Math.round(bw * 0.65)));
           const bh = Math.max(8, Math.round(waveMaxH * ratio));
           const bx = rightColX + idx * (bw + gap);
           const by = waveBaseY - bh;
@@ -1439,70 +2026,54 @@ export function build2411CardSvg(params: {
         })
         .join('');
 
-      const tBudget = Math.max(14, Math.floor(rightColW / (titleSize * 0.58)));
-      const tLines = wrapSvgCardLines(spec.title, tBudget, 2);
-      const tFont = adaptiveLineFontSize(titleSize, tLines, tBudget);
-      const subLines = wrapSvgCardLines(spec.subtitle, tBudget + 4, 1);
-
       variantBodySvg = `
-        <rect x="${cardX + padX}" y="${bodyTop}" width="${Math.round(cardW * 0.25)}" height="${Math.round(bodyH * 0.84)}" rx="${Math.round(cardR * 0.6)}" fill="${theme.surfaceTintHex}" stroke="${theme.cardBorderHex}" stroke-width="1.5"/>
+        <rect x="${cardX + padX}" y="${bodyTop}" width="${leftBoxW}" height="${bodyH}" rx="${Math.round(cardR * 0.6)}" fill="${theme.surfaceTintHex}" stroke="${theme.cardBorderHex}" stroke-width="1.5"/>
         ${getSvgVectorIllustration(spec.iconKey, iconCx, iconCy, iconScale, modePrimaryHex, modeSecondaryHex, theme.cardBgHex)}
         ${renderSvgTextLines({
-          lines: tLines,
+          lines: tFit.lines,
           x: rightColX,
-          startY: bodyTop + Math.round(bodyH * 0.22),
-          lineHeight: Math.round(tFont * 1.22),
+          startY: titleStartY,
+          lineHeight: tFit.lineHeight,
           fontFamily,
-          fontSize: tFont,
+          fontSize: tFit.fontSize,
           fontWeight: 700,
           fill: theme.textHex,
         })}
-        ${renderSvgTextLines({
-          lines: subLines,
-          x: rightColX,
-          startY: bodyTop + Math.round(bodyH * 0.56),
-          lineHeight: Math.round(smallSize * 1.2),
-          fontFamily,
-          fontSize: smallSize,
-          fontWeight: 600,
-          fill: theme.mutedTextHex,
-        })}
+        <rect x="${rightColX}" y="${pillY}" width="${pillW}" height="${pillH}" rx="8" fill="${modePrimaryHex}" fill-opacity="0.12"/>
+        <text x="${rightColX + 12}" y="${pillY + Math.round(pillH * 0.68)}" font-family="${fontFamily}" font-size="${subFit.fontSize}" font-weight="700" fill="${modePrimaryHex}">${escapeXml(pillText)}</text>
         ${waveSvg}
       `;
       break;
     }
   }
 
-  // Optional Example / Previous Target Recall Strip cleanly placed below body and above progress bar
+  // Optional Hint / Example / Previous Target Recall Strip cleanly placed below body and above progress bar
   let footerContextSvg = '';
-  if (hasFooterContext) {
-    const stripY = bodyTop + bodyH + 4;
-    const stripH = Math.max(24, Math.round(cardH * 0.145));
-    const stripText =
-      spec.prevTargetText && spec.exampleText
-        ? `RECALL PREV: ${spec.prevTargetText} · ${spec.exampleText}`
-        : spec.prevTargetText
-        ? `RECALL PREV: ${spec.prevTargetText}`
-        : spec.exampleText ?? '';
-    const stripBudget = Math.max(24, Math.floor((innerW - 24) / (smallSize * 0.54)));
-    const stripLines = wrapSvgCardLines(stripText, stripBudget, 2);
-    const stripFont = Math.max(9, Math.round(smallSize * (stripLines.length > 1 ? 0.74 : 0.85)));
+  if (hasFooterContext && fittedStrip) {
+    const stripY = bodyTop + bodyH + 6;
+    const iconKeyForStrip: PresentationIconKey =
+      spec.hintKind === 'caution' ? 'alert_triangle' : 'lightbulb';
+    const stripIconCx = cardX + padX + 18;
+    const stripIconCy = stripY + Math.round(stripH / 2);
+    const stripIconColor =
+      spec.hintKind === 'caution' ? '#D97706' : spec.prevTargetText ? modePrimaryHex : modeSecondaryHex;
     footerContextSvg = `
       <rect x="${cardX + padX}" y="${stripY}" width="${innerW}" height="${stripH}" rx="8" fill="${modePrimaryHex}" fill-opacity="0.08" stroke="${theme.cardBorderHex}" stroke-width="1"/>
+      ${getSvgVectorIllustration(iconKeyForStrip, stripIconCx, stripIconCy, 0.24, stripIconColor, modePrimaryHex, theme.cardBgHex)}
       ${renderSvgTextLines({
-        lines: stripLines,
-        x: cardX + padX + 10,
-        startY: stripY + Math.round(stripFont * (stripLines.length > 1 ? 1.15 : 1.48)),
-        lineHeight: Math.round(stripFont * 1.15),
+        lines: fittedStrip.lines,
+        x: cardX + padX + 34,
+        startY: centeredBlockStartY(stripY, stripH, fittedStrip),
+        lineHeight: fittedStrip.lineHeight,
         fontFamily,
-        fontSize: stripFont,
+        fontSize: fittedStrip.fontSize,
         fontWeight: 600,
         fill: spec.prevTargetText ? modePrimaryHex : theme.mutedTextHex,
       })}
     `;
   }
 
-  const barY = cardY + cardH - 16;
+  const barY = cardY + cardH - 15;
   const barW = innerW;
   const barFillW = Math.max(18, Math.round((spec.progressPct / 100) * barW));
   const headerLabel =

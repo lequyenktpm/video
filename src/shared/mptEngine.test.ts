@@ -1476,7 +1476,318 @@ test('curated background library categorizes study, interview, and life topics w
   assert.equal(bgSvg.includes('undefined'), false);
 });
 
+test('Component 2411 wraps long CJK+English copy without ellipsis/overflow and keeps friends-chat anti-spoiler bubbles', () => {
+  const longCjk =
+    '「急がなくて大丈夫ですよ、自分のペースでしっかり確認してから提出してくださいね」を自然な英語で言えますか？ [PAUSE]';
+  const wrapped = wrapSvgCardLines(longCjk, 18, 4);
+  assert.ok(wrapped.length >= 2);
+  assert.equal(wrapped.join('').includes('...'), false);
+  assert.equal(wrapped.join('').includes('…'), false);
 
+  for (const v of STUDIO_2411_VARIANT_OPTIONS) {
+    const spec = build2411CardSpecForLine({
+      rawLine: 'Q: 私の長所は、周囲の状況を見ながら主体的に行動し、課題解決に向けて粘り強く取り組めるところです。 [PAUSE]',
+      lineIndex: 1,
+      totalLines: 6,
+      scriptStyle: 'language_challenge',
+      themeId: 'cards_pastel',
+      defaultPauseSec: 5,
+      prevTargetText: 'Watch out for her!',
+      override: {
+        variant: v.id,
+        animationIn: 'random',
+        title: 'Proactive Problem Solving Under Tight Deadlines',
+        labels: ['Interviewer', 'Candidate'],
+        speechText: 'My strength is taking initiative early when cross-functional issues come up during tight releases.',
+        exampleText: 'Hint: State your core strength first, then give one concrete workplace behavior.',
+        prevTargetText: 'Watch out for her!',
+        progressPct: 45,
+      },
+    });
+    assert.equal(spec.animationIn, 'random');
+    const svg = build2411CardSvg({ spec, width: 720, height: 1280 });
+    assert.equal(svg.includes('NaN'), false, `Variant ${v.id} produced NaN`);
+    assert.equal(svg.includes('undefined'), false, `Variant ${v.id} produced undefined`);
+    assert.equal(svg.includes('…'), false, `Variant ${v.id} truncated with ellipsis`);
+    assert.equal(svg.includes('...'), false, `Variant ${v.id} truncated with ...`);
+  }
 
+  // Two-speaker friends-chat: prompt slide must NOT spoil answer, and shows user turn prompt bubble
+  const quizChatSpec = build2411CardSpecForLine({
+    rawLine: 'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+    lineIndex: 1,
+    totalLines: 4,
+    scriptStyle: 'language_challenge',
+    themeId: 'cards_pastel',
+    defaultPauseSec: 5,
+    override: { variant: 'friends-chat', animationIn: 'random' },
+  });
+  assert.equal(quizChatSpec.layoutKind, 'quiz_prompt');
+  assert.ok(quizChatSpec.exampleText?.startsWith('Hint:'));
+  assert.equal(quizChatSpec.exampleText?.toLowerCase().includes('watch out for her'), false);
+  const quizChatSvg = build2411CardSvg({ spec: quizChatSpec, width: 720, height: 1280 });
+  assert.ok(quizChatSvg.includes('Your turn'));
+  assert.ok(quizChatSvg.includes('Translate in 5s'));
 
+  // Two-speaker friends-chat answer slide: Speaker A shows promptPreviewText, Speaker B shows translated answer
+  const answerChatSpec = build2411CardSpecForLine({
+    rawLine: 'English: Watch out for her!',
+    lineIndex: 2,
+    totalLines: 4,
+    isSecondarySlot: true,
+    scriptStyle: 'language_challenge',
+    themeId: 'cards_pastel',
+    defaultPauseSec: 5,
+    promptPreviewText: '「彼女には気をつけて！」',
+    override: { variant: 'friends-chat', animationIn: 'random' },
+  });
+  const answerChatSvg = build2411CardSvg({ spec: answerChatSpec, width: 720, height: 1280 });
+  assert.ok(answerChatSvg.includes('彼女には気をつけて'));
+  assert.ok(answerChatSvg.includes('Watch out for her!'));
+});
+
+test('buildAssFromCues adapts dark text to dark backgrounds bidirectionally and draws smooth rounded countdown', () => {
+  const cues = [
+    {
+      index: 1,
+      startSec: 0,
+      endSec: 5,
+      text: 'Watch out for her!',
+      voiceSlot: 'secondary' as const,
+      roleKind: 'answer' as const,
+      roleLabel: 'Answer',
+    },
+    ...buildCountdownCues(1, 5, 2),
+  ];
+
+  // Dark text (#0F172A) paired with dark background must flip to white (&H00FFFFFF) so text is readable
+  const assOnDark = buildAssFromCues(
+    cues,
+    {
+      enabled: true,
+      fontName: 'Noto Sans',
+      position: 'bottom',
+      customPositionPct: 84,
+      fontSize: 38,
+      sourceFontSize: 30,
+      textColor: '#0F172A',
+      highlightColor: '#4F46E5',
+      strokeColor: '#FFFFFF',
+      strokeWidth: 2,
+      boxStyle: 'outline',
+      effect: 'karaoke',
+    },
+    720,
+    1280,
+    {
+      isLightBackground: false,
+      use2411CountdownStyle: true,
+    }
+  );
+  assert.ok(assOnDark.includes('Style: Secondary,Noto Sans,38,&H0015CCFA,&H00FFFFFF,'));
+  const assOnDarkStatic = buildAssFromCues(
+    cues,
+    {
+      enabled: true,
+      fontName: 'Noto Sans',
+      position: 'bottom',
+      customPositionPct: 84,
+      fontSize: 38,
+      sourceFontSize: 30,
+      textColor: '#0F172A',
+      highlightColor: '#4F46E5',
+      strokeColor: '#FFFFFF',
+      strokeWidth: 2,
+      boxStyle: 'outline',
+      effect: 'static',
+    },
+    720,
+    1280,
+    { isLightBackground: false, use2411CountdownStyle: true }
+  );
+  assert.ok(assOnDarkStatic.includes('Style: Default,Noto Sans,38,&H00FFFFFF,'));
+  assert.ok(assOnDarkStatic.includes('Style: Secondary,Noto Sans,38,&H0015CCFA,'));
+  assert.ok(assOnDark.includes('Style: Countdown,'));
+  assert.ok(assOnDark.includes('Style: CountdownMeta,'));
+  assert.ok(assOnDark.includes('THINK TIME'));
+  // Rounded Bootstrap ASS card uses Bezier curves (' b ') instead of sharp polygons only
+  assert.ok(assOnDark.includes('\\p1'));
+  assert.ok(assOnDark.includes('}m '));
+  assert.ok(assOnDark.includes(' b '));
+
+  // Light background keeps crisp dark ink without thick white stroke halo
+  const assOnLight = buildAssFromCues(
+    cues,
+    {
+      enabled: true,
+      fontName: 'Noto Sans',
+      position: 'bottom',
+      customPositionPct: 84,
+      fontSize: 38,
+      sourceFontSize: 30,
+      textColor: '#0F172A',
+      highlightColor: '#4F46E5',
+      strokeColor: '#FFFFFF',
+      strokeWidth: 2,
+      boxStyle: 'outline',
+      effect: 'karaoke',
+    },
+    720,
+    1280,
+    {
+      isLightBackground: true,
+      use2411CountdownStyle: true,
+    }
+  );
+  assert.ok(assOnLight.includes('Style: Secondary,Noto Sans,38,&H00E5464F,&H002A170F,'));
+
+  const prompt = buildMoneyPrinterPrompt({
+    subject: 'Office conversation challenge',
+    language: 'ja_en',
+    scriptStyle: 'language_challenge',
+    sentenceCount: 6,
+    mode: 'all_in_one',
+    dualVoiceEnabled: true,
+  });
+  assert.ok(prompt.includes('"animationIn": "random"'));
+  assert.ok(prompt.includes('English'));
+  assert.ok(prompt.includes('friends-chat'));
+});
+
+test('spoiler-free quiz hints, dualVoiceEnabled friends-chat consistency, aligned ASS CountdownVec, and multi-aspect SVG cards', () => {
+  // 1. Quiz prompts must NEVER leak English opening words like "Watch..." or "Take..."
+  const spoilerCases = [
+    'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+    'Q: 「無理しないでね」はどう言いますか？ [PAUSE]',
+    'Q: コーヒーを注文するとき何と言いますか？ [PAUSE]',
+    'Q: 丁寧にお礼を言いたいときは？ [PAUSE]',
+  ];
+  for (const rawLine of spoilerCases) {
+    const spec = build2411CardSpecForLine({
+      rawLine,
+      lineIndex: 1,
+      totalLines: 6,
+      scriptStyle: 'language_challenge',
+      dualVoiceEnabled: true,
+      pauseBetweenLinesSec: 5,
+      defaultPauseSec: 5,
+      override: {
+        exampleText: 'Hint: Try "Watch..." / "Take..." right away!',
+      },
+    } as Parameters<typeof build2411CardSpecForLine>[0]);
+    const ex = (spec.exampleText ?? '').toLowerCase();
+    assert.equal(ex.includes('watch'), false, `Hint leaked "watch": ${spec.exampleText}`);
+    assert.equal(ex.includes('take'), false, `Hint leaked "take": ${spec.exampleText}`);
+    assert.equal(ex.includes('could i'), false, `Hint leaked "could i": ${spec.exampleText}`);
+    assert.equal(ex.includes('appreciate'), false, `Hint leaked "appreciate": ${spec.exampleText}`);
+    assert.equal(ex.includes('...'), false, `Hint contained spoiler ellipsis: ${spec.exampleText}`);
+    assert.equal(spec.variant, 'friends-chat', 'Dual voice locks quiz prompt to friends-chat');
+  }
+
+  // 2. dualVoiceEnabled locks all slides in buildContextualSceneComponentsForScript to 'friends-chat'
+  const dualScript = [
+    'Tiêu đề: 今から日本語を読み上げます。5秒以内に英語で言ってみましょう！',
+    'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+    'English: Watch out for her!',
+    'Q: 「無理しないでね」はどう言いますか？ [PAUSE]',
+    'English: Take it easy and don’t push yourself too hard!',
+    'Outro: いくつ言えましたか？気に入ったら保存して練習しましょう！',
+  ].join('\n');
+  const dualPlanned = buildContextualSceneComponentsForScript({
+    script: dualScript,
+    scriptStyle: 'language_challenge',
+    dualVoiceEnabled: true,
+    pauseBetweenLinesSec: 5,
+    existingOverrides: [
+      { variant: 'css-browser-mockup' },
+      { variant: 'avatar-speech' },
+    ],
+  });
+  assert.equal(dualPlanned.length, 6);
+  assert.ok(
+    dualPlanned.every((item) => item.variant === 'friends-chat'),
+    `Expected every slide in dual-voice mode to be friends-chat, got: ${dualPlanned.map((i) => i.variant).join(', ')}`
+  );
+
+  // 3. ASS CountdownVec renders with BorderStyle=1, \an7\pos(...)\bord0, and aligned trackLeft across 9:16, 16:9, 1:1
+  const subCfg: SubtitleConfig = {
+    enabled: true,
+    fontName: 'M PLUS 1p',
+    position: 'bottom',
+    customPositionPct: 84,
+    fontSize: 38,
+    sourceFontSize: 28,
+    textColor: '#0F172A',
+    highlightColor: '#4F46E5',
+    strokeColor: '#FFFFFF',
+    strokeWidth: 2,
+    boxStyle: 'outline',
+    effect: 'karaoke',
+  };
+  const cdCues = [
+    {
+      index: 1,
+      startSec: 0,
+      endSec: 5,
+      text: '「彼女には気をつけて！」を英語で言えますか？',
+      voiceSlot: 'primary' as const,
+      roleKind: 'question' as const,
+      roleLabel: 'Question',
+    },
+    ...buildCountdownCues(0, 5, 2),
+  ];
+
+  for (const [w, h, ratioLabel] of [
+    [720, 1280, '9:16'],
+    [1280, 720, '16:9'],
+    [720, 720, '1:1'],
+  ] as const) {
+    const ass = buildAssFromCues(cdCues, { ...subCfg, showRoleBadges: true }, w, h, {
+      isLightBackground: true,
+      use2411CountdownStyle: true,
+    });
+    assert.ok(ass.includes('Style: CountdownVec,'), `${ratioLabel} missing CountdownVec style`);
+    assert.ok(ass.includes('\\an7\\pos('), `${ratioLabel} vector layers must anchor with \\an7\\pos`);
+    // Track and fill layers must share identical left/top pos coordinates
+    const barMatches = [...ass.matchAll(/Dialogue: [12],[^,]+,[^,]+,CountdownVec,,0,0,0,,\{\\an7\\pos\((\d+),(\d+)\)\\p1/g)];
+    assert.ok(barMatches.length >= 2, `${ratioLabel} should emit aligned track + fill bar vectors`);
+    assert.equal(barMatches[barMatches.length - 1][1], barMatches[barMatches.length - 2][1], `${ratioLabel} fill bar X must match track X`);
+    assert.equal(barMatches[barMatches.length - 1][2], barMatches[barMatches.length - 2][2], `${ratioLabel} fill bar Y must match track Y`);
+
+    // Check card top clears cardReserveBottom and track top clears RoleBadge baseline
+    const cardBorderMatch = ass.match(/Dialogue: 0,[^,]+,[^,]+,CountdownVec,,0,0,0,,\{\\an7\\pos\((\d+),(\d+)\)\\p1\\1c&H/);
+    const badgeMatch = ass.match(/RoleBadge,,0,0,0,,\{\\an2\\pos\(\d+,(\d+)\)/);
+    assert.ok(cardBorderMatch && badgeMatch, `${ratioLabel} should emit both CountdownVec border and RoleBadge`);
+    const cardTopY = Number(cardBorderMatch[2]) + 2;
+    const trackTopY = Number(barMatches[barMatches.length - 2][2]);
+    const roleBadgeY = Number(badgeMatch[1]);
+    const cardReserveBottom = Math.round(h * (w > h ? 0.495 : w === h ? 0.475 : 0.445));
+    assert.ok(cardTopY >= cardReserveBottom - 2, `${ratioLabel} countdown top (${cardTopY}) collided with study card (${cardReserveBottom})`);
+    assert.ok(trackTopY < roleBadgeY - 12, `${ratioLabel} countdown track (${trackTopY}) collided with RoleBadge (${roleBadgeY})`);
+  }
+
+  // 4. All 14 variants render cleanly in 16:9 (1280x720), 1:1 (720x720), and 9:16 (720x1280) with legible typography
+  for (const [w, h] of [
+    [1280, 720],
+    [720, 720],
+    [720, 1280],
+  ]) {
+    for (const v of STUDIO_2411_VARIANT_OPTIONS) {
+      const spec = build2411CardSpecForLine({
+        rawLine: 'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+        lineIndex: 1,
+        totalLines: 6,
+        scriptStyle: 'language_challenge',
+        themeId: 'cards_pastel',
+        defaultPauseSec: 5,
+        override: { variant: v.id, animationIn: 'random' },
+      });
+      const svg = build2411CardSvg({ spec, width: w, height: h });
+      assert.ok(svg.includes(`viewBox="0 0 ${w} ${h}"`), `${v.id} ${w}x${h} viewBox mismatch`);
+      assert.equal(svg.includes('NaN'), false, `${v.id} ${w}x${h} NaN`);
+      assert.equal(svg.includes('undefined'), false, `${v.id} ${w}x${h} undefined`);
+      assert.equal(svg.includes('…'), false, `${v.id} ${w}x${h} ellipsis`);
+    }
+  }
+});
 

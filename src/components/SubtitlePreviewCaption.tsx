@@ -135,8 +135,8 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   const tokens = useMemo(() => tokenizeSubtitleForEffect(wrappedText), [wrappedText]);
   const adaptLightContrast = isLightBackground && subtitle.boxStyle !== 'dark_box';
   const inlineTokenClasses = useMemo(
-    () => computeInlineTokenClasses(tokens, showBadges && !adaptLightContrast),
-    [tokens, showBadges, adaptLightContrast]
+    () => computeInlineTokenClasses(tokens, showBadges && !adaptLightContrast && !textHasCjk),
+    [tokens, showBadges, adaptLightContrast, textHasCjk]
   );
   const [progress, setProgress] = useState(0);
   const subtitleBoxRef = useRef<HTMLDivElement | null>(null);
@@ -163,11 +163,11 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     return () => window.cancelAnimationFrame(rafId);
   }, [effect, tokens.length, wrappedText, replayNonce]);
 
-  // Preview card CSS widths: 9:16 -> 245px, 1:1 -> 300px, 16:9 -> ~430px
+  // Preview card CSS widths: 9:16 -> 245px, 1:1 -> 300px, 16:9 -> ~458px
   const previewScale =
-    aspectRatio === '1:1' ? 300 / 720 : aspectRatio === '16:9' ? 430 / 1280 : 245 / 720;
+    aspectRatio === '1:1' ? 300 / 720 : aspectRatio === '16:9' ? 450 / 1280 : 245 / 720;
   const previewFontPx = Math.max(11, Math.min(24, Math.round(budget.scaledFontSize * previewScale)));
-  const countdownFontPx = Math.max(30, Math.min(54, Math.round(previewFontPx * 2.25)));
+  const countdownFontPx = Math.max(28, Math.min(54, Math.round(previewFontPx * 2.15)));
 
   const resolveFontCss = (sampleText: string): string => {
     if (subtitle.fontName === 'JetBrains Mono') {
@@ -184,12 +184,25 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   };
 
   const fontCss = resolveFontCss(text);
-  const effectiveTextColor =
-    adaptLightContrast && needsDarkContrastOnLightBg(subtitle.textColor) ? '#0F172A' : subtitle.textColor;
-  const effectiveHighlightColor =
-    adaptLightContrast && needsDarkContrastOnLightBg(subtitle.highlightColor || '#FACC15')
+  const effectiveTextColor = adaptLightContrast
+    ? needsDarkContrastOnLightBg(subtitle.textColor)
+      ? '#0F172A'
+      : subtitle.textColor
+    : needsDarkContrastOnLightBg(subtitle.textColor)
+    ? subtitle.textColor
+    : '#FFFFFF';
+  const effectiveHighlightColor = adaptLightContrast
+    ? needsDarkContrastOnLightBg(subtitle.highlightColor || '#FACC15')
       ? '#4338CA'
-      : subtitle.highlightColor || '#FACC15';
+      : subtitle.highlightColor || '#4338CA'
+    : needsDarkContrastOnLightBg(subtitle.highlightColor || '#FACC15')
+    ? subtitle.highlightColor || '#FACC15'
+    : '#FACC15';
+  const effectiveStrokeColor = adaptLightContrast
+    ? '#FFFFFF'
+    : needsDarkContrastOnLightBg(subtitle.strokeColor || '#000000')
+    ? '#0F172A'
+    : subtitle.strokeColor || '#000000';
 
   const baseStyle: React.CSSProperties = {
     fontFamily: fontCss,
@@ -201,19 +214,19 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     paintOrder: 'stroke fill',
     WebkitTextStroke:
       subtitle.boxStyle === 'outline' && subtitle.strokeWidth > 0 && !adaptLightContrast
-        ? `${Math.max(1.0, subtitle.strokeWidth * 0.62)}px ${subtitle.strokeColor}`
+        ? `${Math.max(1.0, subtitle.strokeWidth * 0.62)}px ${effectiveStrokeColor}`
         : undefined,
-    textShadow: adaptLightContrast ? '0 1px 0 rgba(255,255,255,0.85)' : '0 2px 5px rgba(0,0,0,0.92)',
+    textShadow: adaptLightContrast ? '0 1px 0 rgba(255,255,255,0.75)' : '0 2px 5px rgba(0,0,0,0.92)',
   };
 
   const containerPosStyle: React.CSSProperties =
     subtitle.position === 'top'
-      ? { top: '11%' }
+      ? { top: aspectRatio === '16:9' ? '8%' : '11%' }
       : subtitle.position === 'center'
       ? { top: '50%', transform: 'translateY(-50%)' }
       : subtitle.position === 'custom'
       ? { top: `${subtitle.customPositionPct}%`, transform: 'translateY(-50%)' }
-      : { bottom: '12%' };
+      : { bottom: aspectRatio === '16:9' ? '2.5%' : aspectRatio === '1:1' ? '4.5%' : '8%' };
 
   const activeWordCount = Math.max(1, Math.ceil(progress * Math.max(1, tokens.length)));
   const isTypingFinished = activeWordCount >= tokens.length;
@@ -261,10 +274,12 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     paintOrder: 'stroke fill',
     WebkitTextStroke:
       subtitle.boxStyle === 'outline' && subtitle.strokeWidth > 0 && !adaptLightContrast
-        ? `${Math.max(0.9, subtitle.strokeWidth * 0.56)}px ${subtitle.strokeColor}`
+        ? `${Math.max(0.9, subtitle.strokeWidth * 0.56)}px ${effectiveStrokeColor}`
         : undefined,
-    textShadow: adaptLightContrast ? '0 1px 0 rgba(255,255,255,0.75)' : '0 2px 5px rgba(0,0,0,0.92)',
+    textShadow: adaptLightContrast ? '0 1px 0 rgba(255,255,255,0.65)' : '0 2px 5px rgba(0,0,0,0.92)',
   };
+
+  const isCountdownActive = countdownNumber != null;
 
   useLayoutEffect(() => {
     const subEl = subtitleBoxRef.current;
@@ -273,9 +288,18 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     const stageH = stageEl.clientHeight;
     const subTop = subEl.offsetTop;
     const subBottom = subTop + subEl.offsetHeight;
-    const cdHeightPx = use2411CountdownStyle
-      ? 52
-      : Math.max(82, Math.round(countdownFontPx * 1.85));
+    const cdEl = stageEl.querySelector('[data-testid="studio-preview-countdown"]') as HTMLElement | null;
+    const measuredCdH = cdEl ? Math.round(cdEl.offsetHeight) : 0;
+    const cdHeightPx =
+      measuredCdH > 0
+        ? measuredCdH
+        : use2411CountdownStyle
+        ? aspectRatio === '16:9'
+          ? 42
+          : aspectRatio === '1:1'
+          ? 50
+          : 68
+        : Math.max(76, Math.round(countdownFontPx * 1.8));
     const bands = [{ topPx: subTop, bottomPx: subBottom }];
     const cardInnerEl = stageEl.querySelector('[data-testid="studio-2411-stage-card"] > div:last-child');
     if (cardInnerEl) {
@@ -286,7 +310,10 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
         bottomPx: Math.max(0, Math.round(cr.bottom - sr.top)),
       });
     } else if (use2411CountdownStyle) {
-      bands.push({ topPx: 0, bottomPx: Math.round(stageH * 0.48) });
+      bands.push({
+        topPx: 0,
+        bottomPx: Math.round(stageH * (aspectRatio === '16:9' ? 0.50 : 0.48)),
+      });
     } else if (subTop > stageH * 0.56) {
       bands.push({ topPx: 0, bottomPx: Math.round(stageH * 0.37) });
     }
@@ -298,7 +325,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     const nextPct = Math.max(18, Math.min(82, Number(((safeCenterY / stageH) * 100).toFixed(1))));
     setCountdownTopPct(nextPct);
   }, [
-    countdownNumber,
+    isCountdownActive,
     wrappedText,
     pinnedSourceText,
     showBadges,
@@ -335,9 +362,9 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
                 className={tokCls}
                 style={{
                   color: isHighlighted ? effectiveHighlightColor : effectiveTextColor,
-                  display: tokCls === 'mpt-caption-chip' ? 'inline' : 'inline-block',
+                  display: textHasCjk || tokCls === 'mpt-caption-chip' ? 'inline' : 'inline-block',
                   transform:
-                    tokCls === 'mpt-caption-chip'
+                    textHasCjk || tokCls === 'mpt-caption-chip'
                       ? undefined
                       : isCurrent
                       ? 'scale(1.03)'
@@ -435,10 +462,10 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   );
 
   const pinnedSourceNode = wrappedPinnedSource ? (
-    <div className="flex flex-col items-center gap-0.5 max-w-[94%]">
+    <div className={`flex flex-col items-center max-w-[94%] ${aspectRatio === '16:9' ? 'gap-0' : 'gap-0.5'}`}>
       {showBadges && (
         <span
-          className={`text-[9px] font-semibold tracking-wider uppercase ${
+          className={`${aspectRatio === '16:9' ? 'text-[8px] leading-none' : 'text-[9px]'} font-semibold tracking-wider uppercase ${
             adaptLightContrast ? 'text-indigo-700' : 'text-sky-300'
           }`}
         >
@@ -473,7 +500,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
       {countdownNumber != null && (
         <div
           data-testid="studio-preview-countdown"
-          className="absolute left-0 right-0 flex flex-col items-center pointer-events-none z-20 transition-[top] duration-150 ease-out"
+          className="absolute left-0 right-0 flex flex-col items-center pointer-events-none z-20"
           style={{
             top: `${countdownTopPct}%`,
             transform: 'translateY(-50%)',
@@ -485,6 +512,8 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
               countdownTotalSec={totalCdSteps}
               themeId={studio2411Theme}
               accentColor={effectiveHighlightColor}
+              aspectRatio={aspectRatio}
+              fontName={subtitle.fontName}
             />
           ) : (
             <div
@@ -537,15 +566,17 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
         ref={subtitleBoxRef}
         data-testid="studio-preview-subtitle"
         data-effect={effect}
-        className="absolute left-3 right-3 flex flex-col items-center pointer-events-none z-10 gap-1.5"
+        className={`absolute left-3 right-3 flex flex-col items-center pointer-events-none z-10 ${
+          aspectRatio === '16:9' ? 'gap-0.5' : 'gap-1'
+        }`}
         style={containerPosStyle}
       >
         {showBadges && (
           <div
             data-testid="preview-role-badge"
-            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[10px] font-semibold tracking-tight shadow-sm ${
-              ROLE_TONE_CLASSES[presentation.roleTone]
-            }`}
+            className={`inline-flex items-center gap-1 rounded-md border font-semibold tracking-tight shadow-sm ${
+              aspectRatio === '16:9' ? 'px-1.5 py-0 text-[9px]' : 'px-2 py-0.5 text-[10px]'
+            } ${ROLE_TONE_CLASSES[presentation.roleTone]}`}
           >
             <PresentationIcon iconKey={presentation.roleIconKey} className="w-3 h-3 shrink-0" />
             <span>{presentation.roleLabel}</span>

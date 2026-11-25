@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock } from 'lucide-react';
+import { AlertTriangle, Clock, Lightbulb, RotateCcw } from 'lucide-react';
 import {
   ScriptStyle,
   Studio2411SceneComponentOverride,
@@ -17,6 +17,21 @@ interface Studio2411CountdownCardProps {
   countdownTotalSec: number;
   themeId?: Studio2411ThemeId;
   accentColor?: string;
+  aspectRatio?: VideoAspectRatio;
+  fontName?: string;
+}
+
+function resolve2411FontCss(fontName?: string): string {
+  if (fontName === 'JetBrains Mono') {
+    return "'JetBrains Mono', 'M PLUS 1p', 'BIZ UDPGothic', 'Noto Sans', sans-serif";
+  }
+  if (fontName === 'BIZ UDPGothic') {
+    return "'BIZ UDPGothic', 'M PLUS 1p', 'Noto Sans', sans-serif";
+  }
+  if (fontName && fontName !== 'DM Sans' && fontName !== 'Noto Sans') {
+    return `'${fontName}', 'M PLUS 1p', 'BIZ UDPGothic', 'Noto Sans', sans-serif`;
+  }
+  return "'M PLUS 1p', 'BIZ UDPGothic', 'Noto Sans', sans-serif";
 }
 
 export const Studio2411CountdownCard: React.FC<Studio2411CountdownCardProps> = ({
@@ -24,12 +39,16 @@ export const Studio2411CountdownCard: React.FC<Studio2411CountdownCardProps> = (
   countdownTotalSec,
   themeId,
   accentColor,
+  aspectRatio = '9:16',
+  fontName,
 }) => {
   const theme = getStudio2411ThemeMeta(themeId);
   const totalSteps = Math.max(1, Math.round(countdownTotalSec || 5));
   const pct = Math.max(6, Math.min(100, Math.round((countdownNumber / totalSteps) * 100)));
   const primaryHex = accentColor || theme.accentHex;
   const secondaryHex = theme.secondaryAccentHex;
+  const isLandscape = aspectRatio === '16:9';
+  const isSquare = aspectRatio === '1:1';
   const radius = 15;
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference * (1 - pct / 100);
@@ -37,74 +56,103 @@ export const Studio2411CountdownCard: React.FC<Studio2411CountdownCardProps> = (
   return (
     <div
       data-testid="studio-2411-countdown-card"
-      className="rounded-xl border shadow-lg px-3 py-1.5 flex items-center gap-2.5"
+      className="rounded-xl border shadow-xl overflow-hidden backdrop-blur-sm"
       style={{
-        minWidth: '154px',
-        backgroundColor: theme.isLight ? 'rgba(255,255,255,0.97)' : 'rgba(15,23,42,0.93)',
-        borderColor: theme.cardBorderHex,
+        fontFamily: resolve2411FontCss(fontName),
+        minWidth: isLandscape ? '152px' : isSquare ? '164px' : '180px',
+        maxWidth: isLandscape ? '186px' : isSquare ? '198px' : '220px',
+        backgroundColor: theme.isLight ? 'rgba(255,255,255,0.98)' : 'rgba(15,23,42,0.95)',
+        borderColor: primaryHex,
+        boxShadow: `0 10px 26px -8px ${primaryHex}44`,
       }}
     >
-      <div className="relative w-9 h-9 flex items-center justify-center shrink-0">
-        <svg viewBox="0 0 38 38" className="w-9 h-9 -rotate-90" aria-hidden="true">
-          <circle
-            cx="19"
-            cy="19"
-            r={radius}
-            fill="none"
-            stroke={theme.cardBorderHex}
-            strokeWidth="3.5"
-          />
-          <circle
-            cx="19"
-            cy="19"
-            r={radius}
-            fill="none"
-            stroke={primaryHex}
-            strokeWidth="3.5"
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={dashOffset}
-            style={{ transition: 'stroke-dashoffset 260ms ease-out' }}
-          />
-        </svg>
+      <div
+        className={`flex items-center justify-between gap-2 px-2 border-b font-bold tracking-wider uppercase ${
+          isLandscape || isSquare ? 'py-0.5 text-[8px] leading-tight' : 'py-1 text-[9.5px]'
+        }`}
+        style={{
+          backgroundColor: theme.surfaceTintHex,
+          borderColor: theme.cardBorderHex,
+          color: primaryHex,
+        }}
+      >
+        <span className="inline-flex items-center gap-1">
+          <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+          <span>THINK TIME</span>
+        </span>
         <span
-          key={countdownNumber}
-          className="animate-mpt-countdown absolute inset-0 flex items-center justify-center text-sm font-extrabold tabular-nums select-none"
-          style={{ color: theme.textHex }}
+          className="px-1.5 py-0.5 rounded-full text-[8px] font-extrabold tabular-nums text-white leading-none"
+          style={{ backgroundColor: primaryHex }}
         >
-          {countdownNumber}
+          {countdownNumber}s
         </span>
       </div>
 
-      <div className="flex-1 min-w-[78px] space-y-1">
+      <div className={`${isLandscape ? 'px-2 py-0.5 gap-1.5' : isSquare ? 'px-2 py-1 gap-2' : 'px-2.5 py-1.5 gap-2'} flex items-center`}>
         <div
-          className="flex items-center justify-between gap-1.5 text-[8.5px] font-bold tracking-wider uppercase"
-          style={{ color: primaryHex }}
+          className={`relative flex items-center justify-center shrink-0 ${
+            isLandscape ? 'w-5.5 h-5.5' : isSquare ? 'w-6.5 h-6.5' : 'w-8 h-8'
+          }`}
         >
-          <span className="inline-flex items-center gap-1">
-            <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
-            <span>THINK TIME</span>
-          </span>
-          <span className="tabular-nums" style={{ color: theme.mutedTextHex }}>
-            {countdownNumber}s
+          <svg viewBox="0 0 38 38" className="w-full h-full -rotate-90" aria-hidden="true">
+            <circle
+              cx="19"
+              cy="19"
+              r={radius}
+              fill="none"
+              stroke={theme.cardBorderHex}
+              strokeWidth="3.8"
+            />
+            <circle
+              cx="19"
+              cy="19"
+              r={radius}
+              fill="none"
+              stroke={primaryHex}
+              strokeWidth="3.8"
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={dashOffset}
+              style={{ transition: 'stroke-dashoffset 260ms ease-out' }}
+            />
+          </svg>
+          <span
+            key={countdownNumber}
+            className={`animate-mpt-countdown absolute inset-0 flex items-center justify-center font-extrabold tabular-nums select-none ${
+              isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[12px]' : 'text-[13.5px]'
+            }`}
+            style={{ color: theme.textHex }}
+          >
+            {countdownNumber}
           </span>
         </div>
-        <div
-          className="w-full h-1.5 rounded-full overflow-hidden"
-          style={{ backgroundColor: theme.cardBorderHex }}
-          role="progressbar"
-          aria-label="Think time countdown"
-          aria-valuenow={countdownNumber}
-          aria-valuemin={0}
-          aria-valuemax={totalSteps}
-        >
+
+        <div className={`flex-1 min-w-[84px] ${isLandscape || isSquare ? 'space-y-0.5' : 'space-y-1'}`}>
+          {!isLandscape && (
+            <div
+              className={`${isSquare ? 'text-[8.5px]' : 'text-[10px]'} font-semibold leading-none`}
+              style={{ color: theme.textHex }}
+            >
+              Speak aloud now
+            </div>
+          )}
           <div
-            className="h-full rounded-full transition-[width] duration-300 ease-out"
-            style={{
-              width: `${pct}%`,
-              background: `linear-gradient(90deg, ${primaryHex}, ${secondaryHex})`,
-            }}
-          />
+            className={`w-full ${isLandscape || isSquare ? 'h-1.5' : 'h-2'} rounded-full overflow-hidden border`}
+            style={{ backgroundColor: theme.surfaceTintHex, borderColor: theme.cardBorderHex }}
+            role="progressbar"
+            aria-label="Think time countdown"
+            aria-valuenow={countdownNumber}
+            aria-valuemin={0}
+            aria-valuemax={totalSteps}
+          >
+            <div
+              className="h-full rounded-full transition-[width] duration-300 ease-out"
+              style={{
+                width: `${pct}%`,
+                background: `linear-gradient(90deg, ${primaryHex}, ${secondaryHex})`,
+              }}
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -118,16 +166,128 @@ interface Studio2411StageCardProps {
   isSecondarySlot?: boolean;
   isIntroOrOutro?: boolean;
   scriptStyle?: ScriptStyle;
+  dualVoiceEnabled?: boolean;
   themeId?: Studio2411ThemeId;
   pauseBetweenLinesSec?: number;
   aspectRatio?: VideoAspectRatio;
   countdownActive?: boolean;
   prevTargetText?: string;
+  promptPreviewText?: string;
   animationSeed?: number;
+  fontName?: string;
+  hideBackdrop?: boolean;
+  isExiting?: boolean;
   override?: Studio2411SceneComponentOverride;
 }
 
 const WAVE_BARS = [0.36, 0.72, 0.96, 0.54, 0.84, 0.45, 0.75, 0.4];
+
+interface Animated2411AvatarProps {
+  shirtHex: string;
+  hairHex: string;
+  hairStyle: 'short' | 'bob';
+  pose: 'talking' | 'thinking' | 'idle';
+  side: 'left' | 'right';
+  className: string;
+  dotAccentHex?: string;
+}
+
+const Animated2411Avatar: React.FC<Animated2411AvatarProps> = ({
+  shirtHex,
+  hairHex,
+  hairStyle,
+  pose,
+  side,
+  className,
+  dotAccentHex,
+}) => {
+  const dir = side === 'right' ? -1 : 1;
+  return (
+    <svg
+      viewBox="-32 -28 66 64"
+      className={className}
+      data-avatar-pose={pose}
+      aria-hidden="true"
+    >
+      <path d="M-22 30 C-20 14 20 14 22 30 Z" fill={shirtHex} />
+      <circle cx="0" cy="0" r="16" fill="#FDE68A" />
+      {hairStyle === 'bob' ? (
+        <path
+          d="M-20 -4 C-22 -24 22 -24 20 -4 L20 10 C15 6 11 -4 0 -6 C-11 -4 -15 6 -20 10 Z"
+          fill={hairHex}
+        />
+      ) : (
+        <path
+          d="M-17 -6 C-16 -22 16 -22 17 -6 C10 -11 -10 -11 -17 -6 Z"
+          fill={hairHex}
+        />
+      )}
+      <circle cx="-5" cy="0" r="1.8" fill="#1E293B" />
+      <circle cx="5" cy="0" r="1.8" fill="#1E293B" />
+      {pose === 'talking' ? (
+        <>
+          <ellipse
+            cx="0"
+            cy="8"
+            rx="4.8"
+            ry="3.8"
+            fill="#991B1B"
+            stroke="#1E293B"
+            strokeWidth="1.4"
+            className="animate-2411-mouth-talk"
+          />
+          <g className="animate-2411-hand-wave">
+            <path
+              d={`M${dir * 14} 21 Q${dir * 20} 16 ${dir * 23} 10`}
+              fill="none"
+              stroke={shirtHex}
+              strokeWidth="4.6"
+              strokeLinecap="round"
+            />
+            <circle
+              cx={dir * 23}
+              cy="8.5"
+              r="4.2"
+              fill="#FDE68A"
+              stroke="#1E293B"
+              strokeWidth="1.1"
+            />
+          </g>
+        </>
+      ) : pose === 'thinking' ? (
+        <>
+          <path
+            d="M-3.5 8 Q1 6.8 4.5 9"
+            fill="none"
+            stroke="#1E293B"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          />
+          <g className="animate-2411-hand-think">
+            <path
+              d="M-14 23 Q-10 17 -5 13.5"
+              fill="none"
+              stroke={shirtHex}
+              strokeWidth="4.2"
+              strokeLinecap="round"
+            />
+            <circle cx="-4.5" cy="12.5" r="3.8" fill="#FDE68A" stroke="#1E293B" strokeWidth="1.1" />
+          </g>
+          <circle cx="-20" cy="-12" r="2" fill={dotAccentHex ?? shirtHex} fillOpacity="0.7" />
+          <circle cx="-24" cy="-19" r="3" fill={dotAccentHex ?? shirtHex} fillOpacity="0.45" />
+        </>
+      ) : (
+        <path
+          d="M-5 7 Q0 11.5 5 7"
+          fill="none"
+          stroke="#1E293B"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+      )}
+    </svg>
+  );
+};
 
 export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
   rawLine,
@@ -136,12 +296,17 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
   isSecondarySlot = false,
   isIntroOrOutro = false,
   scriptStyle,
+  dualVoiceEnabled = false,
   themeId,
   pauseBetweenLinesSec = 5,
   aspectRatio = '9:16',
   countdownActive = false,
   prevTargetText,
+  promptPreviewText,
   animationSeed = 0,
+  fontName,
+  hideBackdrop = false,
+  isExiting = false,
   override,
 }) => {
   const spec = build2411CardSpecForLine({
@@ -151,66 +316,80 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
     isSecondarySlot,
     isIntroOrOutro,
     scriptStyle,
+    dualVoiceEnabled,
     themeId,
     defaultPauseSec: pauseBetweenLinesSec,
     prevTargetText,
+    promptPreviewText,
     animationSeed,
     override,
   });
 
   const { theme } = spec;
+  const stageFontCss = resolve2411FontCss(fontName);
   const primaryAccent =
     spec.accentOverrideHex ??
     (spec.layoutKind === 'answer_reveal' ? theme.secondaryAccentHex : theme.accentHex);
   const secondaryAccent =
     spec.layoutKind === 'answer_reveal' ? theme.accentHex : theme.secondaryAccentHex;
   const isLandscape = aspectRatio === '16:9';
+  const isSquare = aspectRatio === '1:1';
+  const isCompactStage = isLandscape || isSquare;
+  const padCls = isLandscape ? 'px-2 py-1' : isSquare ? 'px-2 py-1.5' : 'p-2.5';
 
-  const animClass =
-    spec.resolvedAnimationIn === 'pop-up'
-      ? 'animate-2411-pop-up'
-      : spec.resolvedAnimationIn === 'drop-in'
-      ? 'animate-2411-drop-in'
-      : spec.resolvedAnimationIn === 'fade-scale'
-      ? 'animate-2411-fade-scale'
-      : 'animate-2411-slide-up';
+  const animClass = isExiting
+    ? 'animate-2411-exit'
+    : spec.resolvedAnimationIn === 'pop-up'
+    ? 'animate-2411-pop-up'
+    : spec.resolvedAnimationIn === 'drop-in'
+    ? 'animate-2411-drop-in'
+    : spec.resolvedAnimationIn === 'fade-scale'
+    ? 'animate-2411-fade-scale'
+    : 'animate-2411-slide-up';
 
   const dynamicTextCls = (str: string, base: string, compact: string) =>
-    str.length > 34 ? compact : base;
+    str.length > 42 ? compact : base;
 
   const renderVariantBody = () => {
     switch (spec.variant) {
       case 'css-compare':
         return (
-          <div className="p-2 grid grid-cols-[1fr_auto_1fr] items-stretch gap-1.5">
+          <div className={`${padCls} grid grid-cols-[1fr_auto_1fr] items-stretch gap-1.5`}>
             <div
-              className="rounded-lg border p-1.5 text-center flex flex-col justify-center min-w-0"
+              className="rounded-lg border p-2 text-center flex flex-col justify-center min-w-0"
               style={{ backgroundColor: theme.surfaceTintHex, borderColor: theme.cardBorderHex }}
             >
-              <div className="text-[7.5px] font-bold uppercase break-words" style={{ color: theme.mutedTextHex }}>
+              <div className="text-[9.5px] font-bold uppercase break-words" style={{ color: theme.mutedTextHex }}>
                 {spec.labels[0] ?? 'Prompt'}
               </div>
-              <div className="text-[9px] font-bold leading-snug break-words mt-0.5" style={{ color: theme.textHex }}>
+              <div className={`${isLandscape ? 'text-[10.5px]' : 'text-[11.5px]'} font-bold leading-snug break-words mt-0.5`} style={{ color: theme.textHex }}>
                 {spec.contextLabel || spec.subtitle}
               </div>
             </div>
             <span
-              className="w-5 h-5 rounded-full text-[8px] font-bold text-white flex items-center justify-center shrink-0 self-center"
+              className="w-5 h-5 rounded-full text-[9px] font-bold text-white flex items-center justify-center shrink-0 self-center"
               style={{ backgroundColor: secondaryAccent }}
             >
               VS
             </span>
             <div
-              className="rounded-lg border p-1.5 text-center flex flex-col justify-center min-w-0"
+              className="rounded-lg border p-2 text-center flex flex-col justify-center min-w-0"
               style={{
                 backgroundColor: `${primaryAccent}1A`,
                 borderColor: primaryAccent,
               }}
             >
-              <div className="text-[7.5px] font-bold uppercase break-words" style={{ color: primaryAccent }}>
+              <div className="text-[9.5px] font-bold uppercase break-words" style={{ color: primaryAccent }}>
                 {spec.labels[1] ?? 'Target'}
               </div>
-              <div className={dynamicTextCls(spec.speechText || spec.highlightWord, 'text-[9.5px] font-bold leading-snug break-words mt-0.5', 'text-[8.5px] font-bold leading-snug break-words mt-0.5')} style={{ color: theme.textHex }}>
+              <div
+                className={dynamicTextCls(
+                  spec.speechText || spec.highlightWord,
+                  `${isLandscape ? 'text-[11px]' : 'text-[12px]'} font-bold leading-snug break-words mt-0.5`,
+                  'text-[10.5px] font-bold leading-snug break-words mt-0.5'
+                )}
+                style={{ color: theme.textHex }}
+              >
                 {spec.speechText || spec.highlightWord}
               </div>
             </div>
@@ -225,7 +404,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
         ];
         const activeStep = spec.stepIndex % 3;
         return (
-          <div className="p-2 space-y-1.5">
+          <div className={`${padCls} space-y-1.5`}>
             <div className="relative flex items-start justify-between px-2">
               <div
                 className="absolute left-4 right-4 top-2.5 h-0.5"
@@ -236,7 +415,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 return (
                   <div key={idx} className="relative z-10 flex flex-col items-center gap-0.5 min-w-0 max-w-[32%]">
                     <span
-                      className="w-5 h-5 rounded-full border text-[8px] font-mono font-bold flex items-center justify-center shrink-0"
+                      className="w-5 h-5 rounded-full border text-[9px] font-mono font-bold flex items-center justify-center shrink-0"
                       style={{
                         backgroundColor: active ? primaryAccent : theme.cardBgHex,
                         borderColor: active ? primaryAccent : theme.cardBorderHex,
@@ -246,7 +425,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                       0{idx + 1}
                     </span>
                     <span
-                      className="text-[8px] font-semibold text-center leading-tight break-words"
+                      className="text-[9.5px] font-semibold text-center leading-tight break-words"
                       style={{ color: active ? theme.textHex : theme.mutedTextHex }}
                     >
                       {lbl}
@@ -255,7 +434,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 );
               })}
             </div>
-            <div className="text-[9px] font-medium text-center leading-snug break-words" style={{ color: theme.mutedTextHex }}>
+            <div className={`${isLandscape ? 'text-[10.5px]' : 'text-[11.5px]'} font-semibold text-center leading-snug break-words`} style={{ color: theme.textHex }}>
               {spec.title}
             </div>
           </div>
@@ -264,23 +443,23 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'css-glass-quote':
         return (
-          <div className="p-2 flex items-start gap-2">
+          <div className={`${padCls} flex items-start gap-2`}>
             <div className="w-1 self-stretch rounded-full shrink-0" style={{ backgroundColor: primaryAccent }} />
             <div className="min-w-0 flex-1 space-y-1">
               <div className="text-sm leading-none font-serif font-bold" style={{ color: secondaryAccent }}>
                 “
               </div>
               <div
-                className={`${dynamicTextCls(spec.title, 'text-[10px]', 'text-[9px]')} font-bold leading-snug break-words`}
+                className={`${dynamicTextCls(spec.title, isLandscape ? 'text-[11px]' : 'text-[12px]', 'text-[10.5px]')} font-bold leading-snug break-words`}
                 style={{ color: theme.textHex }}
               >
                 {spec.title}
               </div>
-              <div className="text-[8.5px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
+              <div className="text-[10px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
                 {spec.subtitle}
               </div>
               <span
-                className="inline-block px-1.5 py-0.5 rounded text-[8px] font-bold break-words"
+                className="inline-block px-2 py-0.5 rounded text-[10px] font-bold break-words"
                 style={{ backgroundColor: `${primaryAccent}20`, color: primaryAccent }}
               >
                 {spec.highlightWord}
@@ -291,11 +470,11 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'css-equation':
         return (
-          <div className="p-2 space-y-1.5">
-            <div className="text-[8px] font-mono font-semibold leading-snug break-words" style={{ color: primaryAccent }}>
+          <div className={`${padCls} space-y-1.5`}>
+            <div className="text-[9.5px] font-mono font-semibold leading-snug break-words" style={{ color: primaryAccent }}>
               {spec.formula}
             </div>
-            <div className="flex items-stretch gap-1 text-[8.5px] font-bold">
+            <div className="flex items-stretch gap-1 text-[10px] font-bold">
               <div
                 className="flex-1 min-w-0 px-1.5 py-1 rounded border text-center flex items-center justify-center break-words leading-tight"
                 style={{
@@ -334,7 +513,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'css-flashcard':
         return (
-          <div className="p-2">
+          <div className={padCls}>
             <div
               className="rounded-lg border p-2 text-center space-y-1 shadow-xs"
               style={{
@@ -342,17 +521,17 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 borderColor: primaryAccent,
               }}
             >
-              <div className="flex items-center justify-between text-[8px] font-bold uppercase">
+              <div className="flex items-center justify-between text-[9.5px] font-bold uppercase">
                 <span style={{ color: primaryAccent }}>{spec.labels[0] ?? 'FLASHCARD'}</span>
                 <PresentationIcon iconKey={spec.iconKey} className="w-3.5 h-3.5 shrink-0" />
               </div>
               <div
-                className={`${dynamicTextCls(spec.highlightWord, 'text-[11px]', 'text-[9.5px]')} font-bold leading-snug break-words`}
+                className={`${dynamicTextCls(spec.highlightWord, isLandscape ? 'text-[11px]' : 'text-[12px]', 'text-[10.5px]')} font-bold leading-snug break-words`}
                 style={{ color: theme.textHex }}
               >
                 {spec.highlightWord}
               </div>
-              <div className="text-[8.5px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
+              <div className="text-[10px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
                 {spec.subtitle}
               </div>
             </div>
@@ -361,9 +540,9 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'bs-progress-meter':
         return (
-          <div className="p-2 space-y-1.5">
+          <div className={`${padCls} space-y-1.5`}>
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[9.5px] font-bold leading-snug break-words" style={{ color: theme.textHex }}>
+              <span className={`${isLandscape ? 'text-[10.5px]' : 'text-[11.5px]'} font-bold leading-snug break-words`} style={{ color: theme.textHex }}>
                 {spec.title}
               </span>
               <span className="text-xs font-mono font-bold tabular-nums shrink-0" style={{ color: primaryAccent }}>
@@ -383,7 +562,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 />
               ))}
             </div>
-            <div className="text-[8px] font-mono leading-snug break-words" style={{ color: theme.mutedTextHex }}>
+            <div className="text-[9.5px] font-mono leading-snug break-words" style={{ color: theme.mutedTextHex }}>
               {spec.labels.join(' · ')}
             </div>
           </div>
@@ -391,7 +570,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'bs-alert-callout':
         return (
-          <div className="p-2">
+          <div className={padCls}>
             <div
               className="rounded-lg border-l-4 border p-2 flex items-center gap-2"
               style={{
@@ -407,10 +586,10 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 <PresentationIcon iconKey="alert_triangle" className="w-4 h-4" />
               </div>
               <div className="min-w-0 flex-1 space-y-0.5">
-                <div className="text-[9.5px] font-bold leading-snug break-words" style={{ color: theme.textHex }}>
+                <div className={`${isLandscape ? 'text-[10.5px]' : 'text-[11.5px]'} font-bold leading-snug break-words`} style={{ color: theme.textHex }}>
                   {spec.title}
                 </div>
-                <div className="text-[8.5px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
+                <div className="text-[10px] leading-snug break-words" style={{ color: theme.mutedTextHex }}>
                   {spec.subtitle}
                 </div>
               </div>
@@ -421,7 +600,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
       case 'gauge-tone': {
         const angleDeg = -90 + Math.round((spec.progressPct / 100) * 180);
         return (
-          <div className="p-2 flex items-center gap-2">
+          <div className={`${padCls} flex items-center gap-2.5`}>
             <svg viewBox="0 0 80 48" className="w-14 h-9 shrink-0" aria-hidden="true">
               <path
                 d="M 10 42 A 30 30 0 0 1 70 42"
@@ -443,10 +622,10 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
               <circle cx="40" cy="42" r="3.5" fill={secondaryAccent} />
             </svg>
             <div className="min-w-0 flex-1 space-y-0.5">
-              <div className="text-[9.5px] font-bold leading-snug break-words" style={{ color: theme.textHex }}>
+              <div className={`${isLandscape ? 'text-[10.5px]' : 'text-[11.5px]'} font-bold leading-snug break-words`} style={{ color: theme.textHex }}>
                 {spec.title}
               </div>
-              <div className="text-[8.5px] font-semibold leading-snug break-words" style={{ color: primaryAccent }}>
+              <div className="text-[10px] font-semibold leading-snug break-words" style={{ color: primaryAccent }}>
                 {spec.highlightWord} · {spec.progressPct}%
               </div>
             </div>
@@ -456,16 +635,16 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'staircase-3d': {
         const blocks = [
-          { lbl: spec.labels[0] ?? 'Step 1', h: 24 },
-          { lbl: spec.labels[1] ?? 'Step 2', h: 34 },
-          { lbl: spec.labels[2] ?? 'Step 3', h: 44 },
+          { lbl: spec.labels[0] ?? 'Step 1', h: isLandscape ? 18 : 26 },
+          { lbl: spec.labels[1] ?? 'Step 2', h: isLandscape ? 25 : 36 },
+          { lbl: spec.labels[2] ?? 'Step 3', h: isLandscape ? 33 : 46 },
         ];
         return (
-          <div className="p-2 flex items-end gap-1.5 min-h-[54px]">
+          <div className={`${padCls} flex items-end gap-1.5 ${isLandscape ? 'min-h-[38px]' : 'min-h-[54px]'}`}>
             {blocks.map((b, idx) => (
               <div
                 key={idx}
-                className="flex-1 min-w-0 rounded-md border flex items-center justify-center px-1 py-1 text-center shadow-xs"
+                className="flex-1 min-w-0 rounded-md border flex items-center justify-center px-1.5 py-0.5 text-center shadow-xs"
                 style={{
                   minHeight: `${b.h}px`,
                   backgroundColor: idx === 2 ? primaryAccent : theme.surfaceTintHex,
@@ -473,7 +652,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                   color: idx === 2 ? '#FFFFFF' : theme.textHex,
                 }}
               >
-                <span className="text-[8px] font-bold leading-tight break-words">{b.lbl}</span>
+                <span className="text-[9.5px] font-bold leading-tight break-words">{b.lbl}</span>
               </div>
             ))}
           </div>
@@ -481,65 +660,140 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
       }
 
       case 'friends-chat': {
-        const spkA = spec.labels[0] ?? 'Speaker A';
-        const spkB = spec.labels[1] ?? 'Speaker B';
+        const isIntro = spec.layoutKind === 'intro_hero';
+        const isOutro = spec.layoutKind === 'outro_recap';
+        const isQuizPrompt = spec.layoutKind === 'quiz_prompt';
+        const isAnswerReveal = spec.layoutKind === 'answer_reveal';
+        const spkA = spec.labels[0] ?? (isIntro ? 'Host' : isOutro ? 'Summary' : 'Prompt');
+        const spkB =
+          spec.labels[1] ??
+          (isIntro ? 'Challenge' : isOutro ? 'Practice' : isQuizPrompt ? 'Your Turn' : 'Reply');
+        const promptBubbleText =
+          isAnswerReveal && spec.promptPreviewText ? spec.promptPreviewText : spec.speechText;
+        const replyBubbleText = isIntro
+          ? `Listen & translate aloud in ${Math.max(1, spec.pauseSec || 5)}s!`
+          : isOutro
+          ? 'Save & repeat aloud daily for mastery!'
+          : isQuizPrompt
+          ? `Your turn · Translate in ${Math.max(1, spec.pauseSec || 5)}s`
+          : isAnswerReveal
+          ? spec.speechText
+          : spec.subtitle && spec.subtitle !== promptBubbleText
+          ? spec.subtitle
+          : spec.highlightWord;
+
+        const speakerAPose: 'talking' | 'idle' =
+          isIntro || isOutro || (isQuizPrompt && !countdownActive)
+            ? 'talking'
+            : 'idle';
+        const speakerBPose: 'talking' | 'thinking' | 'idle' =
+          isQuizPrompt ? 'thinking' : isAnswerReveal || isOutro ? 'talking' : 'idle';
+
         return (
-          <div className="p-2 grid grid-cols-[auto_1fr_auto] items-center gap-1.5">
-            <div className="flex flex-col items-center gap-0.5 shrink-0">
-              <svg viewBox="-26 -24 52 58" className="w-8 h-9" aria-hidden="true">
-                <path d="M-22 30 C-20 14 20 14 22 30 Z" fill={primaryAccent} />
-                <circle cx="0" cy="0" r="16" fill="#FDE68A" />
-                <path d="M-17 -6 C-16 -22 16 -22 17 -6 C10 -11 -10 -11 -17 -6 Z" fill="#1E293B" />
-                <circle cx="-5" cy="0" r="1.8" fill="#1E293B" />
-                <circle cx="5" cy="0" r="1.8" fill="#1E293B" />
-                <path d="M-5 7 Q0 11 5 7" fill="none" stroke="#1E293B" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-              <span
-                className="px-1.5 py-0.5 rounded-full text-[7px] font-bold text-white text-center leading-tight"
-                style={{ backgroundColor: primaryAccent }}
-              >
-                {spkA}
-              </span>
-            </div>
-
-            <div
-              className="rounded-xl border px-2 py-1.5 text-center space-y-0.5 min-w-0"
-              style={{
-                backgroundColor: theme.surfaceTintHex,
-                borderColor: primaryAccent,
-              }}
-            >
-              <div className="flex items-center justify-center gap-1" aria-hidden="true">
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: primaryAccent }} />
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: secondaryAccent }} />
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: primaryAccent }} />
+          <div className={`${isLandscape ? 'px-2 py-0.5 space-y-1' : isSquare ? 'px-2 py-1 space-y-1' : 'p-2 space-y-1.5'}`} data-testid="studio-2411-friends-chat">
+            {/* Row 1: Speaker A source prompt bubble */}
+            <div className="flex items-center gap-1.5">
+              <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[40px] max-w-[54px]' : 'min-w-[46px] max-w-[64px]'}`}>
+                <Animated2411Avatar
+                  shirtHex={primaryAccent}
+                  hairHex="#1E293B"
+                  hairStyle="short"
+                  pose={speakerAPose}
+                  side="left"
+                  className={isCompactStage ? 'w-6 h-6' : 'w-8 h-8'}
+                />
+                <span
+                  className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight break-words`}
+                  style={{ backgroundColor: primaryAccent }}
+                >
+                  {spkA}
+                </span>
               </div>
+
               <div
-                className={`${dynamicTextCls(spec.speechText, 'text-[9px]', 'text-[8px]')} font-bold leading-snug break-words whitespace-normal`}
-                style={{ color: theme.textHex }}
+                className={`flex-1 min-w-0 rounded-xl rounded-tl-sm border ${isLandscape ? 'px-2 py-0.5' : isSquare ? 'px-2 py-1' : 'px-2.5 py-1.5'}`}
+                style={{
+                  backgroundColor: theme.surfaceTintHex,
+                  borderColor: primaryAccent,
+                }}
               >
-                {spec.speechText}
-              </div>
-              <div className="text-[7.5px] font-bold break-words" style={{ color: secondaryAccent }}>
-                {spec.reactionText}
+                <div
+                  className={`${dynamicTextCls(promptBubbleText, isLandscape ? 'text-[9.5px]' : isSquare ? 'text-[10px]' : 'text-[11.5px]', isLandscape ? 'text-[9px]' : 'text-[10px]')} font-bold leading-tight break-words whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
+                  style={{ color: theme.textHex }}
+                >
+                  {promptBubbleText}
+                </div>
               </div>
             </div>
 
-            <div className="flex flex-col items-center gap-0.5 shrink-0">
-              <svg viewBox="-26 -24 52 58" className="w-8 h-9" aria-hidden="true">
-                <path d="M-22 30 C-20 14 20 14 22 30 Z" fill={secondaryAccent} />
-                <circle cx="0" cy="0" r="16" fill="#FDE68A" />
-                <path d="M-20 -4 C-22 -24 22 -24 20 -4 L20 10 C15 6 11 -4 0 -6 C-11 -4 -15 6 -20 10 Z" fill="#78350F" />
-                <circle cx="-5" cy="0" r="1.8" fill="#1E293B" />
-                <circle cx="5" cy="0" r="1.8" fill="#1E293B" />
-                <path d="M-5 7 Q0 12 5 7" fill="none" stroke="#1E293B" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-              <span
-                className="px-1.5 py-0.5 rounded-full text-[7px] font-bold text-white text-center leading-tight"
-                style={{ backgroundColor: secondaryAccent }}
+            {/* Row 2: Speaker B animated 3-dot thinking bubble OR target answer bubble */}
+            <div className="flex items-center justify-end gap-1.5">
+              <div
+                className={`flex-1 min-w-0 rounded-xl rounded-tr-sm border ${isLandscape ? 'px-2 py-0.5' : isSquare ? 'px-2 py-1' : 'px-2.5 py-1.5'} ${
+                  isQuizPrompt ? 'border-dashed' : ''
+                }`}
+                style={{
+                  backgroundColor: `${secondaryAccent}1C`,
+                  borderColor: secondaryAccent,
+                }}
               >
-                {spkB}
-              </span>
+                {isQuizPrompt ? (
+                  <div
+                    data-testid="studio-2411-thinking-bubble"
+                    className="flex items-center justify-between gap-2 py-0.5"
+                  >
+                    <div className="inline-flex items-center gap-1.5 pl-1">
+                      <span
+                        className="animate-2411-think-dot-1 w-2 h-2 rounded-full inline-block"
+                        style={{ backgroundColor: secondaryAccent }}
+                      />
+                      <span
+                        className="animate-2411-think-dot-2 w-2 h-2 rounded-full inline-block"
+                        style={{ backgroundColor: secondaryAccent }}
+                      />
+                      <span
+                        className="animate-2411-think-dot-3 w-2 h-2 rounded-full inline-block"
+                        style={{ backgroundColor: secondaryAccent }}
+                      />
+                    </div>
+                    <span
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold shrink-0"
+                      style={{
+                        backgroundColor: `${secondaryAccent}22`,
+                        color: secondaryAccent,
+                      }}
+                    >
+                      <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                      <span>Think {Math.max(1, spec.pauseSec || 5)}s</span>
+                    </span>
+                  </div>
+                ) : (
+                  <div
+                    className={`${dynamicTextCls(replyBubbleText, isLandscape ? 'text-[9.5px]' : isSquare ? 'text-[10px]' : 'text-[11.5px]', isLandscape ? 'text-[9px]' : 'text-[10px]')} font-bold leading-tight break-words whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
+                    style={{ color: isIntro ? secondaryAccent : theme.textHex }}
+                  >
+                    {replyBubbleText}
+                  </div>
+                )}
+              </div>
+
+              <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[40px] max-w-[54px]' : 'min-w-[46px] max-w-[64px]'}`}>
+                <Animated2411Avatar
+                  shirtHex={secondaryAccent}
+                  hairHex="#78350F"
+                  hairStyle="bob"
+                  pose={speakerBPose}
+                  side="right"
+                  dotAccentHex={secondaryAccent}
+                  className={isCompactStage ? 'w-6 h-6' : 'w-8 h-8'}
+                />
+                <span
+                  className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight break-words`}
+                  style={{ backgroundColor: secondaryAccent }}
+                >
+                  {spkB}
+                </span>
+              </div>
             </div>
           </div>
         );
@@ -547,23 +801,23 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'avatar-speech':
         return (
-          <div className="p-2 flex items-center gap-2">
+          <div className={`${padCls} flex items-center gap-2`}>
             <div className="flex flex-col items-center gap-0.5 shrink-0">
               <div
-                className="w-10 h-10 rounded-full flex items-center justify-center"
+                className={`${isCompactStage ? 'w-8 h-8' : 'w-10 h-10'} rounded-full flex items-center justify-center`}
                 style={{ backgroundColor: `${primaryAccent}20` }}
               >
-                <svg viewBox="-24 -22 48 54" className="w-8 h-8" aria-hidden="true">
-                  <path d="M-20 28 C-18 14 18 14 20 28 Z" fill={primaryAccent} />
-                  <circle cx="0" cy="0" r="15" fill="#FDE68A" />
-                  <path d="M-16 -6 C-15 -20 15 -20 16 -6 C9 -10 -9 -10 -16 -6 Z" fill="#1E293B" />
-                  <circle cx="-5" cy="0" r="1.8" fill="#1E293B" />
-                  <circle cx="5" cy="0" r="1.8" fill="#1E293B" />
-                  <path d="M-5 7 Q0 11 5 7" fill="none" stroke="#1E293B" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
+                <Animated2411Avatar
+                  shirtHex={primaryAccent}
+                  hairHex="#1E293B"
+                  hairStyle="short"
+                  pose="talking"
+                  side="left"
+                  className={isCompactStage ? 'w-6 h-6' : 'w-8 h-8'}
+                />
               </div>
               <span
-                className="px-1.5 py-0.5 rounded-full text-[7px] font-bold text-white text-center leading-tight"
+                className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight`}
                 style={{ backgroundColor: primaryAccent }}
               >
                 {spec.labels[0] ?? 'Speaker'}
@@ -572,24 +826,24 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
             <div className="relative min-w-0 flex-1">
               <div
-                className="rounded-xl border px-2 py-1.5 space-y-1"
+                className={`rounded-xl border ${isLandscape ? 'px-2 py-1 space-y-0.5' : 'px-2.5 py-1.5 space-y-1'}`}
                 style={{
                   backgroundColor: theme.surfaceTintHex,
                   borderColor: primaryAccent,
                 }}
               >
                 <div
-                  className={`${dynamicTextCls(spec.speechText, 'text-[9.5px]', 'text-[8.5px]')} font-bold leading-snug break-words whitespace-normal`}
+                  className={`${dynamicTextCls(spec.speechText, isLandscape ? 'text-[10px]' : isSquare ? 'text-[10.5px]' : 'text-[11.5px]', 'text-[9.5px]')} font-bold leading-tight break-words whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
                   style={{ color: theme.textHex }}
                 >
                   {spec.speechText}
                 </div>
                 <div className="flex items-center justify-between gap-1.5 pt-0.5">
-                  <span className="text-[7.5px] leading-tight break-words" style={{ color: theme.mutedTextHex }}>
+                  <span className="text-[9px] font-semibold leading-tight break-words truncate" style={{ color: theme.mutedTextHex }}>
                     {spec.subtitle}
                   </span>
                   <span
-                    className="px-1.5 py-0.5 rounded-full text-[7px] font-bold text-white shrink-0"
+                    className="px-1.5 py-0.5 rounded-full text-[8.5px] font-bold text-white shrink-0"
                     style={{ backgroundColor: secondaryAccent }}
                   >
                     {spec.reactionText}
@@ -602,35 +856,35 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'dialogue-upgrade':
         return (
-          <div className="p-2 grid grid-cols-[1fr_auto_1fr] items-stretch gap-1.5">
+          <div className={`${padCls} grid grid-cols-[1fr_auto_1fr] items-stretch gap-1.5`}>
             <div
-              className="rounded-lg border p-1.5 min-w-0 flex flex-col justify-center"
+              className="rounded-lg border p-2 min-w-0 flex flex-col justify-center"
               style={{ backgroundColor: theme.surfaceTintHex, borderColor: theme.cardBorderHex }}
             >
-              <div className="text-[7px] font-bold uppercase break-words" style={{ color: theme.mutedTextHex }}>
+              <div className="text-[9px] font-bold uppercase break-words" style={{ color: theme.mutedTextHex }}>
                 {spec.labels[0] ?? 'Basic Form'}
               </div>
-              <div className="text-[8.5px] font-semibold leading-snug break-words mt-0.5" style={{ color: theme.textHex }}>
+              <div className={`${isLandscape ? 'text-[10px]' : 'text-[11px]'} font-semibold leading-snug break-words mt-0.5`} style={{ color: theme.textHex }}>
                 {spec.speechText}
               </div>
             </div>
             <span
-              className="w-5 h-5 rounded-full text-[9px] font-bold text-white flex items-center justify-center shrink-0 self-center"
+              className="w-5 h-5 rounded-full text-[9.5px] font-bold text-white flex items-center justify-center shrink-0 self-center"
               style={{ backgroundColor: primaryAccent }}
             >
               →
             </span>
             <div
-              className="rounded-lg border p-1.5 min-w-0 flex flex-col justify-center"
+              className="rounded-lg border p-2 min-w-0 flex flex-col justify-center"
               style={{
                 backgroundColor: `${primaryAccent}1A`,
                 borderColor: primaryAccent,
               }}
             >
-              <div className="text-[7px] font-bold uppercase break-words" style={{ color: primaryAccent }}>
+              <div className="text-[9px] font-bold uppercase break-words" style={{ color: primaryAccent }}>
                 ✓ {spec.labels[1] ?? 'Natural Form'}
               </div>
-              <div className="text-[9px] font-bold leading-snug break-words mt-0.5" style={{ color: theme.textHex }}>
+              <div className={`${isLandscape ? 'text-[10.5px]' : 'text-[11.5px]'} font-bold leading-snug break-words mt-0.5`} style={{ color: theme.textHex }}>
                 {spec.highlightWord}
               </div>
             </div>
@@ -639,83 +893,107 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
 
       case 'css-browser-mockup':
       case 'bs-card-header':
-      default:
+      default: {
+        const mainHeadline =
+          spec.speechText && spec.speechText.length > spec.title.length
+            ? spec.speechText
+            : spec.title;
         return (
-          <div className="p-2 flex items-center gap-2">
+          <div className={`${padCls} flex items-center gap-2`}>
             <div
-              className="w-9 h-9 rounded-lg border flex items-center justify-center shrink-0"
+              className={`${isLandscape ? 'w-8 h-8' : isSquare ? 'w-9 h-9' : 'w-11 h-11'} rounded-lg border flex items-center justify-center shrink-0`}
               style={{
                 backgroundColor: theme.surfaceTintHex,
                 borderColor: theme.cardBorderHex,
                 color: primaryAccent,
               }}
             >
-              <PresentationIcon iconKey={spec.iconKey} className="w-4 h-4" />
+              <PresentationIcon iconKey={spec.iconKey} className={`${isCompactStage ? 'w-4 h-4' : 'w-5 h-5'}`} />
             </div>
 
-            <div className="min-w-0 flex-1 space-y-0.5">
-              <div className="text-[9.5px] font-bold leading-snug break-words" style={{ color: theme.textHex }}>
-                {spec.title}
+            <div className="min-w-0 flex-1 space-y-1">
+              <div
+                className={`${dynamicTextCls(mainHeadline, isLandscape ? 'text-[10px]' : isSquare ? 'text-[10.5px]' : 'text-[12px]', isLandscape ? 'text-[9.5px]' : 'text-[10px]')} font-bold leading-tight break-words ${isCompactStage ? 'line-clamp-2' : ''}`}
+                style={{ color: theme.textHex }}
+              >
+                {mainHeadline}
               </div>
-              <div className="text-[8px] font-mono tracking-wide uppercase leading-snug break-words" style={{ color: theme.mutedTextHex }}>
-                {spec.subtitle}
-              </div>
-              <div className="flex items-end gap-1 h-2.5 pt-0.5">
-                {WAVE_BARS.map((ratio, idx) => (
-                  <span
-                    key={idx}
-                    className="w-1 rounded-full"
-                    style={{
-                      height: `${Math.max(3, Math.round(ratio * 9))}px`,
-                      backgroundColor: idx % 2 === 0 ? primaryAccent : secondaryAccent,
-                      opacity: 0.55 + ratio * 0.4,
-                    }}
-                  />
-                ))}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span
+                  className="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide uppercase leading-tight break-words"
+                  style={{ backgroundColor: `${primaryAccent}18`, color: primaryAccent }}
+                >
+                  {spec.subtitle}
+                </span>
+                <div className="flex items-end gap-1 h-2.5">
+                  {WAVE_BARS.map((ratio, idx) => (
+                    <span
+                      key={idx}
+                      className="w-1 rounded-full"
+                      style={{
+                        height: `${Math.max(3, Math.round(ratio * 8))}px`,
+                        backgroundColor: idx % 2 === 0 ? primaryAccent : secondaryAccent,
+                        opacity: 0.55 + ratio * 0.4,
+                      }}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
           </div>
         );
+      }
     }
   };
 
   return (
     <div
       key={`${theme.id}_${spec.variant}_${lineIndex}`}
-      data-testid="studio-2411-stage-card"
+      data-testid={isExiting ? 'studio-2411-stage-card-exiting' : 'studio-2411-stage-card'}
       data-theme={theme.id}
       data-variant={spec.variant}
       data-animation={spec.animationIn}
       data-resolved-animation={spec.resolvedAnimationIn}
-      className="animate-mpt-scene-fade absolute inset-0 overflow-hidden select-none pointer-events-none"
+      className="absolute inset-0 overflow-hidden select-none pointer-events-none"
       style={{
-        background: `linear-gradient(145deg, ${theme.bgTopHex}, ${theme.bgBottomHex})`,
+        fontFamily: stageFontCss,
+        ...(hideBackdrop
+          ? {}
+          : { background: `linear-gradient(145deg, ${theme.bgTopHex}, ${theme.bgBottomHex})` }),
       }}
     >
-      <div
-        className="absolute inset-0 opacity-70"
-        style={{
-          backgroundImage: `linear-gradient(to right, ${theme.gridColorRgba} 1px, transparent 1px), linear-gradient(to bottom, ${theme.gridColorRgba} 1px, transparent 1px)`,
-          backgroundSize: '24px 24px',
-        }}
-      />
+      {!hideBackdrop && (
+        <>
+          <div
+            className="absolute inset-0 opacity-70"
+            style={{
+              backgroundImage: `linear-gradient(to right, ${theme.gridColorRgba} 1px, transparent 1px), linear-gradient(to bottom, ${theme.gridColorRgba} 1px, transparent 1px)`,
+              backgroundSize: '24px 24px',
+            }}
+          />
+
+          <div
+            className="absolute -top-10 -left-10 w-44 h-44 rounded-full blur-2xl opacity-55"
+            style={{ backgroundColor: theme.bgAccentHex }}
+          />
+        </>
+      )}
 
       <div
-        className="absolute -top-10 -left-10 w-44 h-44 rounded-full blur-2xl opacity-55"
-        style={{ backgroundColor: theme.bgAccentHex }}
-      />
-
-      <div
-        className={`relative z-10 mx-auto transition-all duration-200 ${animClass} ${
+        className={`relative z-10 mx-auto transition-opacity duration-150 ${animClass} ${
           countdownActive ? 'opacity-95' : 'opacity-100'
         } ${
           isLandscape
             ? countdownActive
-              ? 'w-[76%] mt-[4.5%]'
-              : 'w-[76%] mt-[7.5%]'
+              ? 'w-[74%] mt-[4%]'
+              : 'w-[74%] mt-[6.5%]'
+            : isSquare
+            ? countdownActive
+              ? 'w-[88%] mt-[5%]'
+              : 'w-[89%] mt-[7.5%]'
             : countdownActive
-            ? 'w-[89%] mt-[8.5%]'
-            : 'w-[89%] mt-[11.5%]'
+            ? 'w-[89%] mt-[7.5%]'
+            : 'w-[89%] mt-[10.5%]'
         }`}
       >
         <div
@@ -733,7 +1011,9 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
           )}
 
           <div
-            className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b"
+            className={`flex items-center justify-between gap-2 px-2.5 border-b ${
+              isCompactStage ? 'py-0.5' : 'py-1.5'
+            }`}
             style={{
               backgroundColor: theme.surfaceTintHex,
               borderColor: theme.cardBorderHex,
@@ -746,69 +1026,99 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 <span className="w-2 h-2 rounded-full shrink-0 bg-emerald-500" />
               )}
               <span
-                className="text-[8px] font-bold tracking-wider uppercase break-words ml-0.5"
+                className={`${isCompactStage ? 'text-[8.5px]' : 'text-[9px]'} font-bold tracking-wider uppercase whitespace-nowrap ml-0.5 truncate`}
                 style={{ color: primaryAccent }}
               >
                 {spec.variant === 'css-browser-mockup'
                   ? `studio://2411/${spec.layoutKind}`
-                  : `${spec.kickerLabel} · ${spec.variant}`}
+                  : spec.kickerLabel}
               </span>
             </div>
-            <span
-              className="text-[8px] font-mono font-semibold tabular-nums shrink-0"
-              style={{ color: theme.mutedTextHex }}
-            >
-              {String(spec.stepIndex).padStart(2, '0')} / {String(spec.totalSteps).padStart(2, '0')}
-            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {isCompactStage && (
+                <span className="text-[8px] font-mono uppercase" style={{ color: primaryAccent }}>
+                  {spec.resolvedAnimationIn}
+                </span>
+              )}
+              <span
+                className={`${isCompactStage ? 'text-[8.5px]' : 'text-[9px]'} font-mono font-semibold tabular-nums`}
+                style={{ color: theme.mutedTextHex }}
+              >
+                {String(spec.stepIndex).padStart(2, '0')} / {String(spec.totalSteps).padStart(2, '0')}
+              </span>
+            </div>
           </div>
 
-          <div className="py-1">{renderVariantBody()}</div>
+          <div className={isCompactStage ? 'py-0' : 'py-1'}>{renderVariantBody()}</div>
 
           {(spec.prevTargetText || spec.exampleText) && (
-            <div className="px-2.5 pb-1.5">
+            <div className={`${isCompactStage ? 'px-2 pb-1' : 'px-2.5 pb-1.5'}`}>
               <div
                 data-testid="studio-2411-context-strip"
-                className="rounded-md border px-2 py-1 text-[8px] leading-snug break-words space-y-0.5"
+                className={`rounded-md border ${
+                  isLandscape
+                    ? 'px-1.5 py-0.5 text-[8.5px] leading-tight truncate'
+                    : isSquare
+                    ? 'px-2 py-0.5 text-[8.5px] leading-tight line-clamp-2'
+                    : 'px-2 py-1 text-[9px] leading-snug break-words space-y-0.5'
+                }`}
                 style={{
                   backgroundColor: `${primaryAccent}12`,
                   borderColor: theme.cardBorderHex,
                 }}
               >
                 {spec.prevTargetText && (
-                  <div>
-                    <span className="font-bold uppercase mr-1" style={{ color: primaryAccent }}>
-                      Recall Prev:
+                  <span className={isLandscape ? 'inline-flex items-center gap-1 mr-2' : 'flex items-center gap-1'}>
+                    <RotateCcw className="w-2.5 h-2.5 shrink-0" style={{ color: primaryAccent }} aria-hidden="true" />
+                    <span className="font-bold uppercase" style={{ color: primaryAccent }}>
+                      Prev:
                     </span>
-                    <span className="font-semibold" style={{ color: theme.textHex }}>
+                    <span className="font-semibold truncate" style={{ color: theme.textHex }}>
                       {spec.prevTargetText}
                     </span>
-                  </div>
+                  </span>
                 )}
-                {spec.exampleText && (
-                  <div>
-                    <span className="font-bold uppercase mr-1" style={{ color: theme.mutedTextHex }}>
-                      Example:
+                {spec.exampleText && (() => {
+                  const trimmedEx = spec.exampleText.trim();
+                  const isHint = /^Hint:/i.test(trimmedEx) || spec.layoutKind === 'quiz_prompt';
+                  const isCaution = spec.hintKind === 'caution';
+                  const bodyEx = trimmedEx.replace(/^(Hint|Example|Ex):\s*/i, '');
+                  return (
+                    <span className={isLandscape ? 'inline-flex items-center gap-1' : 'flex items-center gap-1'}>
+                      {isCaution ? (
+                        <AlertTriangle className="w-2.5 h-2.5 shrink-0 text-amber-600" aria-hidden="true" />
+                      ) : (
+                        <Lightbulb className="w-2.5 h-2.5 shrink-0" style={{ color: secondaryAccent }} aria-hidden="true" />
+                      )}
+                      <span
+                        className="font-bold uppercase shrink-0"
+                        style={{ color: isCaution ? '#D97706' : isHint ? secondaryAccent : theme.mutedTextHex }}
+                      >
+                        {isCaution && isHint ? 'Caution:' : isHint ? 'Hint:' : 'Ex:'}
+                      </span>
+                      <span className="font-semibold" style={{ color: theme.textHex }}>
+                        {bodyEx}
+                      </span>
                     </span>
-                    <span className="font-semibold" style={{ color: theme.textHex }}>
-                      {spec.exampleText}
-                    </span>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
           )}
 
-          <div className="px-2.5 pb-2 space-y-1">
-            <div className="flex items-center justify-between gap-2 text-[8px]" style={{ color: theme.mutedTextHex }}>
-              <span className="font-semibold break-words min-w-0">{spec.title}</span>
-              <span className="font-mono uppercase shrink-0" style={{ color: primaryAccent }}>
-                {spec.animationIn === 'random'
-                  ? `random → ${spec.resolvedAnimationIn}`
-                  : spec.animationIn}
-              </span>
-            </div>
+          <div className={`${isCompactStage ? 'px-2 pb-1' : 'px-2.5 pb-2 space-y-1'}`}>
+            {!isCompactStage && (
+              <div className="flex items-center justify-between gap-2 text-[9.5px]" style={{ color: theme.mutedTextHex }}>
+                <span className="font-semibold break-words min-w-0 truncate">{spec.title}</span>
+                <span className="font-mono uppercase shrink-0" style={{ color: primaryAccent }}>
+                  {spec.animationIn === 'random'
+                    ? `random → ${spec.resolvedAnimationIn}`
+                    : spec.animationIn}
+                </span>
+              </div>
+            )}
             <div
-              className="w-full h-1.5 rounded-full overflow-hidden"
+              className={`w-full ${isCompactStage ? 'h-1' : 'h-1.5'} rounded-full overflow-hidden`}
               style={{ backgroundColor: theme.cardBorderHex }}
             >
               <div

@@ -2183,6 +2183,27 @@ function isBrightHexColor(hex: string): boolean {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140;
 }
 
+function buildAssRoundedRectCommands(x0: number, y0: number, w: number, h: number, radius: number): string {
+  const r = Math.max(0, Math.min(radius, Math.floor(w / 2), Math.floor(h / 2)));
+  const x1 = x0 + w;
+  const y1 = y0 + h;
+  if (r <= 1) {
+    return `m ${x0} ${y0} l ${x1} ${y0} l ${x1} ${y1} l ${x0} ${y1}`;
+  }
+  const c = Math.round(r * 0.55228);
+  return [
+    `m ${x0 + r} ${y0}`,
+    `l ${x1 - r} ${y0}`,
+    `b ${x1 - r + c} ${y0} ${x1} ${y0 + r - c} ${x1} ${y0 + r}`,
+    `l ${x1} ${y1 - r}`,
+    `b ${x1} ${y1 - r + c} ${x1 - r + c} ${y1} ${x1 - r} ${y1}`,
+    `l ${x0 + r} ${y1}`,
+    `b ${x0 + r - c} ${y1} ${x0} ${y1 - r + c} ${x0} ${y1 - r}`,
+    `l ${x0} ${y0 + r}`,
+    `b ${x0} ${y0 + r - c} ${x0 + r - c} ${y0} ${x0 + r} ${y0}`,
+  ].join(' ');
+}
+
 export function buildAssFromCues(
   cues: SubtitleCue[],
   subtitle: SubtitleConfig,
@@ -2195,14 +2216,27 @@ export function buildAssFromCues(
 ): string {
   const effect: SubtitleEffect = subtitle.effect ?? 'karaoke';
   const adaptLight = Boolean(options?.isLightBackground) && subtitle.boxStyle !== 'dark_box';
-  const resolvedBaseHex =
-    adaptLight && isBrightHexColor(subtitle.textColor) ? '#0F172A' : subtitle.textColor;
-  const resolvedHighlightHex =
-    adaptLight && isBrightHexColor(subtitle.highlightColor || '#FACC15')
+  const resolvedBaseHex = adaptLight
+    ? isBrightHexColor(subtitle.textColor)
+      ? '#0F172A'
+      : subtitle.textColor
+    : isBrightHexColor(subtitle.textColor)
+    ? subtitle.textColor
+    : '#FFFFFF';
+  const resolvedHighlightHex = adaptLight
+    ? isBrightHexColor(subtitle.highlightColor || '#FACC15')
       ? '#4F46E5'
-      : subtitle.highlightColor || '#FACC15';
-  const resolvedStrokeHex =
-    adaptLight && !isBrightHexColor(subtitle.strokeColor) ? '#FFFFFF' : subtitle.strokeColor;
+      : subtitle.highlightColor || '#4F46E5'
+    : isBrightHexColor(subtitle.highlightColor || '#FACC15')
+    ? subtitle.highlightColor || '#FACC15'
+    : '#FACC15';
+  const resolvedStrokeHex = adaptLight
+    ? !isBrightHexColor(subtitle.strokeColor)
+      ? '#FFFFFF'
+      : subtitle.strokeColor
+    : isBrightHexColor(subtitle.strokeColor || '#000000')
+    ? '#0F172A'
+    : subtitle.strokeColor || '#000000';
 
   const baseColour = hexToAssBgr(resolvedBaseHex);
   const highlightColour = hexToAssBgr(resolvedHighlightHex);
@@ -2213,7 +2247,10 @@ export function buildAssFromCues(
   const alignment =
     subtitle.position === 'top' ? 8 : subtitle.position === 'center' ? 5 : 2;
 
-  let marginV = Math.round(height * 0.135);
+  const isLandscape = width > height;
+  const isSquare = width === height;
+
+  let marginV = Math.round(height * (isLandscape ? 0.095 : isSquare ? 0.11 : 0.135));
   if (subtitle.position === 'top') {
     marginV = Math.round(height * 0.09);
   } else if (subtitle.position === 'center') {
@@ -2260,9 +2297,10 @@ export function buildAssFromCues(
   const stickyBaseMarginV =
     subtitle.position === 'center' ? Math.round(height * 0.44) : marginV;
 
-  const countdownFontSize = Math.max(36, Math.round(latinBudget.scaledFontSize * 2.25));
-  const countdownOutline = Math.max(3.2, Number((latinBudget.outlineWidth * 1.65).toFixed(1)));
-  const countdownShadow = Math.max(1.5, Number((latinBudget.shadowDepth * 1.4).toFixed(1)));
+  const cdRatioScale = isLandscape ? 0.72 : isSquare ? 0.82 : 1.0;
+  const countdownFontSize = Math.max(32, Math.round(latinBudget.scaledFontSize * 2.25 * cdRatioScale));
+  const countdownOutline = Math.max(3.0, Number((latinBudget.outlineWidth * 1.5).toFixed(1)));
+  const countdownShadow = Math.max(1.4, Number((latinBudget.shadowDepth * 1.3).toFixed(1)));
   const countdownBoxHeight = Math.round(countdownFontSize * 1.48);
   const laserFlashColour = adaptLight ? hexToAssBgr('#0D6EFD') : '&H00FFFFFF';
 
@@ -2321,6 +2359,7 @@ export function buildAssFromCues(
     return { topPx: Math.max(0, bottomPx - blockHeight), bottomPx };
   };
 
+  const cdMetaFontSize = Math.max(14, Math.round(latinBudget.scaledFontSize * 0.46 * (isLandscape ? 0.88 : 1)));
   const header = [
     '[Script Info]',
     'Title: MoneyPrinterTurbo VN Subtitles',
@@ -2332,11 +2371,12 @@ export function buildAssFromCues(
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: Default,${effectiveFontName},${latinBudget.scaledFontSize},${primaryColour},${secondaryColour},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
-    `Style: Secondary,${effectiveFontName},${latinBudget.scaledFontSize},${secPrimary},${secSecondary},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
-    `Style: StickySource,${stickyStyleFont},${stickyFontSize},${stickyColour},&H00FFFFFF,${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.3,0,${borderStyle},${sourceLatinBudget.outlineWidth.toFixed(1)},${sourceLatinBudget.shadowDepth.toFixed(1)},${stickyAlignment},${sourceLatinBudget.marginH},${sourceLatinBudget.marginH},${stickyBaseMarginV},1`,
-    `Style: Countdown,${effectiveFontName},${countdownFontSize},${highlightColour},&H00FFFFFF,${adaptLight ? '&H00FFFFFF' : outlineColour},&H80000000,-1,0,0,0,100,100,0,0,1,${countdownOutline.toFixed(1)},${countdownShadow.toFixed(1)},5,20,20,0,1`,
-    `Style: CountdownMeta,${effectiveFontName},${Math.max(14, Math.round(latinBudget.scaledFontSize * 0.48))},&H00FFFFFF,&H00FFFFFF,&H000F172A,&H990F172A,-1,0,0,0,100,100,0.4,0,3,${Math.max(2, Math.round(4 * latinBudget.resScale))},0,5,16,16,0,1`,
+    `Style: Default,${effectiveFontName},${latinBudget.scaledFontSize},${primaryColour},${secondaryColour},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${(adaptLight ? Math.min(0.8, latinBudget.outlineWidth * 0.4) : latinBudget.outlineWidth).toFixed(1)},${(adaptLight ? Math.min(0.5, latinBudget.shadowDepth * 0.35) : latinBudget.shadowDepth).toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
+    `Style: Secondary,${effectiveFontName},${latinBudget.scaledFontSize},${secPrimary},${secSecondary},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${(adaptLight ? Math.min(0.8, latinBudget.outlineWidth * 0.4) : latinBudget.outlineWidth).toFixed(1)},${(adaptLight ? Math.min(0.5, latinBudget.shadowDepth * 0.35) : latinBudget.shadowDepth).toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
+    `Style: StickySource,${stickyStyleFont},${stickyFontSize},${stickyColour},&H00FFFFFF,${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.3,0,${borderStyle},${(adaptLight ? Math.min(0.7, sourceLatinBudget.outlineWidth * 0.4) : sourceLatinBudget.outlineWidth).toFixed(1)},${(adaptLight ? Math.min(0.5, sourceLatinBudget.shadowDepth * 0.35) : sourceLatinBudget.shadowDepth).toFixed(1)},${stickyAlignment},${sourceLatinBudget.marginH},${sourceLatinBudget.marginH},${stickyBaseMarginV},1`,
+    `Style: Countdown,${effectiveFontName},${countdownFontSize},${highlightColour},&H00FFFFFF,${adaptLight ? '&H00FFFFFF' : outlineColour},&H80000000,-1,0,0,0,100,100,0,0,1,${(adaptLight ? 0.5 : countdownOutline).toFixed(1)},${(adaptLight ? 0.4 : countdownShadow).toFixed(1)},5,20,20,0,1`,
+    `Style: CountdownMeta,${effectiveFontName},${cdMetaFontSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0.4,0,1,0,0,5,0,0,0,1`,
+    `Style: CountdownVec,${effectiveFontName},${cdMetaFontSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1`,
     `Style: RoleBadge,${effectiveFontName},${Math.max(14, Math.round(latinBudget.scaledFontSize * 0.52))},&H00FFFFFF,&H00FFFFFF,&H001E293B,&HAA1E293B,-1,0,0,0,100,100,0.3,0,3,${Math.max(2, Math.round(4 * latinBudget.resScale))},0,2,16,16,0,1`,
     '',
     '[Events]',
@@ -2345,50 +2385,114 @@ export function buildAssFromCues(
 
   const nonCountdownCues = cues.filter((c) => !c.isCountdown);
   const showRoleBadges = subtitle.showRoleBadges !== false;
-  const cdCardPanelFill = adaptLight ? '&H00FFFFFF' : '&H180F172A';
-  const cdCardPanelBorder = adaptLight ? hexToAssBgr('#DDD6FE') : highlightColour;
+  const cdCardPanelFill = adaptLight ? '&H00FFFFFF' : '&H140F172A';
+  const cdCardPanelBorder = adaptLight ? hexToAssBgr('#C7D2FE') : highlightColour;
+  const cdCardHeaderFill = adaptLight ? hexToAssBgr('#EEF2FF') : '&H001E293B';
   const cdNumColour = adaptLight ? hexToAssBgr('#4F46E5') : highlightColour;
   const cdTrackColour = adaptLight ? hexToAssBgr('#E2E8F0') : '&H00334155';
 
+  const panelW = Math.round(
+    isLandscape
+      ? Math.min(width * 0.30, 256 * latinBudget.resScale)
+      : isSquare
+      ? Math.min(width * 0.40, 248 * latinBudget.resScale)
+      : Math.min(width * 0.48, 252 * latinBudget.resScale)
+  );
+  const panelH = Math.round(countdownBoxHeight * 1.24);
+  const cardReserveBottom = Math.round(
+    height * (isLandscape ? 0.495 : isSquare ? 0.475 : 0.445)
+  );
+  const lockedCountdownCenterYByCueIdx = new Map<number, number>();
+  for (let i = 0; i < cues.length; i++) {
+    if (!cues[i].isCountdown) continue;
+    let groupEndIdx = i;
+    while (
+      groupEndIdx + 1 < cues.length &&
+      cues[groupEndIdx + 1].isCountdown &&
+      Math.abs(cues[groupEndIdx + 1].startSec - cues[groupEndIdx].endSec) <= 0.35 &&
+      (cues[groupEndIdx + 1].countdownTotalSteps ?? 5) === (cues[groupEndIdx].countdownTotalSteps ?? 5)
+    ) {
+      groupEndIdx++;
+    }
+    const groupStartSec = cues[i].startSec;
+    const groupEndSec = cues[groupEndIdx].endSec;
+    const overlappingBands: SubtitleVerticalBand[] = nonCountdownCues
+      .filter((other) => other.endSec > groupStartSec - 0.05 && other.startSec < groupEndSec + 0.05)
+      .map((other) => {
+        const band = estimateCueBand(other);
+        const hasBadge =
+          subtitle.showRoleBadges !== false &&
+          (other.roleKind === 'question' || other.roleKind === 'answer' || other.roleKind === 'title');
+        return hasBadge
+          ? { topPx: Math.max(0, band.topPx - Math.round(28 * latinBudget.resScale)), bottomPx: band.bottomPx }
+          : band;
+      });
+    if (options?.use2411CountdownStyle) {
+      overlappingBands.push({ topPx: 0, bottomPx: cardReserveBottom });
+    }
+    const sharedCenterY = resolveCountdownCenterY(overlappingBands, panelH + 12, height);
+    for (let gi = i; gi <= groupEndIdx; gi++) {
+      lockedCountdownCenterYByCueIdx.set(gi, sharedCenterY);
+    }
+    i = groupEndIdx;
+  }
+
   const events: string[] = [];
-  for (const cue of cues) {
+  for (let cueIdx = 0; cueIdx < cues.length; cueIdx++) {
+    const cue = cues[cueIdx];
     if (cue.isCountdown) {
       const cleanNum = escapeAssText(cue.text.trim());
-      const overlappingBands: SubtitleVerticalBand[] = nonCountdownCues
-        .filter((other) => other.endSec > cue.startSec - 0.05 && other.startSec < cue.endSec + 0.05)
-        .map(estimateCueBand);
-      if (options?.use2411CountdownStyle) {
-        // Reserve top card zone (0..44.5% height) so countdown component sits cleanly in the middle gap
-        overlappingBands.push({ topPx: 0, bottomPx: Math.round(height * 0.445) });
-      }
-      const cdCenterY = resolveCountdownCenterY(overlappingBands, countdownBoxHeight, height);
-      const cdCenterX = Math.round(width / 2);
       const totalSteps = Math.max(1, cue.countdownTotalSteps ?? 5);
       const numVal = Math.max(1, Number(cue.text.trim()) || 1);
-      const panelW = Math.round(Math.min(width * 0.46, 230 * latinBudget.resScale));
-      const panelHalfW = Math.round(panelW / 2);
-      const panelHalfH = Math.round(countdownBoxHeight * 0.56);
-      const barWidth = Math.round(panelW * 0.78);
+      const cdCenterY = lockedCountdownCenterYByCueIdx.get(cueIdx) ?? Math.round(height * 0.56);
+      const cdCenterX = Math.round(width / 2);
+      const cardLeft = cdCenterX - Math.round(panelW / 2);
+      const cardTop = cdCenterY - Math.round(panelH / 2);
+      const panelRadius = Math.max(12, Math.round(14 * latinBudget.resScale));
+      const headerBandH = Math.max(22, Math.round(panelH * 0.24));
+      const barWidth = Math.round(panelW * 0.80);
       const fillWidth = Math.max(12, Math.round((numVal / totalSteps) * barWidth));
-      const barH = Math.max(7, Math.round(7 * latinBudget.resScale));
-      const barY = Math.min(height - 30, cdCenterY + Math.round(countdownFontSize * 0.64));
-      const labelY = Math.max(30, cdCenterY - Math.round(countdownFontSize * 0.66));
+      const barH = Math.max(7, Math.round(8 * latinBudget.resScale * cdRatioScale));
+      const barRadius = Math.round(barH / 2);
+      const trackLeft = cdCenterX - Math.round(barWidth / 2);
+      const trackTop = cardTop + panelH - barH - Math.max(10, Math.round(12 * latinBudget.resScale));
+      const labelCenterY = cardTop + 2 + Math.round(headerBandH / 2);
+      const bodyTopY = cardTop + headerBandH + 2;
+      const bodyAvailH = Math.max(20, trackTop - bodyTopY);
+      const digitCenterY = bodyTopY + Math.round(bodyAvailH * 0.48);
 
-      // Component 2411 Countdown card panel backdrop
+      // Anchor EVERY \p1 vector layer strictly at (0,0) with \an7\pos(exactLeft,exactTop)\bord0
+      // so libass aligns outer border, card fill, header band, track, and fill bar pixel-for-pixel.
+      const shadowPath = buildAssRoundedRectCommands(0, 0, panelW, panelH, panelRadius);
+      const borderPath = buildAssRoundedRectCommands(0, 0, panelW + 4, panelH + 4, panelRadius + 2);
+      const cardPath = buildAssRoundedRectCommands(0, 0, panelW, panelH, panelRadius);
+      const headerPath = buildAssRoundedRectCommands(0, 0, panelW - 4, headerBandH, Math.max(8, panelRadius - 2));
+      const trackPath = buildAssRoundedRectCommands(0, 0, barWidth, barH, barRadius);
+      const fillPath = buildAssRoundedRectCommands(0, 0, fillWidth, barH, Math.min(barRadius, Math.floor(fillWidth / 2)));
+
       events.push(
-        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${cdCenterY})\\p1\\1c${cdCardPanelFill}\\3c${cdCardPanelBorder}\\bord2.5\\fad(40,80)}m ${-panelHalfW} ${-panelHalfH} l ${panelHalfW} ${-panelHalfH} l ${panelHalfW} ${panelHalfH} l ${-panelHalfW} ${panelHalfH}{\\p0}`
+        `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownVec,,0,0,0,,{\\an7\\pos(${cardLeft},${cardTop + 4})\\p1\\1c&HAA000000&\\bord0\\shad0\\fad(40,80)}${shadowPath}{\\p0}`
       );
       events.push(
-        `Dialogue: 2,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},Countdown,,0,0,0,,{\\an5\\pos(${cdCenterX},${cdCenterY})\\1c${cdNumColour}\\fscx62\\fscy62\\t(0,145,\\fscx118\\fscy118)\\t(145,280,\\fscx100\\fscy100)\\fad(30,110)}${cleanNum}`
+        `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownVec,,0,0,0,,{\\an7\\pos(${cardLeft - 2},${cardTop - 2})\\p1\\1c${cdCardPanelBorder}\\bord0\\shad0\\fad(40,80)}${borderPath}{\\p0}`
       );
       events.push(
-        `Dialogue: 2,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${labelY})\\1c${cdNumColour}\\3c${cdCardPanelFill}\\bord0\\fad(30,100)}THINK TIME`
+        `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownVec,,0,0,0,,{\\an7\\pos(${cardLeft},${cardTop})\\p1\\1c${cdCardPanelFill}\\bord0\\shad0\\fad(40,80)}${cardPath}{\\p0}`
       );
       events.push(
-        `Dialogue: 2,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${barY})\\p1\\1c${cdTrackColour}\\bord0\\fad(30,100)}m ${-Math.round(barWidth / 2)} 0 l ${Math.round(barWidth / 2)} 0 l ${Math.round(barWidth / 2)} ${barH} l ${-Math.round(barWidth / 2)} ${barH}{\\p0}`
+        `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownVec,,0,0,0,,{\\an7\\pos(${cardLeft + 2},${cardTop + 2})\\p1\\1c${cdCardHeaderFill}\\bord0\\shad0\\fad(40,80)}${headerPath}{\\p0}`
       );
       events.push(
-        `Dialogue: 3,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${barY})\\p1\\1c${cdNumColour}\\bord0\\fad(30,100)}m ${-Math.round(barWidth / 2)} 0 l ${-Math.round(barWidth / 2) + fillWidth} 0 l ${-Math.round(barWidth / 2) + fillWidth} ${barH} l ${-Math.round(barWidth / 2)} ${barH}{\\p0}`
+        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${labelCenterY})\\1c${cdNumColour}\\bord0\\shad0\\fad(30,100)}THINK TIME`
+      );
+      events.push(
+        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownVec,,0,0,0,,{\\an7\\pos(${trackLeft},${trackTop})\\p1\\1c${cdTrackColour}\\bord0\\shad0\\fad(30,100)}${trackPath}{\\p0}`
+      );
+      events.push(
+        `Dialogue: 2,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownVec,,0,0,0,,{\\an7\\pos(${trackLeft},${trackTop})\\p1\\1c${cdNumColour}\\bord0\\shad0\\fad(30,100)}${fillPath}{\\p0}`
+      );
+      events.push(
+        `Dialogue: 2,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},Countdown,,0,0,0,,{\\an5\\pos(${cdCenterX},${digitCenterY})\\1c${cdNumColour}\\fscx64\\fscy64\\t(0,145,\\fscx116\\fscy116)\\t(145,280,\\fscx100\\fscy100)\\fad(30,110)}${cleanNum}`
       );
       continue;
     }
@@ -2583,21 +2687,26 @@ TÙY CHỌN STUDIO ĐANG ĐỒNG BỘ:
   const componentCreativeGuide = `
 6. TẠO "sceneComponents" (Kiến trúc KineticSub 2411 — sáng tạo từng cảnh, 1-1 với từng dòng script):
    - Mỗi dòng script có 1 object { "variant", "animationIn", "title", "subtitle", "labels", "highlightWord", "formula", "speechText", "reactionText", "exampleText", "prevTargetText" }.
-   - SÁNG TẠO & KHÔNG LẶP LẠI: Luôn đa dạng hóa "variant" giữa các câu liên tiếp (tuyệt đối KHÔNG lặp 1 variant 2 lần liền nhau):
+${
+  dualVoiceEnabled
+    ? `   - CHẾ ĐỘ 2 GIỌNG ĐANG BẬT: TẤT CẢ các slide trong "sceneComponents" PHẢI dùng ĐỒNG NHẤT variant "friends-chat" (bong bóng hội thoại 2 nhân vật — tuyệt đối KHÔNG đổi ngẫu nhiên sang card khác giữa các câu). Với [PAUSE], bong bóng A hiện câu nguồn và bong bóng B hiện "Your Turn · Translate in 5s" (không spoil đáp án).`
+    : `   - SÁNG TẠO & KHÔNG LẶP LẠI: Luôn đa dạng hóa "variant" giữa các câu liên tiếp (tuyệt đối KHÔNG lặp 1 variant 2 lần liền nhau):
      * "css-browser-mockup" | "bs-card-header": hợp câu mở đầu / chủ đề chính
-     * "friends-chat": CẢNH HỘI THOẠI 2 NHÂN VẬT (phỏng vấn Q&A, [V1]/[V2], đồng nghiệp/bạn bè nói chuyện — truyền "labels": ["Interviewer", "Candidate"], "speechText": "câu thoại hoàn chỉnh", "reactionText": "Natural!")
+     * "friends-chat": CẢNH HỘI THOẠI BONG BÓNG 2 NGƯỜI (bong bóng người A hiển thị câu nguồn, bong bóng người B hiển thị phần user dịch trong 5s khi [PAUSE] hoặc đáp án khi trả lời — truyền "labels": ["Prompt", "Your Turn"], "speechText": "câu thoại hoàn chỉnh", "reactionText": "Natural!")
      * "avatar-speech": NHÂN VẬT & BÓNG THOẠI (1 người nói câu giao tiếp tự nhiên kèm "speechText": "câu thoại đầy đủ", "reactionText": "Polite!")
      * "dialogue-upgrade": NÂNG CẤP HỘI THOẠI (so sánh cách nói cơ bản → tự nhiên — truyền "labels": ["Basic Form", "Natural Form"], "speechText": "câu cơ bản", "highlightWord": "cụm nâng cấp", "reactionText": "Natural!")
      * "css-flashcard" | "gauge-tone": hợp câu hỏi / thử thách dịch [PAUSE] hoặc đo sắc thái
      * "css-compare" | "css-equation": hợp câu đáp án / đối chiếu cấu trúc ngữ pháp (labels: ["Context", "Target Form"], formula: "S + V + O")
      * "css-roadmap" | "staircase-3d" | "bs-progress-meter": hợp các bước / số liệu / thứ hạng
      * "bs-alert-callout": hợp câu cảnh báo / lưu ý quan trọng
-     * "css-glass-quote": hợp trích dẫn / lời cảm ơn kết thúc
-   - "animationIn": mặc định dùng "random" (hoặc chọn từ ["random", "pop-up", "slide-up", "drop-in", "fade-scale"]).
-   - VÍ DỤ & GỢI NHỚ CÂU TRƯỚC (LINH HOẠT):
-     * Luôn đưa câu ví dụ thực tế, hữu ích, trọn vẹn nghĩa vào "exampleText" (ví dụ: mẫu câu ứng dụng ngay trong giao tiếp thật) và có thể gán "prevTargetText" chứa câu đích của câu hỏi ngay trước đó để giúp người xem ôn nhớ liên tục.
-     * TUYỆT ĐỐI KHÔNG cắt cụt chữ bằng dấu "..." ở bất kỳ trường nào! Viết câu ngắn gọn nhưng đầy đủ trọn vẹn ý nghĩa.
-   - RÀNG BUỘC NGÔN NGỮ: Mọi nhãn hướng dẫn / cấu trúc UI bên trong thẻ ("title", "subtitle", "labels", "reactionText") PHẢI viết 100% bằng TIẾNG ANH ("Intro", "Think Time · 5s", "Target Phrase", "Interviewer", "Candidate", "Natural!", "Example", "Recall"). Riêng nội dung hội thoại/ví dụ ("speechText", "highlightWord", "exampleText", "prevTargetText") giữ đúng ngôn ngữ đang học/giao tiếp của cảnh đó.`;
+     * "css-glass-quote": hợp trích dẫn / lời cảm ơn kết thúc`
+}
+   - "animationIn": MẶC ĐỊNH dùng "random" (tuyệt đối để "random" làm mặc định để chuyển cảnh đa dạng).
+   - CHỐNG SPOIL ĐÁP ÁN & GỢI Ý LINH HOẠT:
+     * Với dòng câu hỏi [PAUSE] (trước khi đếm ngược): TUYỆT ĐỐI KHÔNG tiết lộ (spoil) bất kỳ từ tiếng Anh/ngôn ngữ đích, chữ cái đầu hay cụm dịch nào của câu hiện tại hoặc các câu sau trong "exampleText", "subtitle", "highlightWord" hay "speechText"! Chỉ đưa GỢI Ý SẮC THÁI / CẤU TRÚC NGỮ PHÁP thuần túy (ví dụ "Hint: Alert warning tone · short spoken imperative").
+     * Với dòng đáp án hoặc kiến thức: đưa câu ví dụ thực tế trọn vẹn nghĩa vào "exampleText", và có thể gán "prevTargetText" nhắc lại câu đích của câu ĐÃ HỌC TRƯỚC ĐÓ để người dùng nhớ lâu.
+     * TUYỆT ĐỐI KHÔNG cắt cụt chữ bằng dấu "..." ở bất kỳ trường nào! Viết ngắn gọn, rõ chữ, đầy đủ ý nghĩa.
+   - RÀNG BUỘC NGÔN NGỮ: Mọi nhãn hướng dẫn / UI chrome bên trong video & thẻ ("title", "subtitle", "labels", "reactionText") PHẢI viết 100% bằng TIẾNG ANH ("Intro", "Think Time · 5s", "Target Phrase", "Prompt", "Your Turn", "Natural!", "Hint", "Example", "Recall"). Riêng nội dung câu thoại/ví dụ ("speechText", "highlightWord", "exampleText", "prevTargetText") giữ đúng ngôn ngữ đang học/giao tiếp của cảnh đó.`;
 
   const strictFileContract = `
 QUY TẮC XUẤT FILE BẮT BUỘC (STRICT FILE OUTPUT):
@@ -2643,8 +2752,8 @@ Cấu trúc JSON mẫu (script_2411.json):
     "scene prompt 2 matching line 2 context and ${visualMood} mood, ${aspectRatio}, no text"
   ],
   "sceneComponents": [
-    { "variant": "css-browser-mockup", "animationIn": "drop-in", "title": "Native title matching line language", "subtitle": "5s Drill", "labels": ["Listen", "Translate"], "highlightWord": "5s" },
-    { "variant": "css-flashcard", "animationIn": "pop-up", "title": "Core Phrase", "subtitle": "Speak Out Loud", "labels": ["Prompt", "Target"], "highlightWord": "key" }
+    { "variant": "css-browser-mockup", "animationIn": "random", "title": "Translate Challenge", "subtitle": "5s Drill", "labels": ["Listen", "Translate"], "highlightWord": "5s" },
+    { "variant": "friends-chat", "animationIn": "random", "title": "Translation Prompt", "subtitle": "Speak Out Loud", "labels": ["Prompt", "Your Turn"], "highlightWord": "5s Turn" }
   ],
   "visualMood": "${visualMood}",
   "mediaTypeFilter": "${mediaTypeFilter}"
@@ -2679,8 +2788,8 @@ Cấu trúc JSON mẫu (script_2411.json):
     "visual query for line 2 matching context and ${visualMood} mood, no text"
   ],
   "sceneComponents": [
-    { "variant": "bs-card-header", "animationIn": "drop-in", "title": "Matched Title", "subtitle": "Hook", "labels": ["Topic", "Focus"] },
-    { "variant": "css-compare", "animationIn": "slide-up", "title": "Matched Concept", "subtitle": "Breakdown", "labels": ["A", "B"] }
+    { "variant": "bs-card-header", "animationIn": "random", "title": "Matched Title", "subtitle": "Hook", "labels": ["Topic", "Focus"] },
+    { "variant": "css-compare", "animationIn": "random", "title": "Matched Concept", "subtitle": "Breakdown", "labels": ["A", "B"] }
   ],
   "visualMood": "${visualMood}",
   "mediaTypeFilter": "${mediaTypeFilter}"
@@ -2709,8 +2818,8 @@ Cấu trúc JSON mẫu (script_2411.json):
     "visual description for line 2 matching context and ${visualMood} mood, no text"
   ],
   "sceneComponents": [
-    { "variant": "bs-card-header", "animationIn": "drop-in", "title": "Matched Title", "subtitle": "Context", "labels": ["Step 1", "Step 2"] },
-    { "variant": "css-roadmap", "animationIn": "slide-up", "title": "Core Takeaway", "subtitle": "Insight", "labels": ["Fact", "Impact"] }
+    { "variant": "bs-card-header", "animationIn": "random", "title": "Matched Title", "subtitle": "Context", "labels": ["Step 1", "Step 2"] },
+    { "variant": "css-roadmap", "animationIn": "random", "title": "Core Takeaway", "subtitle": "Insight", "labels": ["Fact", "Impact"] }
   ],
   "visualMood": "${visualMood}",
   "mediaTypeFilter": "${mediaTypeFilter}"

@@ -65,6 +65,13 @@ export const TopBar: React.FC<TopBarProps> = ({ activeTab, onSelectTab }) => {
             <a
               key={link.href}
               href={link.href}
+              onClick={(e) => {
+                const target = document.querySelector(link.href);
+                if (target) {
+                  e.preventDefault();
+                  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+              }}
               className="py-2 text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
             >
               {link.label}

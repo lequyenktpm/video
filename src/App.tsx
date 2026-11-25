@@ -213,9 +213,48 @@ export default function App() {
     }));
   };
 
+  const announcedDoneJobsRef = useRef<Set<string>>(new Set());
+
+  const playExportCompleteSound = () => {
+    try {
+      const Ctx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      if (ctx.state === 'suspended') {
+        void ctx.resume();
+      }
+      const notes = [523.25, 659.25, 783.99];
+      notes.forEach((freq, idx) => {
+        const start = ctx.currentTime + idx * 0.11;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, start);
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.exponentialRampToValueAtTime(0.16, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.28);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.3);
+      });
+      window.setTimeout(() => {
+        void ctx.close().catch(() => {});
+      }, 1200);
+    } catch {
+      // Ignore Web Audio autoplay restrictions gracefully
+    }
+  };
+
   useEffect(() => {
     const runningEntries = (Object.entries(jobsByTab) as Array<[StudioTab, RenderJobStatus | null]>).filter(
-      ([, job]) => job && job.status !== 'done' && job.status !== 'error'
+      ([, job]) =>
+        job &&
+        job.status !== 'done' &&
+        job.status !== 'error' &&
+        job.status !== 'cancelled'
     );
     if (runningEntries.length === 0) return;
 
@@ -232,6 +271,10 @@ export default function App() {
           setJobsByTab((prev) => ({ ...prev, [tabKey]: latest }));
 
           if (latest.status === 'done' && latest.videoUrl && latest.srtUrl) {
+            if (!announcedDoneJobsRef.current.has(latest.jobId)) {
+              announcedDoneJobsRef.current.add(latest.jobId);
+              playExportCompleteSound();
+            }
             const tabCfg = configsByTab[tabKey];
             const record: CompletedVideoRecord = {
               jobId: latest.jobId,
@@ -331,8 +374,43 @@ export default function App() {
     }
   };
 
+  const handleCancelRender = async () => {
+    const targetTab = activeTab;
+    const activeJob = jobsByTab[targetTab];
+    if (!activeJob) return;
+    try {
+      const res = await fetch(`/api/render-cancel/${encodeURIComponent(activeJob.jobId)}`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const data = await safeParseJsonResponse<{ status?: RenderJobStatus }>(
+          res,
+          'Đã hủy render.'
+        );
+        if (data.status) {
+          setJobsByTab((prev) => ({ ...prev, [targetTab]: data.status! }));
+          return;
+        }
+      }
+    } catch {
+      // Fall back to optimistic cancelled state if network call interrupted
+    }
+    setJobsByTab((prev) =>
+      prev[targetTab]
+        ? {
+            ...prev,
+            [targetTab]: {
+              ...prev[targetTab]!,
+              status: 'cancelled',
+              stepLabel: 'Đã hủy tác vụ xuất video.',
+            },
+          }
+        : prev
+    );
+  };
+
   return (
-    <div id="top" className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
+    <div id="top" className="min-h-screen lg:h-screen lg:overflow-hidden bg-slate-50 text-slate-900 flex flex-col">
       <input
         ref={fileInputRef}
         type="file"
@@ -350,8 +428,8 @@ export default function App() {
 
       <TopBar activeTab={activeTab} onSelectTab={setActiveTab} />
 
-      <main className="flex-1 max-w-[1360px] w-full mx-auto px-4 sm:px-6 py-6 space-y-5">
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-3">
+      <main className="flex-1 lg:min-h-0 max-w-[1360px] w-full mx-auto px-4 sm:px-6 py-4 sm:py-5 flex flex-col gap-4">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-3 shrink-0">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 text-balance">
               {activeTab === 'learning'
@@ -380,6 +458,7 @@ export default function App() {
           renderJob={renderJob}
           isRendering={isRendering}
           onStartRender={() => void handleStartRender()}
+          onCancelRender={() => void handleCancelRender()}
           onResetForm={() => {
             setConfigsByTab((prev) => ({
               ...prev,

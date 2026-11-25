@@ -3,7 +3,8 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { execFile } from 'child_process';
+import { ChildProcess, execFile } from 'child_process';
+import { AsyncLocalStorage } from 'async_hooks';
 import { promisify } from 'util';
 import multer from 'multer';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
@@ -162,8 +163,57 @@ function allocateUniqueBaseName(absDir: string, rawBase: string): string {
   return `${base} (${Date.now()})`;
 }
 
+class RenderCancelledError extends Error {
+  constructor() {
+    super('Render job cancelled by user.');
+    this.name = 'RenderCancelledError';
+  }
+}
+
+const renderJobContext = new AsyncLocalStorage<string>();
+const cancelledJobs = new Set<string>();
+const activeJobProcesses = new Map<string, Set<ChildProcess>>();
+
+function assertNotCancelled(jobId?: string): void {
+  const id = jobId ?? renderJobContext.getStore();
+  if (id && cancelledJobs.has(id)) {
+    throw new RenderCancelledError();
+  }
+}
+
 async function runFfmpeg(args: string[], timeoutMs = 120000): Promise<void> {
-  await execFileAsync('ffmpeg', args, { timeout: timeoutMs, maxBuffer: 48 * 1024 * 1024 });
+  const jobId = renderJobContext.getStore();
+  assertNotCancelled(jobId);
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const child = execFile(
+      'ffmpeg',
+      args,
+      { timeout: timeoutMs, maxBuffer: 48 * 1024 * 1024 },
+      (err) => {
+        if (jobId) {
+          activeJobProcesses.get(jobId)?.delete(child);
+        }
+        if (settled) return;
+        settled = true;
+        if (jobId && cancelledJobs.has(jobId)) {
+          reject(new RenderCancelledError());
+          return;
+        }
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+    if (jobId) {
+      let set = activeJobProcesses.get(jobId);
+      if (!set) {
+        set = new Set();
+        activeJobProcesses.set(jobId, set);
+      }
+      set.add(child);
+    }
+  });
 }
 
 async function probeDurationSec(filePath: string): Promise<number> {
@@ -1740,6 +1790,7 @@ function getSceneCacheKey(params: {
   curatedBgCategory?: CuratedBackgroundCategory;
   curatedBgId?: string;
   scriptStyle?: ScriptStyle;
+  dualVoiceEnabled?: boolean;
   pauseBetweenLinesSec?: number;
   mediaTypeFilter: MediaTypeFilter;
   visualMood: VisualMood;
@@ -1757,13 +1808,14 @@ function getSceneCacheKey(params: {
     cbc: params.curatedBgCategory ?? 'all',
     cbi: params.curatedBgId ?? 'auto',
     ss: params.scriptStyle ?? 'curious_facts',
+    dv: Boolean(params.dualVoiceEnabled),
     pb: params.pauseBetweenLinesSec ?? 5,
     mt: params.mediaTypeFilter,
     vm: params.visualMood,
     a: params.aspectRatio,
     sel: params.selectedMediaIds,
     subj: params.subject,
-    v: 3,
+    v: 4,
   });
   return `scenes_${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12)}`;
 }
@@ -1780,6 +1832,8 @@ async function resolveSceneAssets(params: {
   curatedBgCategory?: CuratedBackgroundCategory;
   curatedBgId?: string;
   scriptStyle?: ScriptStyle;
+  language?: LanguageCode;
+  dualVoiceEnabled?: boolean;
   pauseBetweenLinesSec?: number;
   mediaTypeFilter?: MediaTypeFilter;
   visualMood?: VisualMood;
@@ -1850,6 +1904,10 @@ async function resolveSceneAssets(params: {
       ? params.scenePrompts
       : buildScenePromptsFromScript(effectiveSentences, params.subject, searchTerms);
 
+  const effectiveDualVoice =
+    Boolean(params.dualVoiceEnabled) ||
+    Boolean(params.language && isBilingualLanguage(params.language));
+
   const cacheKey = getSceneCacheKey({
     subject: params.subject,
     sentences: effectiveSentences,
@@ -1862,6 +1920,7 @@ async function resolveSceneAssets(params: {
     curatedBgCategory: params.curatedBgCategory,
     curatedBgId: params.curatedBgId,
     scriptStyle: params.scriptStyle,
+    dualVoiceEnabled: effectiveDualVoice,
     pauseBetweenLinesSec: params.pauseBetweenLinesSec,
     mediaTypeFilter,
     visualMood,
@@ -1983,8 +2042,10 @@ async function resolveSceneAssets(params: {
     const assets2411: ResolvedSceneAsset[] = [];
     let prevVariant: Studio2411ComponentVariant | undefined;
     let lastTargetText: string | undefined;
+    let lastPrimaryText: string | undefined;
 
     for (let idx = 0; idx < effectiveSentences.length; idx++) {
+      assertNotCancelled();
       const sentence = effectiveSentences[idx];
       const rawLine = sentenceRawLines[idx] ?? sentence;
       const linePres = analyzeScriptLinePresentation(rawLine, {
@@ -1994,6 +2055,7 @@ async function resolveSceneAssets(params: {
         linePres.roleKind === 'answer' ||
         /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(rawLine);
       const showRecall = !isSecondary && linePres.roleKind !== 'title' ? lastTargetText : undefined;
+      const promptPreviewText = isSecondary ? lastPrimaryText : undefined;
       const customComp = params.customScenes?.[idx]?.componentSpec;
       const lineOverride = customComp ?? params.sceneComponents?.[idx];
       const spec = build2411CardSpecForLine({
@@ -2003,15 +2065,19 @@ async function resolveSceneAssets(params: {
         isSecondarySlot: isSecondary,
         isIntroOrOutro: linePres.roleKind === 'title' || linePres.roleKind === 'outro',
         scriptStyle: params.scriptStyle,
+        dualVoiceEnabled: effectiveDualVoice,
         themeId: themeMeta.id,
         defaultPauseSec: params.pauseBetweenLinesSec ?? 5,
         override: lineOverride,
         prevVariant,
         prevTargetText: showRecall,
+        promptPreviewText,
       });
       prevVariant = spec.variant;
       if (isSecondary && linePres.cleanText) {
         lastTargetText = linePres.cleanText;
+      } else if (!isSecondary && linePres.roleKind !== 'title' && linePres.roleKind !== 'outro' && linePres.cleanText) {
+        lastPrimaryText = linePres.cleanText;
       }
 
       const resolvedCompSpec: Studio2411SceneComponentOverride = {
@@ -2026,6 +2092,7 @@ async function resolveSceneAssets(params: {
         reactionText: spec.reactionText,
         ...(spec.exampleText ? { exampleText: spec.exampleText } : {}),
         ...(spec.prevTargetText ? { prevTargetText: spec.prevTargetText } : {}),
+        ...(spec.promptPreviewText ? { promptPreviewText: spec.promptPreviewText } : {}),
         progressPct: spec.progressPct,
         ...(spec.accentOverrideHex ? { accentColor: spec.accentOverrideHex } : {}),
       };
@@ -2952,6 +3019,7 @@ function updateJob(jobId: string, patch: Partial<RenderJobStatus>, logLine?: str
 }
 
 async function processRenderJob(jobId: string, config: RenderJobConfig): Promise<void> {
+  return renderJobContext.run(jobId, async () => {
   const workDir = path.join(CACHE_DIR, jobId);
   fs.mkdirSync(workDir, { recursive: true });
 
@@ -2984,6 +3052,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     let loggedRecovery = false;
 
     for (let i = 0; i < segments.length; i++) {
+      assertNotCancelled(jobId);
       const seg = segments[i];
       const partMp3Path = path.join(workDir, `tts_${i}.mp3`);
       const partWavPath = path.join(workDir, `tts_${i}.wav`);
@@ -3123,6 +3192,8 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       curatedBgCategory: config.curatedBgCategory,
       curatedBgId: config.curatedBgId,
       scriptStyle: config.scriptStyle,
+      language: config.language,
+      dualVoiceEnabled: Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language),
       pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
       mediaTypeFilter: config.mediaTypeFilter ?? 'all',
       visualMood: config.visualMood ?? 'auto',
@@ -3239,6 +3310,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     const normalizedClipCache = new Map<string, string>();
 
     for (let i = 0; i < plannedEntries.length; i++) {
+      assertNotCancelled(jobId);
       const entry = plannedEntries[i];
       const normPath = path.join(workDir, `clip_norm_${i}.mp4`);
       const dedupKey = `${entry.asset.localPath || entry.asset.remoteUrl || entry.asset.index}_${entry.renderDur.toFixed(1)}_${width}x${height}_${config.visualMood ?? 'auto'}`;
@@ -3440,6 +3512,9 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           );
         }
       } catch (xfadeErr) {
+        if (xfadeErr instanceof RenderCancelledError || cancelledJobs.has(jobId)) {
+          throw xfadeErr;
+        }
         updateJob(
           jobId,
           {},
@@ -3450,6 +3525,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     } else {
       await writeConcatFallback();
     }
+    assertNotCancelled(jobId);
 
     // 5. Split long cues into punchy 1-2 line subtitles & mix voiceover + BGM
     updateJob(jobId, { progressPct: 82, stepLabel: 'Đang gắn phụ đề tiếng Việt & trộn nhạc nền...' });
@@ -3491,15 +3567,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         (config.materialSource === 'studio_2411' &&
           getStudio2411ThemeMeta(config.studio2411Theme).isLight)) &&
       config.subtitle.boxStyle !== 'dark_box';
-    const effectiveSubtitleForAss = isLightNeutralExport
-      ? {
-          ...config.subtitle,
-          textColor: '#0F172A',
-          highlightColor: '#0D6EFD',
-          strokeColor: '#FFFFFF',
-        }
-      : config.subtitle;
-    const assContent = buildAssFromCues(shortSubCues, effectiveSubtitleForAss, width, height, {
+    const assContent = buildAssFromCues(shortSubCues, config.subtitle, width, height, {
       isLightBackground: isLightNeutralExport,
       use2411CountdownStyle: config.materialSource === 'studio_2411',
     });
@@ -3616,6 +3684,17 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       `Xuất thành công ${savedOutputPath} (${(stat.size / 1024).toFixed(0)} KB, ${finalDur.toFixed(1)}s).`
     );
   } catch (err) {
+    if (err instanceof RenderCancelledError || cancelledJobs.has(jobId)) {
+      updateJob(
+        jobId,
+        {
+          status: 'cancelled',
+          stepLabel: 'Đã hủy tác vụ xuất video.',
+        },
+        'Người dùng đã hủy quá trình xuất video.'
+      );
+      return;
+    }
     const message = err instanceof Error ? err.message : 'Lỗi không xác định khi xuất video FFmpeg.';
     updateJob(
       jobId,
@@ -3626,7 +3705,10 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       },
       `Lỗi: ${message}`
     );
+  } finally {
+    activeJobProcesses.delete(jobId);
   }
+  });
 }
 
 const uploadStorage = multer.diskStorage({
@@ -4045,6 +4127,7 @@ async function startServer() {
       verifiedSources.push({ title: n.title, url: n.url });
     }
 
+    const reqDualVoice = Boolean(req.body?.dualVoiceEnabled) || isBilingualLanguage(language);
     const promptText = buildMoneyPrinterPrompt({
       subject,
       language,
@@ -4054,6 +4137,7 @@ async function startServer() {
       rawScript: typeof req.body?.rawScript === 'string' ? req.body.rawScript : undefined,
       mediaTypeFilter: (req.body?.mediaTypeFilter ?? 'all') as MediaTypeFilter,
       visualMood: (req.body?.visualMood ?? 'auto') as VisualMood,
+      dualVoiceEnabled: reqDualVoice,
     });
 
     const accurateEnglishTerms = Array.from(
@@ -4083,6 +4167,7 @@ async function startServer() {
         sceneComponents: buildContextualSceneComponentsForScript({
           script: out.script,
           scriptStyle,
+          dualVoiceEnabled: reqDualVoice,
         }),
         groundingSources: verifiedSources,
         promptText,
@@ -4126,6 +4211,7 @@ async function startServer() {
               sceneComponents: buildContextualSceneComponentsForScript({
                 script: parsed.script,
                 scriptStyle,
+                dualVoiceEnabled: reqDualVoice,
                 existingOverrides: parsed.sceneComponents,
               }),
               groundingSources,
@@ -4165,6 +4251,7 @@ async function startServer() {
               sceneComponents: buildContextualSceneComponentsForScript({
                 script: parsed.script,
                 scriptStyle,
+                dualVoiceEnabled: reqDualVoice,
                 existingOverrides: parsed.sceneComponents,
               }),
               groundingSources: verifiedSources,
@@ -4229,6 +4316,7 @@ async function startServer() {
               sceneComponents: buildContextualSceneComponentsForScript({
                 script: parsed.script,
                 scriptStyle,
+                dualVoiceEnabled: reqDualVoice,
                 existingOverrides: parsed.sceneComponents,
               }),
               groundingSources: verifiedSources,
@@ -4281,6 +4369,7 @@ async function startServer() {
       sceneComponents: buildContextualSceneComponentsForScript({
         script: smartOut.script,
         scriptStyle,
+        dualVoiceEnabled: reqDualVoice,
       }),
       groundingSources: verifiedSources,
       promptText,
@@ -4311,6 +4400,8 @@ async function startServer() {
     const curatedBgCategory = req.body?.curatedBgCategory as CuratedBackgroundCategory | undefined;
     const curatedBgId = typeof req.body?.curatedBgId === 'string' ? req.body.curatedBgId : undefined;
     const scriptStyle = req.body?.scriptStyle as ScriptStyle | undefined;
+    const language = req.body?.language as LanguageCode | undefined;
+    const dualVoiceEnabled = Boolean(req.body?.dualVoiceEnabled);
     const pauseBetweenLinesSec =
       typeof req.body?.pauseBetweenLinesSec === 'number' ? req.body.pauseBetweenLinesSec : 5;
     const mediaTypeFilter = (req.body?.mediaTypeFilter ?? 'all') as MediaTypeFilter;
@@ -4339,6 +4430,8 @@ async function startServer() {
         curatedBgCategory,
         curatedBgId,
         scriptStyle,
+        language,
+        dualVoiceEnabled,
         pauseBetweenLinesSec,
         mediaTypeFilter,
         visualMood,
@@ -4778,6 +4871,40 @@ async function startServer() {
       return;
     }
     res.json(job);
+  });
+
+  app.post('/api/render-cancel/:jobId', (req, res) => {
+    const { jobId } = req.params;
+    const job = jobs.get(jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Không tìm thấy tác vụ render này.' });
+      return;
+    }
+    if (job.status === 'done' || job.status === 'error' || job.status === 'cancelled') {
+      res.json({ ok: true, status: job });
+      return;
+    }
+    cancelledJobs.add(jobId);
+    const procs = activeJobProcesses.get(jobId);
+    if (procs) {
+      for (const proc of procs) {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // process may have exited already
+        }
+      }
+      procs.clear();
+    }
+    updateJob(
+      jobId,
+      {
+        status: 'cancelled',
+        stepLabel: 'Đã hủy tác vụ xuất video.',
+      },
+      'Đã nhận lệnh hủy từ người dùng — đang dừng FFmpeg.'
+    );
+    res.json({ ok: true, status: jobs.get(jobId) });
   });
 
   // Never let unknown /api/* requests fall through to Vite/SPA HTML fallback

@@ -74,6 +74,7 @@ export interface Studio2411SceneComponentOverride {
   reactionText?: string;
   exampleText?: string;
   prevTargetText?: string;
+  promptPreviewText?: string;
   accentColor?: string;
   progressPct?: number;
 }
@@ -245,7 +246,7 @@ export interface RenderJobConfig {
 
 export interface RenderJobStatus {
   jobId: string;
-  status: 'queued' | 'running' | 'done' | 'error';
+  status: 'queued' | 'running' | 'done' | 'error' | 'cancelled';
   progressPct: number;
   stepLabel: string;
   logs: string[];

@@ -18,10 +18,12 @@ import {
   ListChecks,
   Loader2,
   Palette,
+  Play,
   RefreshCw,
   RotateCcw,
   Search,
   Sparkles,
+  Square,
   Trash2,
   Upload,
   Volume2,
@@ -160,6 +162,7 @@ interface VideoStudioViewProps {
   renderJob: RenderJobStatus | null;
   isRendering: boolean;
   onStartRender: () => void;
+  onCancelRender: () => void;
   onResetForm: () => void;
   recentHistory: CompletedVideoRecord[];
   onDeleteHistory: (jobId: string) => void;
@@ -176,6 +179,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   renderJob,
   isRendering,
   onStartRender,
+  onCancelRender,
   onResetForm,
   recentHistory,
   onDeleteHistory,
@@ -183,6 +187,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const quickPasteRef = useRef<HTMLTextAreaElement | null>(null);
   const sceneFileInputRef = useRef<HTMLInputElement | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
+  const previewPlayTimerRef = useRef<number | null>(null);
+  const previewPlayingRef = useRef<boolean>(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   const [termsInput, setTermsInput] = useState(config.terms.join(', '));
@@ -217,7 +223,45 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const [ttsPreviewNote, setTtsPreviewNote] = useState<string | null>(null);
   const [captionReplayNonce, setCaptionReplayNonce] = useState(0);
   const [previewCountdown, setPreviewCountdown] = useState<number | null>(null);
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
+  const [exiting2411Card, setExiting2411Card] = useState<{
+    key: string;
+    rawLine: string;
+    lineIndex: number;
+    totalLines: number;
+    isSecondarySlot: boolean;
+    isIntroOrOutro: boolean;
+    scriptStyle?: ScriptStyle;
+    dualVoiceEnabled: boolean;
+    themeId?: Studio2411ThemeId;
+    pauseBetweenLinesSec: number;
+    aspectRatio: VideoAspectRatio;
+    prevTargetText?: string;
+    promptPreviewText?: string;
+    animationSeed: number;
+    fontName?: string;
+    override?: Studio2411SceneComponentOverride;
+  } | null>(null);
+  const current2411SnapRef = useRef<{
+    key: string;
+    rawLine: string;
+    lineIndex: number;
+    totalLines: number;
+    isSecondarySlot: boolean;
+    isIntroOrOutro: boolean;
+    scriptStyle?: ScriptStyle;
+    dualVoiceEnabled: boolean;
+    themeId?: Studio2411ThemeId;
+    pauseBetweenLinesSec: number;
+    aspectRatio: VideoAspectRatio;
+    prevTargetText?: string;
+    promptPreviewText?: string;
+    animationSeed: number;
+    fontName?: string;
+    override?: Studio2411SceneComponentOverride;
+  } | null>(null);
+  const exit2411TimerRef = useRef<number | null>(null);
 
   const [outputFolders, setOutputFolders] = useState<string[]>(['output']);
   const [outputRootAbsPath, setOutputRootAbsPath] = useState<string>('');
@@ -280,6 +324,23 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     setPreviewCountdown(null);
   };
 
+  const stopPreviewPlayback = () => {
+    previewPlayingRef.current = false;
+    if (previewPlayTimerRef.current !== null) {
+      window.clearTimeout(previewPlayTimerRef.current);
+      previewPlayTimerRef.current = null;
+    }
+    stopCountdownPreview();
+    setIsPlayingPreview(false);
+    try {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    } catch {
+      // Ignore speechSynthesis cancel errors safely
+    }
+  };
+
   const playClockTickInBrowser = (isTick: boolean) => {
     if (config.clockTickEnabled === false) return;
     try {
@@ -309,7 +370,30 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     }
   };
 
-  const handleRunCountdownPreview = () => {
+  const speakPreviewSlideText = (slideText: string, isSecondary: boolean) => {
+    try {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel();
+      const clean = stripNarrationTags(slideText);
+      if (!clean) return;
+      const utter = new SpeechSynthesisUtterance(clean);
+      const voiceRef = isSecondary ? config.secondaryVoiceId || config.voiceId : config.voiceId;
+      if (hasCjkChars(clean) || voiceRef?.startsWith('ja')) {
+        utter.lang = 'ja-JP';
+      } else if (hasVietnameseDiacritics(clean) || voiceRef?.startsWith('vi')) {
+        utter.lang = 'vi-VN';
+      } else {
+        utter.lang = 'en-US';
+      }
+      utter.rate = Math.max(0.85, Math.min(1.4, config.voiceRate || 1.0));
+      utter.volume = Math.max(0.2, Math.min(1.0, config.voiceVolume || 1.0));
+      window.speechSynthesis.speak(utter);
+    } catch {
+      // Ignore speechSynthesis errors gracefully
+    }
+  };
+
+  const handleRunCountdownPreview = (onFinish?: () => void) => {
     stopCountdownPreview();
     const total = Math.max(1, Math.min(10, Math.round(config.pauseBetweenLinesSec || 5)));
     let current = total;
@@ -321,6 +405,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       current -= 1;
       if (current <= 0) {
         stopCountdownPreview();
+        if (onFinish) onFinish();
         return;
       }
       setPreviewCountdown(current);
@@ -331,8 +416,22 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
 
   useEffect(() => {
     return () => {
+      previewPlayingRef.current = false;
+      if (previewPlayTimerRef.current !== null) {
+        window.clearTimeout(previewPlayTimerRef.current);
+      }
       if (countdownTimerRef.current !== null) {
         window.clearInterval(countdownTimerRef.current);
+      }
+      if (exit2411TimerRef.current !== null) {
+        window.clearTimeout(exit2411TimerRef.current);
+      }
+      try {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+        }
+      } catch {
+        // Ignore
       }
       if (audioCtxRef.current) {
         void audioCtxRef.current.close().catch(() => {});
@@ -341,7 +440,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   }, []);
 
   useEffect(() => {
-    stopCountdownPreview();
+    stopPreviewPlayback();
     setPreviewScenes(config.customScenes ?? []);
     setPreviewAudioUrl(null);
     setTtsPreviewNote(null);
@@ -399,8 +498,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       activeScene?.sentence ??
         previewLines[safeActiveIdx] ??
         previewLines[0] ??
-        'Phụ đề trắng viền đen sắc nét hiển thị tại đây.'
-    ) || 'Phụ đề trắng viền đen sắc nét hiển thị tại đây.';
+        'Clean high-contrast subtitles appear here.'
+    ) || 'Clean high-contrast subtitles appear here.';
 
   const previewBaseSegments = planNarrationSegments({
     script: config.script,
@@ -494,14 +593,26 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const activePreviewCaption = rawActiveSentence;
   const activeRawLine =
     activeRawLineIdx !== null ? rawNonEmptyLines[activeRawLineIdx] : activePreviewCaption;
+  const activeComponentEditIdx = activeRawLineIdx ?? safeActiveIdx;
   const activeSegMeta = activeSegIdx >= 0 ? previewBaseSegments[activeSegIdx] : undefined;
   const activeIsSecondarySlot = activeSegMeta?.voiceSlot === 'secondary';
   const activeIsIntroOrOutro = Boolean(activeSegMeta?.isIntroOrOutro);
   const activeNeutralMeta = getNeutralBgThemeMeta(config.neutralBgTheme);
   const active2411Meta = getStudio2411ThemeMeta(config.studio2411Theme);
+  const rawActive2411Override =
+    activeScene?.componentSpec ??
+    (activeRawLineIdx !== null ? config.sceneComponents?.[activeRawLineIdx] : undefined);
   const active2411Override =
-    activeScene?.componentSpec ?? config.sceneComponents?.[safeActiveIdx];
+    rawActive2411Override &&
+    rawActive2411Override.speechText &&
+    rawActive2411Override.speechText === stripNarrationTags(activeRawLine) &&
+    rawActiveSentence &&
+    rawActive2411Override.speechText !== rawActiveSentence &&
+    rawActive2411Override.speechText.includes(rawActiveSentence)
+      ? { ...rawActive2411Override, speechText: rawActiveSentence }
+      : rawActive2411Override;
   let prevTargetForActive2411: string | undefined;
+  let promptPreviewForActive2411: string | undefined;
   if (!activeIsSecondarySlot && !activeIsIntroOrOutro && activeRawLineIdx !== null && activeRawLineIdx > 0) {
     for (let pi = activeRawLineIdx - 1; pi >= 0; pi--) {
       const candidateLine = rawNonEmptyLines[pi] ?? '';
@@ -516,20 +627,128 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         break;
       }
     }
+  } else if (activeIsSecondarySlot && activeRawLineIdx !== null && activeRawLineIdx > 0) {
+    for (let pi = activeRawLineIdx - 1; pi >= 0; pi--) {
+      const candidateLine = rawNonEmptyLines[pi] ?? '';
+      const candidatePres = analyzeScriptLinePresentation(candidateLine, {
+        scriptStyle: config.scriptStyle,
+      });
+      const looksSecondary =
+        candidatePres.roleKind === 'answer' ||
+        /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(candidateLine);
+      if (
+        !looksSecondary &&
+        candidatePres.roleKind !== 'title' &&
+        candidatePres.roleKind !== 'outro' &&
+        candidatePres.cleanText
+      ) {
+        promptPreviewForActive2411 = candidatePres.cleanText;
+        break;
+      }
+    }
   }
+  const isDualVoiceMode =
+    Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language);
+  const active2411LineText =
+    active2411Override?.speechText && active2411Override.speechText !== stripNarrationTags(activeRawLine)
+      ? activeRawLine
+      : activeRawLine;
   const active2411Spec = build2411CardSpecForLine({
-    rawLine: activeRawLine,
+    rawLine: active2411LineText,
     lineIndex: safeActiveIdx,
     totalLines: Math.max(1, totalPreviewItems),
     isSecondarySlot: activeIsSecondarySlot,
     isIntroOrOutro: activeIsIntroOrOutro,
     scriptStyle: config.scriptStyle,
+    dualVoiceEnabled: isDualVoiceMode,
     themeId: config.studio2411Theme,
     defaultPauseSec: config.pauseBetweenLinesSec ?? 5,
     prevTargetText: prevTargetForActive2411,
+    promptPreviewText: promptPreviewForActive2411,
     animationSeed: captionReplayNonce,
     override: active2411Override,
   });
+  const active2411CardKey = `${safeActiveIdx}_${active2411Spec.variant}_${active2411Spec.resolvedAnimationIn}_${captionReplayNonce}`;
+
+  useEffect(() => {
+    const nextSnap = {
+      key: active2411CardKey,
+      rawLine: activeRawLine,
+      lineIndex: safeActiveIdx,
+      totalLines: Math.max(1, totalPreviewItems),
+      isSecondarySlot: activeIsSecondarySlot,
+      isIntroOrOutro: activeIsIntroOrOutro,
+      scriptStyle: config.scriptStyle,
+      dualVoiceEnabled: isDualVoiceMode,
+      themeId: config.studio2411Theme,
+      pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
+      aspectRatio: config.aspectRatio,
+      prevTargetText: prevTargetForActive2411,
+      promptPreviewText: promptPreviewForActive2411,
+      animationSeed: captionReplayNonce,
+      fontName: config.subtitle.fontName,
+      override: active2411Override,
+    };
+    const prevSnap = current2411SnapRef.current;
+    if (prevSnap && prevSnap.key !== active2411CardKey && config.materialSource === 'studio_2411') {
+      setExiting2411Card(prevSnap);
+      if (exit2411TimerRef.current !== null) {
+        window.clearTimeout(exit2411TimerRef.current);
+      }
+      exit2411TimerRef.current = window.setTimeout(() => {
+        setExiting2411Card(null);
+      }, 340);
+    }
+    current2411SnapRef.current = nextSnap;
+  }, [active2411CardKey]);
+
+  const startPreviewPlayback = () => {
+    const count = Math.max(1, totalPreviewItems);
+    stopPreviewPlayback();
+    previewPlayingRef.current = true;
+    setIsPlayingPreview(true);
+    const startIdx = safeActiveIdx >= count - 1 ? 0 : safeActiveIdx;
+
+    const runStep = (idx: number) => {
+      if (!previewPlayingRef.current) return;
+      if (idx >= count) {
+        stopPreviewPlayback();
+        return;
+      }
+      setActiveSceneIdx(idx);
+      setCaptionReplayNonce((n) => n + 1);
+
+      const lineText =
+        stripNarrationTags(previewScenes[idx]?.sentence ?? previewLines[idx] ?? '') || '';
+      const rawLineForIdx = rawNonEmptyLines[idx] ?? lineText;
+      const segForIdx = previewBaseSegments[idx];
+      const isSecondary = segForIdx?.voiceSlot === 'secondary';
+      speakPreviewSlideText(lineText, isSecondary);
+
+      const hasPause =
+        /\[PAUSE\]/i.test(rawLineForIdx) ||
+        (/^\s*(?:Q|Question)\s*[:：]/i.test(rawLineForIdx) && (config.pauseBetweenLinesSec ?? 0) > 0);
+      const pauseSec = Math.max(0, Math.round(config.pauseBetweenLinesSec ?? 0));
+
+      if (hasPause && pauseSec > 0) {
+        previewPlayTimerRef.current = window.setTimeout(() => {
+          if (!previewPlayingRef.current) return;
+          handleRunCountdownPreview(() => {
+            if (!previewPlayingRef.current) return;
+            runStep(idx + 1);
+          });
+        }, 1250);
+      } else {
+        const readDelayMs = Math.max(2200, Math.min(4200, Math.round(lineText.length * 52 + 1200)));
+        previewPlayTimerRef.current = window.setTimeout(() => {
+          if (!previewPlayingRef.current) return;
+          runStep(idx + 1);
+        }, readDelayMs);
+      }
+    };
+
+    runStep(startIdx);
+  };
   const activeCuratedBgs = selectCuratedBackgroundsForConfig({
     subject: config.subject,
     script: config.script,
@@ -634,9 +853,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       setAiWebPromptMode('from_user_script');
     }
 
+    const nextDualVoice = Boolean(autoLangPatch.dualVoiceEnabled ?? isDualVoiceMode);
     const nextSceneComponents = buildContextualSceneComponentsForScript({
       script: parsed.script,
       scriptStyle: config.scriptStyle,
+      dualVoiceEnabled: nextDualVoice,
       pauseBetweenLinesSec:
         autoLangPatch.pauseBetweenLinesSec ?? config.pauseBetweenLinesSec ?? 5,
       existingOverrides: parsed.sceneComponents,
@@ -712,6 +933,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           scriptStyle: config.scriptStyle,
           sentenceCount: config.sentenceCount,
           llmProvider: config.llmProvider,
+          dualVoiceEnabled: isDualVoiceMode,
         }),
       });
       const data = await safeParseJsonResponse<{
@@ -736,6 +958,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       const nextSceneComponents = buildContextualSceneComponentsForScript({
         script: data.script,
         scriptStyle: config.scriptStyle,
+        dualVoiceEnabled: isDualVoiceMode,
         pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
         existingOverrides: data.sceneComponents,
       });
@@ -806,6 +1029,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           curatedBgCategory: config.curatedBgCategory ?? 'all',
           curatedBgId: config.curatedBgId ?? 'auto',
           scriptStyle: config.scriptStyle,
+          language: config.language,
+          dualVoiceEnabled: isDualVoiceMode,
           pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
           mediaTypeFilter: config.mediaTypeFilter ?? 'all',
           visualMood: config.visualMood ?? 'auto',
@@ -1077,9 +1302,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       : builtinBgm.find((b) => b.id === config.bgmPreset)?.url ?? `/files/bgm/${config.bgmPreset}.mp3`;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      {/* Left Column: Focused 3-Step Video Studio */}
-      <div className="lg:col-span-7 space-y-5">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch lg:flex-1 lg:min-h-0">
+      {/* Left Column: Focused 3-Step Video Studio (independent scroll) */}
+      <div
+        data-testid="studio-left-pane"
+        className="lg:col-span-7 space-y-5 lg:h-full lg:overflow-y-auto overscroll-contain lg:pr-2 pb-6"
+      >
         {/* 1. Real HD Video B-Roll & Framing Settings */}
         <section id="sec-visuals" className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
@@ -1280,6 +1508,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         const autoPlanned = buildContextualSceneComponentsForScript({
                           script: config.script,
                           scriptStyle: config.scriptStyle,
+                          dualVoiceEnabled: isDualVoiceMode,
                           pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
                         });
                         setPreviewScenes([]);
@@ -1357,8 +1586,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       onChange={(e) => {
                         const nextVariant = e.target.value as Studio2411ComponentVariant;
                         const nextList = [...(config.sceneComponents ?? [])];
-                        nextList[safeActiveIdx] = {
-                          ...(nextList[safeActiveIdx] ?? {}),
+                        nextList[activeComponentEditIdx] = {
+                          ...(nextList[activeComponentEditIdx] ?? {}),
                           variant: nextVariant,
                         };
                         setPreviewScenes([]);
@@ -1388,12 +1617,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       </label>
                       <select
                         id="mpt-2411-scene-anim"
-                        value={config.sceneComponents?.[safeActiveIdx]?.animationIn ?? active2411Spec.animationIn}
+                        value={config.sceneComponents?.[activeComponentEditIdx]?.animationIn ?? active2411Spec.animationIn}
                         onChange={(e) => {
                           const nextAnim = e.target.value as Studio2411AnimationIn;
                           const nextList = [...(config.sceneComponents ?? [])];
-                          nextList[safeActiveIdx] = {
-                            ...(nextList[safeActiveIdx] ?? {}),
+                          nextList[activeComponentEditIdx] = {
+                            ...(nextList[activeComponentEditIdx] ?? {}),
                             animationIn: nextAnim,
                           };
                           setPreviewScenes([]);
@@ -1412,12 +1641,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         ))}
                       </select>
                     </div>
-                    {config.sceneComponents?.[safeActiveIdx] && (
+                    {config.sceneComponents?.[activeComponentEditIdx] && (
                       <button
                         type="button"
                         onClick={() => {
                           const nextList = [...(config.sceneComponents ?? [])];
-                          delete nextList[safeActiveIdx];
+                          delete nextList[activeComponentEditIdx];
                           setPreviewScenes([]);
                           setCaptionReplayNonce((n) => n + 1);
                           onChangeConfig({
@@ -1447,11 +1676,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       <input
                         id="mpt-2411-speech-text"
                         type="text"
-                        value={config.sceneComponents?.[safeActiveIdx]?.speechText ?? active2411Spec.speechText}
+                        value={config.sceneComponents?.[activeComponentEditIdx]?.speechText ?? active2411Spec.speechText}
                         onChange={(e) => {
                           const nextList = [...(config.sceneComponents ?? [])];
-                          nextList[safeActiveIdx] = {
-                            ...(nextList[safeActiveIdx] ?? {}),
+                          nextList[activeComponentEditIdx] = {
+                            ...(nextList[activeComponentEditIdx] ?? {}),
                             variant: active2411Spec.variant,
                             speechText: e.target.value,
                           };
@@ -1474,11 +1703,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       <input
                         id="mpt-2411-reaction-text"
                         type="text"
-                        value={config.sceneComponents?.[safeActiveIdx]?.reactionText ?? active2411Spec.reactionText}
+                        value={config.sceneComponents?.[activeComponentEditIdx]?.reactionText ?? active2411Spec.reactionText}
                         onChange={(e) => {
                           const nextList = [...(config.sceneComponents ?? [])];
-                          nextList[safeActiveIdx] = {
-                            ...(nextList[safeActiveIdx] ?? {}),
+                          nextList[activeComponentEditIdx] = {
+                            ...(nextList[activeComponentEditIdx] ?? {}),
                             variant: active2411Spec.variant,
                             reactionText: e.target.value,
                           };
@@ -1504,11 +1733,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   <input
                     id="mpt-2411-example-text"
                     type="text"
-                    value={config.sceneComponents?.[safeActiveIdx]?.exampleText ?? active2411Spec.exampleText ?? ''}
+                    value={config.sceneComponents?.[activeComponentEditIdx]?.exampleText ?? active2411Spec.exampleText ?? ''}
                     onChange={(e) => {
                       const nextList = [...(config.sceneComponents ?? [])];
-                      nextList[safeActiveIdx] = {
-                        ...(nextList[safeActiveIdx] ?? {}),
+                      nextList[activeComponentEditIdx] = {
+                        ...(nextList[activeComponentEditIdx] ?? {}),
                         variant: active2411Spec.variant,
                         exampleText: e.target.value,
                       };
@@ -1850,14 +2079,25 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     checked={
                       Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language)
                     }
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const nextDual = e.target.checked || isBilingualLanguage(config.language);
+                      const nextComponents = buildContextualSceneComponentsForScript({
+                        script: config.script,
+                        scriptStyle: config.scriptStyle,
+                        dualVoiceEnabled: nextDual,
+                        pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
+                      });
+                      setPreviewScenes([]);
+                      setCaptionReplayNonce((n) => n + 1);
                       onChangeConfig({
                         dualVoiceEnabled: e.target.checked,
                         secondaryVoiceId:
                           config.secondaryVoiceId ??
                           getDefaultSecondaryVoiceForLanguage(config.language),
-                      })
-                    }
+                        sceneComponents: nextComponents,
+                        customScenes: undefined,
+                      });
+                    }}
                     className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
                   />
                   <span>
@@ -2526,6 +2766,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     setTermsInput(starter.terms.join(', '));
                     setPreviewScenes([]);
                   }
+                  patch.sceneComponents = buildContextualSceneComponentsForScript({
+                    script: patch.script ?? config.script,
+                    scriptStyle: config.scriptStyle,
+                    dualVoiceEnabled: Boolean(patch.dualVoiceEnabled),
+                    pauseBetweenLinesSec: patch.pauseBetweenLinesSec ?? config.pauseBetweenLinesSec ?? 5,
+                  });
                   onChangeConfig(patch);
                 }}
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
@@ -2598,6 +2844,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     setTermsInput(starter.terms.join(', '));
                     setPreviewScenes([]);
                   }
+                  patch.sceneComponents = buildContextualSceneComponentsForScript({
+                    script: patch.script ?? config.script,
+                    scriptStyle: nextStyle,
+                    dualVoiceEnabled: Boolean(patch.dualVoiceEnabled),
+                    pauseBetweenLinesSec: patch.pauseBetweenLinesSec ?? config.pauseBetweenLinesSec ?? 5,
+                  });
                   onChangeConfig(patch);
                 }}
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
@@ -2813,7 +3065,14 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               id="mpt-script"
               rows={6}
               value={config.script}
-              onChange={(e) => onChangeConfig({ script: e.target.value })}
+              onChange={(e) => {
+                setPreviewScenes([]);
+                onChangeConfig({
+                  script: e.target.value,
+                  sceneComponents: undefined,
+                  customScenes: undefined,
+                });
+              }}
               onPaste={(e) => {
                 const pasted = e.clipboardData?.getData('text');
                 if (!pasted) return;
@@ -2871,7 +3130,17 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         key={lineIdx}
                         type="button"
                         onClick={() => {
-                          setActiveSceneIdx(Math.min(lineIdx, Math.max(0, totalPreviewItems - 1)));
+                          const cleanTarget = stripNarrationTags(line);
+                          const matchedPreviewIdx = previewLines.findIndex(
+                            (pl) =>
+                              pl === cleanTarget ||
+                              (cleanTarget && (cleanTarget.startsWith(pl) || pl.includes(cleanTarget)))
+                          );
+                          const nextPreviewIdx =
+                            matchedPreviewIdx >= 0
+                              ? matchedPreviewIdx
+                              : Math.min(lineIdx, Math.max(0, totalPreviewItems - 1));
+                          setActiveSceneIdx(nextPreviewIdx);
                           setCaptionReplayNonce((n) => n + 1);
                         }}
                         aria-current={isSelectedLine ? 'true' : undefined}
@@ -3102,8 +3371,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         </section>
       </div>
 
-      {/* Right Column: Live Video Stage, Storyboard, Render & Completed Output */}
-      <div className="lg:col-span-5 space-y-5 lg:sticky lg:top-20">
+      {/* Right Column: Live Video Stage, Storyboard, Render & Completed Output (independent scroll) */}
+      <div
+        data-testid="studio-right-pane"
+        className="lg:col-span-5 space-y-5 lg:h-full lg:overflow-y-auto overscroll-contain lg:pr-1 pb-6"
+      >
         <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div>
@@ -3116,14 +3388,33 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                data-testid="preview-play-btn"
+                onClick={isPlayingPreview ? stopPreviewPlayback : startPreviewPlayback}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-md border whitespace-nowrap ${
+                  isPlayingPreview
+                    ? 'text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100'
+                    : 'text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100'
+                }`}
+              >
+                {isPlayingPreview ? (
+                  <Square className="w-3 h-3 fill-current" aria-hidden="true" />
+                ) : (
+                  <Play className="w-3 h-3 fill-current" aria-hidden="true" />
+                )}
+                <span>{isPlayingPreview ? 'Dừng phát' : 'Phát thử Preview'}</span>
+              </button>
               {(config.materialSource === 'studio_2411' ||
                 studioTab === 'learning' ||
                 (config.pauseBetweenLinesSec ?? 0) >= 1.5) && (
                 <button
                   type="button"
                   data-testid="preview-countdown-btn"
-                  onClick={
-                    previewCountdown !== null ? stopCountdownPreview : handleRunCountdownPreview
+                  onClick={() =>
+                    previewCountdown !== null
+                      ? stopCountdownPreview()
+                      : handleRunCountdownPreview()
                   }
                   className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-md whitespace-nowrap"
                 >
@@ -3131,7 +3422,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   <span>
                     {previewCountdown !== null
                       ? 'Dừng đếm ngược'
-                      : `Chạy thử đếm ngược ${Math.max(1, Math.min(10, Math.round(config.pauseBetweenLinesSec || 5)))}s`}
+                      : `Đếm ngược ${Math.max(1, Math.min(10, Math.round(config.pauseBetweenLinesSec || 5)))}s`}
                   </span>
                 </button>
               )}
@@ -3212,22 +3503,68 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   />
                 )
               ) : config.materialSource === 'studio_2411' ? (
-                <Studio2411StageCard
-                  key={`${safeActiveIdx}_${active2411Spec.variant}_${active2411Spec.resolvedAnimationIn}_${captionReplayNonce}`}
-                  rawLine={activeRawLine}
-                  lineIndex={safeActiveIdx}
-                  totalLines={Math.max(1, totalPreviewItems)}
-                  isSecondarySlot={activeIsSecondarySlot}
-                  isIntroOrOutro={activeIsIntroOrOutro}
-                  scriptStyle={config.scriptStyle}
-                  themeId={config.studio2411Theme}
-                  pauseBetweenLinesSec={config.pauseBetweenLinesSec ?? 5}
-                  aspectRatio={config.aspectRatio}
-                  countdownActive={previewCountdown !== null}
-                  prevTargetText={prevTargetForActive2411}
-                  animationSeed={captionReplayNonce}
-                  override={active2411Override}
-                />
+                <div
+                  className="absolute inset-0 overflow-hidden"
+                  style={{
+                    background: `linear-gradient(145deg, ${active2411Meta.bgTopHex}, ${active2411Meta.bgBottomHex})`,
+                  }}
+                >
+                  <div
+                    className="absolute inset-0 opacity-70 pointer-events-none"
+                    style={{
+                      backgroundImage: `linear-gradient(to right, ${active2411Meta.gridColorRgba} 1px, transparent 1px), linear-gradient(to bottom, ${active2411Meta.gridColorRgba} 1px, transparent 1px)`,
+                      backgroundSize: '24px 24px',
+                    }}
+                  />
+                  <div
+                    className="absolute -top-10 -left-10 w-44 h-44 rounded-full blur-2xl opacity-55 pointer-events-none"
+                    style={{ backgroundColor: active2411Meta.bgAccentHex }}
+                  />
+                  {exiting2411Card && (
+                    <div key={`exit_${exiting2411Card.key}`} className="absolute inset-0 z-[5]">
+                      <Studio2411StageCard
+                        rawLine={exiting2411Card.rawLine}
+                        lineIndex={exiting2411Card.lineIndex}
+                        totalLines={exiting2411Card.totalLines}
+                        isSecondarySlot={exiting2411Card.isSecondarySlot}
+                        isIntroOrOutro={exiting2411Card.isIntroOrOutro}
+                        scriptStyle={exiting2411Card.scriptStyle}
+                        dualVoiceEnabled={exiting2411Card.dualVoiceEnabled}
+                        themeId={exiting2411Card.themeId}
+                        pauseBetweenLinesSec={exiting2411Card.pauseBetweenLinesSec}
+                        aspectRatio={exiting2411Card.aspectRatio}
+                        prevTargetText={exiting2411Card.prevTargetText}
+                        promptPreviewText={exiting2411Card.promptPreviewText}
+                        animationSeed={exiting2411Card.animationSeed}
+                        fontName={exiting2411Card.fontName}
+                        hideBackdrop
+                        isExiting
+                        override={exiting2411Card.override}
+                      />
+                    </div>
+                  )}
+                  <div key={active2411CardKey} className="absolute inset-0 z-[10]">
+                    <Studio2411StageCard
+                      rawLine={activeRawLine}
+                      lineIndex={safeActiveIdx}
+                      totalLines={Math.max(1, totalPreviewItems)}
+                      isSecondarySlot={activeIsSecondarySlot}
+                      isIntroOrOutro={activeIsIntroOrOutro}
+                      scriptStyle={config.scriptStyle}
+                      dualVoiceEnabled={isDualVoiceMode}
+                      themeId={config.studio2411Theme}
+                      pauseBetweenLinesSec={config.pauseBetweenLinesSec ?? 5}
+                      aspectRatio={config.aspectRatio}
+                      countdownActive={previewCountdown !== null}
+                      prevTargetText={prevTargetForActive2411}
+                      promptPreviewText={promptPreviewForActive2411}
+                      animationSeed={captionReplayNonce}
+                      fontName={config.subtitle.fontName}
+                      hideBackdrop
+                      override={active2411Override}
+                    />
+                  </div>
+                </div>
               ) : config.materialSource === 'curated_preset' ? (
                 <>
                   <img
@@ -3265,7 +3602,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </div>
               )}
 
-              <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1.5 text-[10px] text-white font-mono drop-shadow pointer-events-none">
+              <div
+                className={`absolute left-2 right-2 flex items-center justify-between gap-1.5 text-white font-mono drop-shadow pointer-events-none ${
+                  config.aspectRatio === '9:16' ? 'top-2.5 text-[10px]' : 'top-1.5 text-[9px]'
+                }`}
+              >
                 <span className="px-1.5 py-0.5 rounded bg-black/55 whitespace-nowrap shrink-0">
                   {config.aspectRatio} · {config.videoQuality ?? '720p'}
                 </span>
@@ -3633,21 +3974,35 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            disabled={isRendering || !config.script.trim()}
-            onClick={onStartRender}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-45 transition-colors whitespace-nowrap"
-          >
-            {isRendering ? (
-              <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Film className="w-4 h-4" aria-hidden="true" />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={isRendering || !config.script.trim()}
+              onClick={onStartRender}
+              className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-45 transition-colors whitespace-nowrap"
+            >
+              {isRendering ? (
+                <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Film className="w-4 h-4" aria-hidden="true" />
+              )}
+              <span>
+                {isRendering ? 'Đang dựng video MP4 chuẩn HD...' : 'Tạo Video Hoàn Chỉnh (.MP4)'}
+              </span>
+            </button>
+
+            {isRendering && (
+              <button
+                type="button"
+                data-testid="cancel-render-btn"
+                onClick={onCancelRender}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-3 text-sm font-semibold text-white bg-rose-600 rounded-lg hover:bg-rose-700 transition-colors whitespace-nowrap shrink-0"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+                <span>Hủy xuất</span>
+              </button>
             )}
-            <span>
-              {isRendering ? 'Đang dựng video MP4 chuẩn HD...' : 'Tạo Video Hoàn Chỉnh (.MP4)'}
-            </span>
-          </button>
+          </div>
 
           {renderJob && (
             <div
@@ -3664,6 +4019,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   className={`h-full transition-all ${
                     renderJob.status === 'error'
                       ? 'bg-rose-600'
+                      : renderJob.status === 'cancelled'
+                      ? 'bg-amber-500'
                       : renderJob.status === 'done'
                       ? 'bg-emerald-600'
                       : 'bg-indigo-600'

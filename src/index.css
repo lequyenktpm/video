@@ -241,3 +241,96 @@
   animation: mpt2411FadeScale 0.4s ease-out both;
 }
 
+@keyframes mpt2411CardExit {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.97);
+  }
+}
+
+.animate-2411-exit {
+  animation: mpt2411CardExit 0.34s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes mptThinkingDot {
+  0%, 70%, 100% {
+    opacity: 0.35;
+    transform: translateY(0) scale(0.86);
+  }
+  32% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.16);
+  }
+}
+
+.animate-2411-think-dot-1 {
+  animation: mptThinkingDot 1.15s ease-in-out infinite;
+  animation-delay: 0ms;
+}
+
+.animate-2411-think-dot-2 {
+  animation: mptThinkingDot 1.15s ease-in-out infinite;
+  animation-delay: 180ms;
+}
+
+.animate-2411-think-dot-3 {
+  animation: mptThinkingDot 1.15s ease-in-out infinite;
+  animation-delay: 360ms;
+}
+
+@keyframes mptMouthTalk {
+  0%, 100% {
+    transform: scaleY(0.32) scaleX(0.92);
+  }
+  25% {
+    transform: scaleY(1.12) scaleX(1.04);
+  }
+  50% {
+    transform: scaleY(0.46) scaleX(0.96);
+  }
+  75% {
+    transform: scaleY(0.95) scaleX(1);
+  }
+}
+
+.animate-2411-mouth-talk {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mptMouthTalk 0.48s ease-in-out infinite;
+}
+
+@keyframes mptHandWave {
+  0%, 100% {
+    transform: rotate(-7deg) translateY(0);
+  }
+  50% {
+    transform: rotate(12deg) translateY(-2.5px);
+  }
+}
+
+.animate-2411-hand-wave {
+  transform-box: fill-box;
+  transform-origin: 20% 80%;
+  animation: mptHandWave 0.72s ease-in-out infinite;
+}
+
+@keyframes mptHandThink {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-1.5px) rotate(-4deg);
+  }
+}
+
+.animate-2411-hand-think {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  animation: mptHandThink 1.3s ease-in-out infinite;
+}
+
+
