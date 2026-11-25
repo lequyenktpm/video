@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  analyzeScriptLinePresentation,
   buildAssFromCues,
   buildCountdownCues,
   buildDualSubtitleCues,
@@ -9,6 +10,8 @@ import {
   buildScenePromptsFromScript,
   buildSmartVietnameseScriptFromFacts,
   buildSrtFromCues,
+  computeVisualMatchScore,
+  detectLineContextVisual,
   detectLineLanguage,
   doesVoiceMatchLanguage,
   extractEnglishSearchTerms,
@@ -16,6 +19,7 @@ import {
   getCanvasDimensions,
   getDefaultSecondaryVoiceForLanguage,
   getDefaultVoiceForLanguage,
+  getNeutralBgThemeMeta,
   getPresetsForLanguage,
   getQualityEncodingParams,
   getScriptLengthSummary,
@@ -26,6 +30,7 @@ import {
   isKnownPresetSubject,
   isOutroTag,
   isTitleOrIntroTag,
+  NEUTRAL_BG_THEMES,
   normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
   pickStudyEnergyEmoji,
@@ -44,6 +49,11 @@ import {
   wrapSubtitleLine,
   RawSegmentTiming,
 } from './mptEngine';
+import {
+  build2411CardSpecForLine,
+  build2411CardSvg,
+  STUDIO_2411_THEMES,
+} from './studioComponents2411';
 import { RenderJobConfig, SubtitleConfig } from './types';
 
 test('getCanvasDimensions and getQualityEncodingParams support 480p, 720p, and 1080p', () => {
@@ -297,28 +307,33 @@ test('detectLineLanguage, stripNarrationTags, and planNarrationSegments handle d
   assert.equal(dialogueSameLang[1].voiceSlot, 'secondary');
 });
 
-test('generateOfflineVietnameseScript generates bilingual language_challenge scripts with Intro, [PAUSE] Q&A, and Outro', () => {
+test('generateOfflineVietnameseScript generates bilingual language_challenge scripts with source-only 5s drill Intro, [PAUSE] Q&A, and source-only Outro', () => {
   const viEn = generateOfflineVietnameseScript('Phản xạ tiếng Anh', 'bilingual', 6, undefined, 'language_challenge');
   const viEnLines = viEn.script.split('\n');
   assert.equal(viEnLines.length, 6);
-  assert.ok(viEnLines[0].includes('Chào mừng') || viEnLines[0].includes('Sẵn sàng'));
+  assert.ok(viEnLines[0].includes('5 giây'));
+  assert.equal(viEnLines[0].includes('[EN]') || viEnLines[0].includes('English:'), false);
   assert.ok(viEn.script.includes('[PAUSE]'));
-  assert.ok(viEn.script.includes('[EN]'));
-  assert.ok(viEnLines[viEnLines.length - 1].includes('Lưu video') || viEnLines[viEnLines.length - 1].includes('bình luận'));
+  assert.ok(viEn.script.includes('English:') || viEn.script.includes('[EN]'));
+  assert.ok(viEnLines[viEnLines.length - 1].startsWith('Outro:'));
+  assert.ok(viEnLines[viEnLines.length - 1].includes('Lưu video'));
 
   const viJa = generateOfflineVietnameseScript('Tiếng Nhật giao tiếp', 'vi_ja', 6, undefined, 'language_challenge');
   const viJaLines = viJa.script.split('\n');
   assert.equal(viJaLines.length, 6);
-  assert.ok(viJaLines[0].includes('sẵn sàng'));
+  assert.ok(viJaLines[0].includes('5 giây'));
+  assert.equal(viJaLines[0].includes('[JA]'), false);
   assert.ok(viJa.script.includes('[JA]'));
+  assert.ok(viJaLines[viJaLines.length - 1].startsWith('Outro:'));
   assert.ok(viJaLines[viJaLines.length - 1].includes('Lưu video'));
 
   const jaEn = generateOfflineVietnameseScript('瞬間英作文', 'ja_en', 6, undefined, 'language_challenge');
   const jaEnLines = jaEn.script.split('\n');
   assert.equal(jaEnLines.length, 6);
-  assert.ok(jaEnLines[0].includes('チャレンジ'));
-  assert.ok(jaEn.script.includes('[JA]'));
-  assert.ok(jaEn.script.includes('[EN]'));
+  assert.ok(jaEnLines[0].includes('5秒'));
+  assert.equal(jaEnLines[0].includes('English:') || jaEnLines[0].includes('[EN]'), false);
+  assert.ok(jaEn.script.includes('English:') || jaEn.script.includes('[EN]'));
+  assert.ok(jaEnLines[jaEnLines.length - 1].startsWith('Outro:'));
   assert.ok(jaEnLines[jaEnLines.length - 1].includes('保存'));
 
   const shortPlain = parseAiWebOrJsonOutput('Hi\nHello', 'Greeting');
@@ -1059,5 +1074,164 @@ test('countdown avoids overlapping tall/center/top subtitles, Intro/Outro stay 1
   assert.equal(interviewFilename.includes('_'), false);
   assert.ok(interviewFilename.startsWith('💼 '));
 });
+
+test('analyzeScriptLinePresentation and detectLineContextVisual identify roles and clean icons', () => {
+  const titlePres = analyzeScriptLinePresentation('Tiêu đề: 1分瞬間英作文チャレンジ！');
+  assert.equal(titlePres.roleKind, 'title');
+  assert.equal(titlePres.roleLabel, 'Mở đầu');
+  assert.equal(titlePres.roleIconKey, 'megaphone');
+  assert.equal(titlePres.roleTone, 'sky');
+
+  const questionPres = analyzeScriptLinePresentation('Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]');
+  assert.equal(questionPres.roleKind, 'question');
+  assert.equal(questionPres.roleLabel, 'Người hỏi');
+  assert.equal(questionPres.roleIconKey, 'hand_raise');
+  assert.equal(questionPres.contextIconKey, 'alert_triangle');
+  assert.equal(questionPres.hasPause, true);
+
+  const answerPres = analyzeScriptLinePresentation('English: Watch out for her!');
+  assert.equal(answerPres.roleKind, 'answer');
+  assert.equal(answerPres.roleLabel, 'Người trả lời');
+  assert.equal(answerPres.roleIconKey, 'chat_quote');
+  assert.equal(answerPres.roleTone, 'emerald');
+  assert.equal(answerPres.contextIconKey, 'alert_triangle');
+
+  const outroPres = analyzeScriptLinePresentation('Outro: Hãy lưu video để ôn tập nhé!');
+  assert.equal(outroPres.roleKind, 'outro');
+  assert.equal(outroPres.roleLabel, 'Kết bài');
+  assert.equal(outroPres.roleIconKey, 'bell');
+
+  assert.equal(detectLineContextVisual('Tại đáy rãnh Mariana, sinh vật biển tự phát sáng').contextIconKey, 'waves');
+  assert.equal(detectLineContextVisual('Pha tách cà phê espresso buổi sáng').contextIconKey, 'coffee');
+  assert.equal(detectLineContextVisual('Phỏng vấn điểm mạnh điểm yếu ở công ty').contextIconKey, 'briefcase');
+  assert.equal(detectLineContextVisual('Hơn 80% đại dương chưa được khám phá').contextIconKey, 'waves');
+  assert.equal(detectLineContextVisual('Top 3 thói quen giúp tăng 45% hiệu suất').contextIconKey, 'bar_chart');
+});
+
+test('computeVisualMatchScore rejects diagrams/logos/creepy imagery and rewards sentence keyword overlap', () => {
+  const diagramScore = computeVisualMatchScore(
+    'Deep ocean food chain diagram infographic.svg',
+    ['deep', 'ocean'],
+    ['ocean']
+  );
+  assert.equal(diagramScore, -10);
+
+  const flagScore = computeVisualMatchScore('Flag of Japan.svg', ['japan', 'tokyo'], ['city']);
+  assert.equal(flagScore, -10);
+
+  const creepyScore = computeVisualMatchScore('Creepy horror skull skeleton ghost', ['night', 'street'], ['city']);
+  assert.equal(creepyScore, -10);
+
+  const medicalScore = computeVisualMatchScore('Bloody surgery room autopsy corpse', ['hospital', 'science'], ['people']);
+  assert.equal(medicalScore, -10);
+
+  const strongMatch = computeVisualMatchScore(
+    'Bioluminescent jellyfish swimming in deep ocean dark water',
+    ['jellyfish', 'deep', 'ocean'],
+    ['underwater']
+  );
+  const weakSubjectOnly = computeVisualMatchScore(
+    'Abstract minimal underwater texture',
+    ['jellyfish', 'deep', 'ocean'],
+    ['underwater']
+  );
+  const unrelatedMatch = computeVisualMatchScore(
+    'Red sports car driving on highway',
+    ['jellyfish', 'deep', 'ocean'],
+    ['underwater']
+  );
+
+  assert.ok(strongMatch >= 16);
+  assert.equal(weakSubjectOnly, 2);
+  assert.equal(unrelatedMatch, 0);
+});
+
+test('NEUTRAL_BG_THEMES and getNeutralBgThemeMeta cover dark and light studio themes', () => {
+  assert.equal(NEUTRAL_BG_THEMES.length, 5);
+  const defaultMeta = getNeutralBgThemeMeta(undefined);
+  assert.equal(defaultMeta.id, 'slate_studio');
+  assert.equal(defaultMeta.isLight, false);
+
+  const warmPaper = getNeutralBgThemeMeta('warm_paper');
+  assert.equal(warmPaper.isLight, true);
+  assert.equal(warmPaper.accentHex, '#0d6efd');
+
+  const cleanGrid = getNeutralBgThemeMeta('clean_grid');
+  assert.equal(cleanGrid.isLight, true);
+});
+
+test('buildAssFromCues emits RoleBadge and CountdownMeta vector progress bar alongside Countdown', () => {
+  const cues = [
+    {
+      index: 1,
+      startSec: 0,
+      endSec: 5,
+      text: '「彼女には気をつけて！」を英語で言えますか？',
+      voiceSlot: 'primary' as const,
+      isStickySource: false,
+      roleKind: 'question' as const,
+      roleLabel: 'Người hỏi',
+    },
+    ...buildCountdownCues(5, 5, 10),
+  ];
+
+  const subCfg: SubtitleConfig = {
+    enabled: true,
+    fontName: 'M PLUS 1p',
+    position: 'bottom',
+    customPositionPct: 84,
+    fontSize: 38,
+    sourceFontSize: 28,
+    textColor: '#FFFFFF',
+    highlightColor: '#2DD4BF',
+    strokeColor: '#0F172A',
+    strokeWidth: 2,
+    boxStyle: 'outline',
+    effect: 'karaoke',
+    showRoleBadges: true,
+  };
+
+  const ass = buildAssFromCues(cues, subCfg, 720, 1280);
+  assert.ok(ass.includes('Style: RoleBadge,'));
+  assert.ok(ass.includes('Style: CountdownMeta,'));
+  assert.ok(ass.includes(',RoleBadge,'));
+  assert.ok(ass.includes('● Người hỏi'));
+  assert.ok(ass.includes('THINK'));
+  assert.ok(ass.includes('\\p1'));
+  assert.ok(ass.includes('\\p0'));
+
+  const assNoBadges = buildAssFromCues(cues, { ...subCfg, showRoleBadges: false }, 720, 1280);
+  assert.equal(assNoBadges.includes(',RoleBadge,'), false);
+});
+
+test('STUDIO_2411_THEMES, build2411CardSpecForLine, and build2411CardSvg build clean study card SVGs', () => {
+  assert.equal(STUDIO_2411_THEMES.length, 5);
+  const spec = build2411CardSpecForLine({
+    rawLine: 'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+    lineIndex: 1,
+    totalLines: 6,
+    scriptStyle: 'language_challenge',
+    themeId: 'cards_pastel',
+    defaultPauseSec: 5,
+  });
+  assert.equal(spec.layoutKind, 'quiz_prompt');
+  assert.equal(spec.kickerLabel, 'LISTEN & TRANSLATE');
+  assert.equal(spec.iconKey, 'alert_triangle');
+  assert.equal(spec.hasPause, true);
+  assert.equal(spec.pauseSec, 5);
+
+  const svg = build2411CardSvg({
+    spec,
+    width: 720,
+    height: 1280,
+  });
+  assert.ok(svg.startsWith('<svg '));
+  assert.ok(svg.includes('LISTEN &amp; TRANSLATE'));
+  assert.ok(svg.includes('THINK TIME · 5S'));
+  assert.ok(svg.includes('#F5F3FF'));
+  assert.equal(svg.includes('undefined'), false);
+});
+
+
 
 

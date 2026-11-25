@@ -32,6 +32,8 @@ const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
     'aerial view of turquoise ocean waves breaking at sunrise',
   ],
   materialSource: 'mixkit_video',
+  neutralBgTheme: 'slate_studio',
+  studio2411Theme: 'cards_pastel',
   mediaTypeFilter: 'all',
   visualMood: 'auto',
   selectedMediaIds: [],
@@ -69,6 +71,7 @@ const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
     strokeWidth: 2.0,
     boxStyle: 'outline',
     effect: 'karaoke',
+    showRoleBadges: false,
   },
 };
 
@@ -79,12 +82,12 @@ const DEFAULT_LEARNING_CONFIG: RenderJobConfig = {
   sentenceCount: 6,
   llmProvider: 'pollinations',
   script: [
-    'Tiêu đề: 1分瞬間英作文チャレンジ！',
-    'English: 1-Minute Instant Translation Challenge!',
+    'Tiêu đề: 今から日本語を読み上げます。5秒以内に英語で言ってみましょう！',
     'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
     'English: Watch out for her!',
     'Q: 「無理しないでね」はどう言いますか？ [PAUSE]',
     'English: Take it easy and don’t push yourself too hard!',
+    'Outro: いくつ言えましたか？気に入ったら保存して練習しましょう！',
   ].join('\n'),
   terms: ['japanese office conversation', 'city walk', 'coffee shop conversation', 'modern office'],
   scenePrompts: [
@@ -96,6 +99,8 @@ const DEFAULT_LEARNING_CONFIG: RenderJobConfig = {
     'professional typing on laptop at bright wooden desk, natural light, no text',
   ],
   materialSource: 'mixkit_video',
+  neutralBgTheme: 'slate_studio',
+  studio2411Theme: 'cards_pastel',
   mediaTypeFilter: 'all',
   visualMood: 'auto',
   selectedMediaIds: [],
@@ -133,6 +138,7 @@ const DEFAULT_LEARNING_CONFIG: RenderJobConfig = {
     strokeWidth: 2.0,
     boxStyle: 'outline',
     effect: 'karaoke',
+    showRoleBadges: true,
   },
 };
 

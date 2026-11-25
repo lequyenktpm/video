@@ -26,11 +26,54 @@ export type VoiceOptionId =
   | 'ja-JP-KeitaNeural';
 
 export type MaterialSource =
+  | 'studio_2411'
   | 'mixkit_video'
   | 'hybrid_real'
+  | 'neutral_css_bg'
   | 'pollinations_scene'
   | 'stock_free'
   | 'local_upload';
+
+export type Studio2411ThemeId =
+  | 'cards_pastel'
+  | 'word_reveal_dark'
+  | 'clean_sky'
+  | 'mint_fresh'
+  | 'warm_editorial';
+
+export type Studio2411ComponentVariant =
+  | 'bs-card-header'
+  | 'css-compare'
+  | 'css-roadmap'
+  | 'css-glass-quote'
+  | 'css-equation'
+  | 'css-flashcard'
+  | 'bs-progress-meter'
+  | 'bs-alert-callout'
+  | 'css-browser-mockup'
+  | 'gauge-tone'
+  | 'staircase-3d';
+
+export type Studio2411AnimationIn = 'pop-up' | 'slide-up' | 'drop-in' | 'fade-scale';
+
+export interface Studio2411SceneComponentOverride {
+  variant?: Studio2411ComponentVariant;
+  animationIn?: Studio2411AnimationIn;
+  title?: string;
+  subtitle?: string;
+  labels?: string[];
+  highlightWord?: string;
+  formula?: string;
+  accentColor?: string;
+  progressPct?: number;
+}
+
+export type NeutralBgTheme =
+  | 'slate_studio'
+  | 'charcoal_pro'
+  | 'soft_indigo'
+  | 'warm_paper'
+  | 'clean_grid';
 
 export type MediaTypeFilter = 'all' | 'video_only' | 'image_only';
 
@@ -85,6 +128,8 @@ export type BgmPreset =
 
 export type FullAnswerRecapMode = 'off' | 'target_full' | 'both_full';
 
+export type ScriptRoleKind = 'title' | 'question' | 'answer' | 'narration' | 'outro';
+
 export interface SubtitleCue {
   index: number;
   startSec: number;
@@ -93,11 +138,15 @@ export interface SubtitleCue {
   text: string;
   voiceSlot?: 'primary' | 'secondary';
   isCountdown?: boolean;
+  countdownTotalSteps?: number;
   isStickySource?: boolean;
   isStaticHold?: boolean;
   isIntroOrOutro?: boolean;
   companionSourceLines?: number;
   companionTargetLines?: number;
+  roleKind?: ScriptRoleKind;
+  roleLabel?: string;
+  contextLabel?: string;
 }
 
 export interface SubtitleConfig {
@@ -113,6 +162,7 @@ export interface SubtitleConfig {
   strokeWidth: number;
   boxStyle: SubtitleBoxStyle;
   effect: SubtitleEffect;
+  showRoleBadges?: boolean;
 }
 
 export interface TopicSuggestion {
@@ -135,6 +185,7 @@ export interface ScenePreviewItem {
   previewUrl: string;
   thumbUrl?: string;
   sourceLabel: string;
+  componentSpec?: Studio2411SceneComponentOverride;
 }
 
 export interface RenderJobConfig {
@@ -146,7 +197,10 @@ export interface RenderJobConfig {
   script: string;
   terms: string[];
   scenePrompts: string[];
+  sceneComponents?: Studio2411SceneComponentOverride[];
   materialSource: MaterialSource;
+  neutralBgTheme?: NeutralBgTheme;
+  studio2411Theme?: Studio2411ThemeId;
   mediaTypeFilter?: MediaTypeFilter;
   visualMood?: VisualMood;
   selectedMediaIds: string[];

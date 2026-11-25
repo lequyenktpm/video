@@ -1,13 +1,25 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { SubtitleConfig, VideoAspectRatio } from '../shared/types';
+import { Clock } from 'lucide-react';
+import { ScriptStyle, SubtitleConfig, VideoAspectRatio } from '../shared/types';
 import {
+  analyzeScriptLinePresentation,
   getCanvasDimensions,
   getSubtitleWrapBudget,
   hasCjkChars,
+  PresentationRoleTone,
   resolveCountdownCenterY,
   tokenizeSubtitleForEffect,
   wrapSubtitleLine,
 } from '../shared/mptEngine';
+import { PresentationIcon } from './PresentationIcon';
+
+const ROLE_TONE_CLASSES: Record<PresentationRoleTone, string> = {
+  indigo: 'bg-indigo-600/90 text-white border-indigo-400/50',
+  emerald: 'bg-emerald-600/90 text-white border-emerald-400/50',
+  sky: 'bg-sky-600/90 text-white border-sky-400/50',
+  amber: 'bg-amber-500/95 text-slate-950 border-amber-300/60',
+  slate: 'bg-slate-800/90 text-slate-100 border-slate-600/60',
+};
 
 interface SubtitlePreviewCaptionProps {
   text: string;
@@ -15,7 +27,63 @@ interface SubtitlePreviewCaptionProps {
   aspectRatio?: VideoAspectRatio;
   replayNonce: number;
   countdownNumber?: number | null;
+  countdownTotalSec?: number;
   pinnedSourceText?: string | null;
+  rawLine?: string;
+  scriptStyle?: ScriptStyle;
+  isSecondarySlot?: boolean;
+  isIntroOrOutro?: boolean;
+  isLightBackground?: boolean;
+}
+
+function needsDarkContrastOnLightBg(hex: string): boolean {
+  const clean = hex.replace('#', '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return true;
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luma > 135;
+}
+
+function computeInlineTokenClasses(tokens: string[], enableHighlight: boolean): string[] {
+  if (!enableHighlight) return tokens.map(() => '');
+  const classes: string[] = new Array(tokens.length).fill('');
+  let inQuote = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const raw = tokens[i];
+    if (raw === '\n') continue;
+    const word = raw.trim();
+    if (!word) continue;
+
+    const hasOpen = /[「『"“]/.test(word);
+    const hasClose = /[」』"”]/.test(word);
+    const isCompleteQuote = /^[「『"“].*[」』"”]$/.test(word);
+
+    if (isCompleteQuote) {
+      classes[i] = 'mpt-caption-chip';
+      continue;
+    }
+    if (hasOpen && !inQuote) {
+      inQuote = true;
+      classes[i] = 'mpt-caption-chip';
+      if (hasClose && !/^[「『"“]$/.test(word)) {
+        inQuote = false;
+      }
+      continue;
+    }
+    if (inQuote) {
+      classes[i] = 'mpt-caption-chip';
+      if (hasClose) {
+        inQuote = false;
+      }
+      continue;
+    }
+    if (/\d/.test(word)) {
+      classes[i] = 'mpt-caption-num';
+    }
+  }
+  return classes;
 }
 
 export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
@@ -24,9 +92,26 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   aspectRatio = '9:16',
   replayNonce,
   countdownNumber = null,
+  countdownTotalSec = 5,
   pinnedSourceText = null,
+  rawLine,
+  scriptStyle,
+  isSecondarySlot = false,
+  isIntroOrOutro = false,
+  isLightBackground = false,
 }) => {
   const effect = subtitle.effect ?? 'karaoke';
+  const showBadges = subtitle.showRoleBadges !== false;
+
+  const presentation = useMemo(
+    () =>
+      analyzeScriptLinePresentation(rawLine || text, {
+        isSecondarySlot,
+        isIntroOrOutro,
+        scriptStyle,
+      }),
+    [rawLine, text, isSecondarySlot, isIntroOrOutro, scriptStyle]
+  );
 
   // Compute exact proportional wrapping matching the ASS subtitle renderer at 720p reference
   const { width, height } = getCanvasDimensions(aspectRatio, '720p');
@@ -38,9 +123,14 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   );
 
   const tokens = useMemo(() => tokenizeSubtitleForEffect(wrappedText), [wrappedText]);
+  const adaptLightContrast = isLightBackground && subtitle.boxStyle !== 'dark_box';
+  const inlineTokenClasses = useMemo(
+    () => computeInlineTokenClasses(tokens, showBadges && !adaptLightContrast),
+    [tokens, showBadges, adaptLightContrast]
+  );
   const [progress, setProgress] = useState(0);
   const subtitleBoxRef = useRef<HTMLDivElement | null>(null);
-  const [countdownTopPct, setCountdownTopPct] = useState<number>(44);
+  const [countdownTopPct, setCountdownTopPct] = useState<number>(53);
 
   useEffect(() => {
     setProgress(0);
@@ -63,11 +153,11 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     return () => window.cancelAnimationFrame(rafId);
   }, [effect, tokens.length, wrappedText, replayNonce]);
 
-  // Preview card CSS widths: 9:16 -> 245px (scale 245/720=0.34), 1:1 -> 300px (300/720=0.416), 16:9 -> ~430px (430/1280=0.336)
+  // Preview card CSS widths: 9:16 -> 245px, 1:1 -> 300px, 16:9 -> ~430px
   const previewScale =
     aspectRatio === '1:1' ? 300 / 720 : aspectRatio === '16:9' ? 430 / 1280 : 245 / 720;
   const previewFontPx = Math.max(11, Math.min(24, Math.round(budget.scaledFontSize * previewScale)));
-  const countdownFontPx = Math.max(38, Math.min(68, Math.round(previewFontPx * 2.55)));
+  const countdownFontPx = Math.max(30, Math.min(54, Math.round(previewFontPx * 2.25)));
 
   const resolveFontCss = (sampleText: string): string => {
     if (subtitle.fontName === 'JetBrains Mono') {
@@ -84,30 +174,36 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   };
 
   const fontCss = resolveFontCss(text);
+  const effectiveTextColor =
+    adaptLightContrast && needsDarkContrastOnLightBg(subtitle.textColor) ? '#0F172A' : subtitle.textColor;
+  const effectiveHighlightColor =
+    adaptLightContrast && needsDarkContrastOnLightBg(subtitle.highlightColor || '#FACC15')
+      ? '#4338CA'
+      : subtitle.highlightColor || '#FACC15';
 
   const baseStyle: React.CSSProperties = {
     fontFamily: fontCss,
     fontSize: `${previewFontPx}px`,
     letterSpacing: '0.015em',
-    color: subtitle.textColor,
+    color: effectiveTextColor,
     overflowWrap: 'break-word',
     wordBreak: 'break-word',
     paintOrder: 'stroke fill',
     WebkitTextStroke:
-      subtitle.boxStyle === 'outline' && subtitle.strokeWidth > 0
+      subtitle.boxStyle === 'outline' && subtitle.strokeWidth > 0 && !adaptLightContrast
         ? `${Math.max(1.0, subtitle.strokeWidth * 0.62)}px ${subtitle.strokeColor}`
         : undefined,
-    textShadow: '0 2px 5px rgba(0,0,0,0.92)',
+    textShadow: adaptLightContrast ? '0 1px 0 rgba(255,255,255,0.85)' : '0 2px 5px rgba(0,0,0,0.92)',
   };
 
   const containerPosStyle: React.CSSProperties =
     subtitle.position === 'top'
-      ? { top: '9%' }
+      ? { top: '11%' }
       : subtitle.position === 'center'
       ? { top: '50%', transform: 'translateY(-50%)' }
       : subtitle.position === 'custom'
       ? { top: `${subtitle.customPositionPct}%`, transform: 'translateY(-50%)' }
-      : { bottom: '13.5%' };
+      : { bottom: '12%' };
 
   const activeWordCount = Math.max(1, Math.ceil(progress * Math.max(1, tokens.length)));
   const isTypingFinished = activeWordCount >= tokens.length;
@@ -149,18 +245,16 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     fontFamily: stickyFontCss,
     fontSize: `${stickyFontPx}px`,
     letterSpacing: '0.015em',
-    color: '#E2E8F0',
+    color: adaptLightContrast ? '#334155' : '#E2E8F0',
     overflowWrap: 'break-word',
     wordBreak: 'break-word',
     paintOrder: 'stroke fill',
     WebkitTextStroke:
-      subtitle.boxStyle === 'outline' && subtitle.strokeWidth > 0
+      subtitle.boxStyle === 'outline' && subtitle.strokeWidth > 0 && !adaptLightContrast
         ? `${Math.max(0.9, subtitle.strokeWidth * 0.56)}px ${subtitle.strokeColor}`
         : undefined,
-    textShadow: '0 2px 5px rgba(0,0,0,0.92)',
+    textShadow: adaptLightContrast ? '0 1px 0 rgba(255,255,255,0.75)' : '0 2px 5px rgba(0,0,0,0.92)',
   };
-
-  const isTopPos = subtitle.position === 'top';
 
   useLayoutEffect(() => {
     const subEl = subtitleBoxRef.current;
@@ -169,18 +263,23 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
     const stageH = stageEl.clientHeight;
     const subTop = subEl.offsetTop;
     const subBottom = subTop + subEl.offsetHeight;
-    const cdHeightPx = Math.max(44, Math.round(countdownFontPx * 1.15));
+    const cdHeightPx = Math.max(88, Math.round(countdownFontPx * 1.8));
+    const bands = [{ topPx: subTop, bottomPx: subBottom }];
+    if (subTop > stageH * 0.56) {
+      bands.push({ topPx: 0, bottomPx: Math.round(stageH * 0.37) });
+    }
     const safeCenterY = resolveCountdownCenterY(
-      [{ topPx: subTop, bottomPx: subBottom }],
+      bands,
       cdHeightPx,
       stageH
     );
-    const nextPct = Math.max(16, Math.min(82, Number(((safeCenterY / stageH) * 100).toFixed(1))));
+    const nextPct = Math.max(18, Math.min(80, Number(((safeCenterY / stageH) * 100).toFixed(1))));
     setCountdownTopPct(nextPct);
   }, [
     countdownNumber,
     wrappedText,
     pinnedSourceText,
+    showBadges,
     subtitle.position,
     subtitle.customPositionPct,
     subtitle.fontSize,
@@ -193,8 +292,8 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   const targetCaptionNode = (
     <p
       key={`${effect}_${wrappedText}_${replayNonce}`}
-      className={`text-center font-bold leading-snug max-w-[92%] ${animClass} ${
-        subtitle.boxStyle === 'dark_box' ? 'px-2.5 py-1 rounded bg-black/70' : ''
+      className={`text-center font-bold leading-snug max-w-[94%] m-0 ${animClass} ${
+        subtitle.boxStyle === 'dark_box' ? 'px-2.5 py-1 rounded bg-black/75' : ''
       }`}
       style={baseStyle}
     >
@@ -206,13 +305,20 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
           const spaceMatch = tok.match(/^(.*?)(\s+)$/);
           const wordPart = spaceMatch ? spaceMatch[1] : tok;
           const spacePart = spaceMatch ? spaceMatch[2] : '';
+          const tokCls = inlineTokenClasses[i] ?? '';
           return (
             <React.Fragment key={i}>
               <span
+                className={tokCls}
                 style={{
-                  color: isHighlighted ? subtitle.highlightColor || '#FACC15' : subtitle.textColor,
-                  display: 'inline-block',
-                  transform: isCurrent ? 'scale(1.03)' : 'scale(1)',
+                  color: isHighlighted ? effectiveHighlightColor : effectiveTextColor,
+                  display: tokCls === 'mpt-caption-chip' ? 'inline' : 'inline-block',
+                  transform:
+                    tokCls === 'mpt-caption-chip'
+                      ? undefined
+                      : isCurrent
+                      ? 'scale(1.03)'
+                      : 'scale(1)',
                   transition: 'color 95ms linear, transform 95ms ease-out',
                 }}
               >
@@ -230,20 +336,26 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
           const spaceMatch = tok.match(/^(.*?)(\s+)$/);
           const wordPart = spaceMatch ? spaceMatch[1] : tok;
           const spacePart = spaceMatch ? spaceMatch[2] : '';
-          const hi = subtitle.highlightColor || '#FACC15';
+          const hi = effectiveHighlightColor;
           return (
             <React.Fragment key={i}>
               <span
+                className={inlineTokenClasses[i] ?? ''}
                 style={{
                   opacity: isLit ? 1 : 0.08,
-                  color: isHead ? '#FFFFFF' : isLit ? hi : subtitle.textColor,
-                  display: 'inline-block',
-                  transform: isHead ? 'scale(1.07)' : 'scale(1)',
+                  color: isHead ? (adaptLightContrast ? '#0D6EFD' : '#FFFFFF') : isLit ? hi : effectiveTextColor,
+                  display: inlineTokenClasses[i] === 'mpt-caption-chip' ? 'inline' : 'inline-block',
+                  transform:
+                    inlineTokenClasses[i] === 'mpt-caption-chip'
+                      ? undefined
+                      : isHead
+                      ? 'scale(1.07)'
+                      : 'scale(1)',
                   textShadow: isHead
-                    ? `0 0 10px ${hi}, 0 0 20px ${hi}, 0 2px 5px rgba(0,0,0,0.95)`
+                    ? `0 0 10px ${hi}, 0 0 20px ${hi}, 0 2px 5px rgba(0,0,0,0.85)`
                     : isLit
-                    ? `0 0 6px ${hi}66, 0 2px 5px rgba(0,0,0,0.92)`
-                    : '0 2px 5px rgba(0,0,0,0.92)',
+                    ? `0 0 6px ${hi}66, 0 2px 5px rgba(0,0,0,0.72)`
+                    : undefined,
                   transition:
                     'opacity 70ms linear, color 140ms ease-out, transform 120ms ease-out, text-shadow 140ms ease-out',
                 }}
@@ -266,6 +378,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
             return (
               <React.Fragment key={i}>
                 <span
+                  className={inlineTokenClasses[i] ?? ''}
                   style={{
                     opacity: visible ? 1 : 0,
                     transition: 'opacity 60ms ease-in',
@@ -278,7 +391,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
                   <span
                     aria-hidden="true"
                     className="animate-mpt-caret inline-block ml-0.5 font-normal"
-                    style={{ color: subtitle.highlightColor || '#FACC15' }}
+                    style={{ color: effectiveHighlightColor }}
                   >
                     |
                   </span>
@@ -299,21 +412,38 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   );
 
   const pinnedSourceNode = wrappedPinnedSource ? (
-    <p
-      data-testid="studio-preview-sticky-source"
-      className={`text-center font-medium leading-snug max-w-[92%] ${
-        subtitle.boxStyle === 'dark_box' ? 'px-2 py-0.5 rounded bg-black/65' : ''
-      }`}
-      style={stickyStyle}
-    >
-      {wrappedPinnedSource.split('\n').map((line, li) => (
-        <React.Fragment key={li}>
-          {li > 0 && <br />}
-          {line}
-        </React.Fragment>
-      ))}
-    </p>
+    <div className="flex flex-col items-center gap-0.5 max-w-[94%]">
+      {showBadges && (
+        <span
+          className={`text-[9px] font-semibold tracking-wider uppercase ${
+            adaptLightContrast ? 'text-indigo-700' : 'text-sky-300'
+          }`}
+        >
+          Prompt
+        </span>
+      )}
+      <p
+        data-testid="studio-preview-sticky-source"
+        className={`text-center font-medium leading-snug m-0 ${
+          subtitle.boxStyle === 'dark_box' ? 'px-2 py-0.5 rounded bg-black/70' : ''
+        }`}
+        style={stickyStyle}
+      >
+        {wrappedPinnedSource.split('\n').map((line, li) => (
+          <React.Fragment key={li}>
+            {li > 0 && <br />}
+            {line}
+          </React.Fragment>
+        ))}
+      </p>
+    </div>
   ) : null;
+
+  const totalCdSteps = Math.max(1, Math.round(countdownTotalSec || 5));
+  const countdownPct =
+    countdownNumber != null
+      ? Math.max(8, Math.min(100, Math.round((countdownNumber / totalCdSteps) * 100)))
+      : 0;
 
   return (
     <>
@@ -326,20 +456,48 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
             transform: 'translateY(-50%)',
           }}
         >
-          <span
-            key={countdownNumber}
-            className="animate-mpt-countdown font-extrabold leading-none tabular-nums select-none"
+          <div
+            className="rounded-xl border border-amber-400/45 shadow-xl px-4 py-2.5 flex flex-col items-center gap-1.5"
             style={{
-              fontFamily: fontCss,
-              fontSize: `${countdownFontPx}px`,
-              color: subtitle.highlightColor || '#FACC15',
-              paintOrder: 'stroke fill',
-              WebkitTextStroke: '3px #000000',
-              textShadow: '0 4px 16px rgba(0,0,0,0.9)',
+              minWidth: '126px',
+              backgroundColor: 'rgba(15, 23, 42, 0.88)',
+              backdropFilter: 'blur(8px)',
             }}
           >
-            {countdownNumber}
-          </span>
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-widest uppercase text-amber-300">
+              <Clock className="w-3 h-3" aria-hidden="true" />
+              <span>THINK</span>
+            </span>
+
+            <span
+              key={countdownNumber}
+              className="animate-mpt-countdown font-extrabold leading-none tabular-nums select-none"
+              style={{
+                fontFamily: fontCss,
+                fontSize: `${countdownFontPx}px`,
+                color: subtitle.highlightColor || '#FACC15',
+                paintOrder: 'stroke fill',
+                WebkitTextStroke: '2.5px #000000',
+                textShadow: '0 4px 14px rgba(0,0,0,0.85)',
+              }}
+            >
+              {countdownNumber}
+            </span>
+
+            <div
+              className="w-full h-1.5 rounded-full bg-slate-700/80 overflow-hidden"
+              role="progressbar"
+              aria-label="Think countdown"
+              aria-valuenow={countdownNumber}
+              aria-valuemin={0}
+              aria-valuemax={totalCdSteps}
+            >
+              <div
+                className="h-full rounded-full bg-amber-400 transition-[width] duration-300 ease-out"
+                style={{ width: `${countdownPct}%` }}
+              />
+            </div>
+          </div>
         </div>
       )}
 
@@ -347,11 +505,23 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
         ref={subtitleBoxRef}
         data-testid="studio-preview-subtitle"
         data-effect={effect}
-        className={`absolute left-3 right-3 flex flex-col items-center pointer-events-none z-10 ${
-          isTopPos ? 'gap-1.5' : 'gap-1.5'
-        }`}
+        className="absolute left-3 right-3 flex flex-col items-center pointer-events-none z-10 gap-1.5"
         style={containerPosStyle}
       >
+        {showBadges && (
+          <div
+            data-testid="preview-role-badge"
+            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[10px] font-semibold tracking-tight shadow-sm ${
+              ROLE_TONE_CLASSES[presentation.roleTone]
+            }`}
+          >
+            <PresentationIcon iconKey={presentation.roleIconKey} className="w-3 h-3 shrink-0" />
+            <span>{presentation.roleLabel}</span>
+            <span className="opacity-60">·</span>
+            <PresentationIcon iconKey={presentation.contextIconKey} className="w-3 h-3 shrink-0" />
+            <span data-testid="preview-context-badge">{presentation.contextLabel}</span>
+          </div>
+        )}
         {targetCaptionNode}
         {pinnedSourceNode}
       </div>

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -8,6 +9,7 @@ import multer from 'multer';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import { GoogleGenAI, Type } from '@google/genai';
 import {
+  analyzeScriptLinePresentation,
   buildAssFromCues,
   buildCountdownCues,
   buildDualSubtitleCues,
@@ -16,10 +18,12 @@ import {
   buildScenePromptsFromScript,
   buildSmartVietnameseScriptFromFacts,
   buildSrtFromCues,
+  computeVisualMatchScore,
   extractEnglishSearchTerms,
   generateOfflineVietnameseScript,
   getCanvasDimensions,
   getDefaultSecondaryVoiceForLanguage,
+  getNeutralBgThemeMeta,
   getQualityEncodingParams,
   getSubtitleWrapBudget,
   hasCjkChars,
@@ -37,16 +41,23 @@ import {
   validateRenderConfig,
 } from './src/shared/mptEngine';
 import {
+  build2411CardSpecForLine,
+  build2411CardSvg,
+  getStudio2411ThemeMeta,
+} from './src/shared/studioComponents2411';
+import {
   BgmPreset,
   GroundingSource,
   LanguageCode,
   MaterialSource,
   MediaAssetItem,
   MediaTypeFilter,
+  NeutralBgTheme,
   RenderJobConfig,
   RenderJobStatus,
   ScenePreviewItem,
   ScriptStyle,
+  Studio2411ThemeId,
   SubtitleCue,
   TopicSuggestion,
   TtsProvider,
@@ -1278,71 +1289,93 @@ async function searchWikimediaCommons(
       ? ['filetype:video']
       : ['filetype:bitmap', 'filetype:video'];
 
-  for (const term of queries.slice(0, 4)) {
-    for (const typeFilter of typeFilters) {
-      if (results.length >= limit) break;
-      try {
-        const q = encodeURIComponent(`${term} ${typeFilter}`);
-        const apiUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${q}&gsrnamespace=6&gsrlimit=8&prop=imageinfo&iiprop=url|mime|size|dimensions&iiurlwidth=1280&format=json`;
-        const res = await fetchWithTimeout(
-          apiUrl,
-          { headers: { 'User-Agent': 'MoneyPrinterTurboVN/2.0 (https://github.com)' } },
-          5000
-        );
-        if (!res.ok) continue;
-        const json = (await res.json()) as {
-          query?: {
-            pages?: Record<
-              string,
-              {
-                pageid: number;
-                title: string;
-                imageinfo?: Array<{
-                  url: string;
-                  thumburl?: string;
-                  mime: string;
-                  size: number;
-                  width?: number;
-                  height?: number;
-                }>;
-              }
-            >;
+  for (const term of queries.slice(0, 5)) {
+    const cleanTerm = term
+      .replace(/[^a-zA-Z0-9\s-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleanTerm) continue;
+    const headWords = cleanTerm.split(' ').slice(0, 3).join(' ');
+    const searchPatterns =
+      headWords.split(' ').length <= 3
+        ? [`intitle:${headWords}`, cleanTerm]
+        : [cleanTerm];
+
+    for (const pattern of searchPatterns) {
+      for (const typeFilter of typeFilters) {
+        if (results.length >= limit) break;
+        try {
+          const q = encodeURIComponent(`${pattern} ${typeFilter}`);
+          const apiUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${q}&gsrnamespace=6&gsrlimit=8&prop=imageinfo&iiprop=url|mime|size|dimensions&iiurlwidth=1280&format=json`;
+          const res = await fetchWithTimeout(
+            apiUrl,
+            { headers: { 'User-Agent': 'MoneyPrinterTurboVN/2.0 (https://github.com)' } },
+            5000
+          );
+          if (!res.ok) continue;
+          const json = (await res.json()) as {
+            query?: {
+              pages?: Record<
+                string,
+                {
+                  pageid: number;
+                  title: string;
+                  imageinfo?: Array<{
+                    url: string;
+                    thumburl?: string;
+                    mime: string;
+                    size: number;
+                    width?: number;
+                    height?: number;
+                  }>;
+                }
+              >;
+            };
           };
-        };
-        const pages = Object.values(json.query?.pages ?? {});
-        for (const page of pages) {
-          const info = page.imageinfo?.[0];
-          if (!info?.url) continue;
-          const lowerTitle = page.title.toLowerCase();
-          if (/(collage|diagram|map|chart|icon|logo|plan|blueprint|poster|stamp|coin)/i.test(lowerTitle)) {
-            continue;
+          const pages = Object.values(json.query?.pages ?? {});
+          for (const page of pages) {
+            const info = page.imageinfo?.[0];
+            if (!info?.url) continue;
+            const lowerTitle = page.title.toLowerCase();
+            if (
+              /(collage|diagram|flowchart|graph|infographic|flag of|coat of arms|signature|map|chart|icon|logo|plan|blueprint|poster|stamp|coin|newspaper|book cover|scan|gravestone|horror|creepy|scary|skull|skeleton|zombie|ghost|monster|blood|gore|surgery|corpse|autopsy|morgue|cemetery|coffin|spider|cockroach|nightmare|demon|devil|warfare|dead body|wound|injury)/i.test(
+                lowerTitle
+              )
+            ) {
+              continue;
+            }
+            const isVideo = info.mime.startsWith('video/') || info.mime === 'application/ogg';
+            const isImage = info.mime === 'image/jpeg' || info.mime === 'image/png';
+            if (!isVideo && !isImage) continue;
+            if (isVideo && (info.size > 15 * 1024 * 1024 || info.size < 25 * 1024)) continue;
+            if (isImage) {
+              if (info.size < 20 * 1024) continue;
+              const w = info.width ?? 0;
+              const h = info.height ?? 0;
+              if (w < 550 || h < 350) continue;
+              const ratio = w / Math.max(1, h);
+              if (ratio > 2.6 || ratio < 0.35) continue;
+            }
+            const mediaUrl = isImage && info.thumburl ? info.thumburl : info.url;
+            if (seenUrls.has(mediaUrl)) continue;
+            seenUrls.add(mediaUrl);
+            results.push({
+              id: `wm_${page.pageid}`,
+              name: page.title.replace(/^File:/, ''),
+              kind: isVideo ? 'video' : 'image',
+              source: 'wikimedia_free',
+              url: mediaUrl,
+              previewThumbUrl: info.thumburl ?? (isImage ? mediaUrl : undefined),
+              mimeType: info.mime,
+              sizeBytes: info.size,
+            });
+            if (results.length >= limit) break;
           }
-          const isVideo = info.mime.startsWith('video/') || info.mime === 'application/ogg';
-          const isImage = info.mime === 'image/jpeg' || info.mime === 'image/png';
-          if (!isVideo && !isImage) continue;
-          if (isVideo && (info.size > 15 * 1024 * 1024 || info.size < 25 * 1024)) continue;
-          if (isImage) {
-            if (info.size < 20 * 1024) continue;
-            if ((info.width ?? 0) < 550 || (info.height ?? 0) < 350) continue;
-          }
-          const mediaUrl = isImage && info.thumburl ? info.thumburl : info.url;
-          if (seenUrls.has(mediaUrl)) continue;
-          seenUrls.add(mediaUrl);
-          results.push({
-            id: `wm_${page.pageid}`,
-            name: page.title.replace(/^File:/, ''),
-            kind: isVideo ? 'video' : 'image',
-            source: 'wikimedia_free',
-            url: mediaUrl,
-            previewThumbUrl: info.thumburl ?? (isImage ? mediaUrl : undefined),
-            mimeType: info.mime,
-            sizeBytes: info.size,
-          });
-          if (results.length >= limit) break;
+        } catch {
+          // Ignore single query error
         }
-      } catch {
-        // Ignore single query error
       }
+      if (results.length >= Math.ceil(limit * 0.7)) break;
     }
   }
 
@@ -1437,7 +1470,7 @@ function getMoodPromptSuffix(mood: VisualMood = 'auto'): string {
     case 'bright':
       return 'bright natural daylight, airy warm uplifting atmosphere, crisp highlights';
     case 'moody':
-      return 'moody dramatic low-key lighting, deep shadows, rich contrast';
+      return 'soft atmospheric twilight lighting, balanced rich contrast, tasteful editorial';
     case 'vibrant':
       return 'vibrant energetic colors, dynamic lively composition, rich saturation';
     case 'minimal':
@@ -1445,9 +1478,16 @@ function getMoodPromptSuffix(mood: VisualMood = 'auto'): string {
     case 'cinematic':
       return 'cinematic 35mm film aesthetic, shallow depth of field, golden hour lighting';
     default:
-      return 'photorealistic cinematic lighting, natural color grading';
+      return 'pleasant warm natural daylight, soothing editorial photography, clean tasteful aesthetic';
   }
 }
+
+function formatCleanAiPrompt(basePrompt: string, moodSuffix: string): string {
+  return `${basePrompt}, ${moodSuffix}, uplifting clean composition, no disturbing elements, no creepy faces, no horror, no injury, no text, no watermark`;
+}
+
+const CREEPY_STOCK_RE =
+  /(horror|creepy|scary|skull|skeleton|zombie|ghost|monster|blood|gore|surgery|corpse|autopsy|morgue|cemetery|coffin|spider|cockroach|nightmare|demon|devil|warfare|dead body|wound|injury)/i;
 
 function getVisualMoodGradeFilter(mood: VisualMood = 'auto'): string {
   switch (mood) {
@@ -1556,13 +1596,15 @@ async function searchMixkitVideos(
             const graph = parsed['@graph'] ?? [];
             for (const item of graph) {
               if (item['@type'] !== 'VideoObject' || !item.contentUrl) continue;
+              const itemName = `${item.name || slug} (${slug})`;
+              if (CREEPY_STOCK_RE.test(itemName)) continue;
               const mp4720 = item.contentUrl.replace(/-(?:360|1080)\.mp4$/i, '-720.mp4');
               if (seenUrls.has(mp4720)) continue;
               seenUrls.add(mp4720);
               const idMatch = mp4720.match(/\/(\d+)(?:-video)?-\d+\.mp4/i);
               results.push({
                 id: `mixkit_${idMatch?.[1] ?? seenUrls.size}`,
-                name: `${item.name || slug} (${slug})`,
+                name: itemName,
                 kind: 'video',
                 source: 'mixkit_free',
                 url: mp4720,
@@ -1601,46 +1643,43 @@ async function searchMixkitVideos(
     })
   );
 
-  // Context-aware fallback (never inject waterfalls/forests for office/interview/city topics!)
-  if (results.length < 4) {
+  // Only try a secondary Mixkit slug when terms explicitly relate to human/work/city topics
+  if (results.length < 3) {
     const joinedTerms = terms.join(' ').toLowerCase();
-    const isHumanOrWork = /(office|interview|meeting|business|student|retail|store|desk|city|team|work|present|speech|people)/i.test(
+    const isHumanOrWork = /(office|interview|meeting|business|student|retail|store|desk|team|work|present|speech|people)/i.test(
       joinedTerms
     );
-    const fallbackSlug = isHumanOrWork
-      ? 'business'
-      : visualMood === 'minimal'
-      ? 'minimal'
-      : visualMood === 'moody'
-      ? 'night'
-      : 'city';
-    try {
-      const fbRes = await fetchWithTimeout(
-        `https://mixkit.co/free-stock-video/${fallbackSlug}/`,
-        { headers: { 'User-Agent': ua } },
-        4500
-      );
-      if (fbRes.ok) {
-        const html = await fbRes.text();
-        const urls = html.match(/https:\/\/assets\.mixkit\.co\/videos\/\d+\/\d+-\d+\.mp4/gi) ?? [];
-        for (const rawUrl of urls) {
-          const mp4720 = rawUrl.replace(/-(?:360|1080)\.mp4$/i, '-720.mp4');
-          if (seenUrls.has(mp4720)) continue;
-          seenUrls.add(mp4720);
-          const idMatch = mp4720.match(/\/(\d+)-\d+\.mp4/i);
-          results.push({
-            id: `mixkit_fb_${idMatch?.[1] ?? seenUrls.size}`,
-            name: `${fallbackSlug} B-roll`,
-            kind: 'video',
-            source: 'mixkit_free',
-            url: mp4720,
-            mimeType: 'video/mp4',
-          });
-          if (results.length >= limit) break;
+    const isCity = /(city|street|urban|tokyo|traffic|buildings)/i.test(joinedTerms);
+    const fallbackSlug = isHumanOrWork ? 'business' : isCity ? 'city' : null;
+    if (fallbackSlug) {
+      try {
+        const fbRes = await fetchWithTimeout(
+          `https://mixkit.co/free-stock-video/${fallbackSlug}/`,
+          { headers: { 'User-Agent': ua } },
+          4500
+        );
+        if (fbRes.ok) {
+          const html = await fbRes.text();
+          const urls = html.match(/https:\/\/assets\.mixkit\.co\/videos\/\d+\/\d+-\d+\.mp4/gi) ?? [];
+          for (const rawUrl of urls) {
+            const mp4720 = rawUrl.replace(/-(?:360|1080)\.mp4$/i, '-720.mp4');
+            if (seenUrls.has(mp4720)) continue;
+            seenUrls.add(mp4720);
+            const idMatch = mp4720.match(/\/(\d+)-\d+\.mp4/i);
+            results.push({
+              id: `mixkit_fb_${idMatch?.[1] ?? seenUrls.size}`,
+              name: `${fallbackSlug} B-roll`,
+              kind: 'video',
+              source: 'mixkit_free',
+              url: mp4720,
+              mimeType: 'video/mp4',
+            });
+            if (results.length >= limit) break;
+          }
         }
+      } catch {
+        // Ignore fallback error
       }
-    } catch {
-      // Ignore fallback error
     }
   }
 
@@ -1653,6 +1692,10 @@ function getSceneCacheKey(params: {
   terms: string[];
   scenePrompts: string[];
   materialSource: MaterialSource;
+  neutralBgTheme?: NeutralBgTheme;
+  studio2411Theme?: Studio2411ThemeId;
+  scriptStyle?: ScriptStyle;
+  pauseBetweenLinesSec?: number;
   mediaTypeFilter: MediaTypeFilter;
   visualMood: VisualMood;
   aspectRatio: VideoAspectRatio;
@@ -1663,11 +1706,16 @@ function getSceneCacheKey(params: {
     t: params.terms,
     p: params.scenePrompts,
     m: params.materialSource,
+    nbt: params.neutralBgTheme ?? 'slate_studio',
+    s2411: params.studio2411Theme ?? 'cards_pastel',
+    ss: params.scriptStyle ?? 'curious_facts',
+    pb: params.pauseBetweenLinesSec ?? 5,
     mt: params.mediaTypeFilter,
     vm: params.visualMood,
     a: params.aspectRatio,
     sel: params.selectedMediaIds,
     subj: params.subject,
+    v: 2,
   });
   return `scenes_${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12)}`;
 }
@@ -1678,6 +1726,10 @@ async function resolveSceneAssets(params: {
   terms: string[];
   scenePrompts: string[];
   materialSource: MaterialSource;
+  neutralBgTheme?: NeutralBgTheme;
+  studio2411Theme?: Studio2411ThemeId;
+  scriptStyle?: ScriptStyle;
+  pauseBetweenLinesSec?: number;
   mediaTypeFilter?: MediaTypeFilter;
   visualMood?: VisualMood;
   aspectRatio: VideoAspectRatio;
@@ -1690,11 +1742,34 @@ async function resolveSceneAssets(params: {
   const visualMood: VisualMood = params.visualMood ?? 'auto';
   const moodSuffix = getMoodPromptSuffix(visualMood);
 
-  const rawSentences = splitScriptSentences(params.script)
-    .map((s) => stripNarrationTags(s))
+  const rawLines = params.script
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((s) => s.trim())
     .filter(Boolean);
+  const sentenceEntries: Array<{ sentence: string; rawLine: string }> = [];
+  for (const line of rawLines) {
+    const splitParts = splitScriptSentences(line);
+    if (splitParts.length === 0) {
+      const cleaned = stripNarrationTags(line);
+      if (cleaned) sentenceEntries.push({ sentence: cleaned, rawLine: line });
+    } else {
+      for (const part of splitParts) {
+        const cleaned = stripNarrationTags(part);
+        if (cleaned) {
+          sentenceEntries.push({ sentence: cleaned, rawLine: line });
+        }
+      }
+    }
+  }
   const effectiveSentences =
-    rawSentences.length > 0 ? rawSentences : [params.subject || 'Khám phá điều kỳ diệu quanh ta'];
+    sentenceEntries.length > 0
+      ? sentenceEntries.map((e) => e.sentence)
+      : [params.subject || 'Khám phá điều kỳ diệu quanh ta'];
+  const sentenceRawLines =
+    sentenceEntries.length > 0
+      ? sentenceEntries.map((e) => e.rawLine)
+      : [params.subject || 'Khám phá điều kỳ diệu quanh ta'];
 
   // Preserve user/AI-provided English terms and merge per-sentence context terms so every part of the script finds matching scenes
   const sentenceExtractedTerms = effectiveSentences.flatMap((sent) =>
@@ -1730,6 +1805,10 @@ async function resolveSceneAssets(params: {
     terms: searchTerms,
     scenePrompts: effectivePrompts,
     materialSource: params.materialSource,
+    neutralBgTheme: params.neutralBgTheme,
+    studio2411Theme: params.studio2411Theme,
+    scriptStyle: params.scriptStyle,
+    pauseBetweenLinesSec: params.pauseBetweenLinesSec,
     mediaTypeFilter,
     visualMood,
     aspectRatio: params.aspectRatio,
@@ -1742,6 +1821,203 @@ async function resolveSceneAssets(params: {
     params.aspectRatio,
     params.videoQuality ?? '720p'
   );
+
+  // Component 2411 Study Card option: generates crisp vector flashcard & infographic PNGs/MP4s per line
+  if (params.materialSource === 'studio_2411') {
+    const themeMeta = getStudio2411ThemeMeta(params.studio2411Theme);
+    const jpFontPath = path.join(FONTS_DIR, 'MPLUS1p-Bold.ttf');
+    const fontFilePath = fs.existsSync(jpFontPath) ? jpFontPath : undefined;
+    const assets2411: ResolvedSceneAsset[] = [];
+
+    for (let idx = 0; idx < effectiveSentences.length; idx++) {
+      const sentence = effectiveSentences[idx];
+      const rawLine = sentenceRawLines[idx] ?? sentence;
+      const linePres = analyzeScriptLinePresentation(rawLine, {
+        scriptStyle: params.scriptStyle,
+      });
+      const spec = build2411CardSpecForLine({
+        rawLine,
+        lineIndex: idx,
+        totalLines: effectiveSentences.length,
+        isSecondarySlot: linePres.roleKind === 'answer',
+        isIntroOrOutro: linePres.roleKind === 'title' || linePres.roleKind === 'outro',
+        scriptStyle: params.scriptStyle,
+        themeId: themeMeta.id,
+        defaultPauseSec: params.pauseBetweenLinesSec ?? 5,
+      });
+
+      const svgPath = path.join(sceneCacheDir, `card2411_${idx}.svg`);
+      const pngPath = path.join(sceneCacheDir, `card2411_${idx}.png`);
+      if (!fs.existsSync(pngPath)) {
+        const svgContent = build2411CardSvg({ spec, width, height, fontFilePath });
+        fs.writeFileSync(svgPath, svgContent, 'utf-8');
+        try {
+          await runFfmpeg(['-y', '-i', svgPath, '-frames:v', '1', pngPath], 12000);
+        } catch {
+          const bgHex = themeMeta.bgBottomHex.replace('#', '');
+          const cardHex = themeMeta.cardBgHex.replace('#', '');
+          const borderHex = themeMeta.cardBorderHex.replace('#', '');
+          const accentHex = themeMeta.accentHex.replace('#', '');
+          const cx = Math.round(width * 0.08);
+          const cy = Math.round(height * 0.10);
+          const cw = Math.round(width * 0.84);
+          const ch = Math.round(height * 0.25);
+          await runFfmpeg(
+            [
+              '-y',
+              '-f',
+              'lavfi',
+              '-i',
+              `color=c=0x${bgHex}:s=${width}x${height}:d=1`,
+              '-vf',
+              `drawgrid=width=40:height=40:thickness=1:color=0x${borderHex}@0.35,drawbox=x=${cx}:y=${cy}:w=${cw}:h=${ch}:color=0x${cardHex}@0.96:t=fill,drawbox=x=${cx}:y=${cy}:w=${cw}:h=8:color=0x${accentHex}@0.95:t=fill`,
+              '-frames:v',
+              '1',
+              pngPath,
+            ],
+            12000
+          );
+        }
+      }
+
+      if (mediaTypeFilter === 'video_only') {
+        const mp4Path = path.join(sceneCacheDir, `card2411_${idx}.mp4`);
+        if (!fs.existsSync(mp4Path)) {
+          await runFfmpeg(
+            [
+              '-y',
+              '-loop',
+              '1',
+              '-framerate',
+              '30',
+              '-i',
+              pngPath,
+              '-t',
+              '3',
+              '-c:v',
+              'libx264',
+              '-preset',
+              'ultrafast',
+              '-pix_fmt',
+              'yuv420p',
+              mp4Path,
+            ],
+            12000
+          );
+        }
+        assets2411.push({
+          index: idx,
+          sentence,
+          prompt: `Component 2411 (${themeMeta.label}) · ${spec.contextLabel}`,
+          kind: 'video',
+          localPath: mp4Path,
+          previewUrl: `/files/cache/${cacheKey}/card2411_${idx}.mp4`,
+          thumbUrl: `/files/cache/${cacheKey}/card2411_${idx}.png`,
+          sourceLabel: `2411: ${themeMeta.label}`,
+        });
+      } else {
+        assets2411.push({
+          index: idx,
+          sentence,
+          prompt: `Component 2411 (${themeMeta.label}) · ${spec.contextLabel}`,
+          kind: 'image',
+          localPath: pngPath,
+          previewUrl: `/files/cache/${cacheKey}/card2411_${idx}.png`,
+          thumbUrl: `/files/cache/${cacheKey}/card2411_${idx}.png`,
+          sourceLabel: `2411: ${themeMeta.label}`,
+        });
+      }
+    }
+
+    params.onLog?.(
+      `Đã dựng ${assets2411.length} thẻ học Component 2411 (${themeMeta.label}) sắc nét.`
+    );
+    return { cacheKey, assets: assets2411 };
+  }
+
+  // Neutral CSS Studio Background option: clean, distraction-free frames matching chosen theme
+  if (params.materialSource === 'neutral_css_bg') {
+    const themeMeta = getNeutralBgThemeMeta(params.neutralBgTheme);
+    const bgHex = themeMeta.bgBottomHex.replace('#', '');
+    const gridHex = themeMeta.gridHex.replace('#', '');
+    const accentHex = themeMeta.accentHex.replace('#', '');
+    const neutralImgPath = path.join(sceneCacheDir, `neutral_${themeMeta.id}.jpg`);
+    const topBandH = Math.max(4, Math.round(height * 0.008));
+
+    if (!fs.existsSync(neutralImgPath)) {
+      await runFfmpeg(
+        [
+          '-y',
+          '-f',
+          'lavfi',
+          '-i',
+          `color=c=0x${bgHex}:s=${width}x${height}:d=1`,
+          '-vf',
+          `drawgrid=width=48:height=48:thickness=1:color=0x${gridHex}@0.38,drawbox=x=0:y=0:w=${width}:h=${topBandH}:color=0x${accentHex}@0.85:t=fill`,
+          '-frames:v',
+          '1',
+          neutralImgPath,
+        ],
+        12000
+      );
+    }
+
+    if (mediaTypeFilter === 'video_only') {
+      const neutralVidPath = path.join(sceneCacheDir, `neutral_${themeMeta.id}.mp4`);
+      if (!fs.existsSync(neutralVidPath)) {
+        await runFfmpeg(
+          [
+            '-y',
+            '-loop',
+            '1',
+            '-framerate',
+            '30',
+            '-i',
+            neutralImgPath,
+            '-t',
+            '3',
+            '-c:v',
+            'libx264',
+            '-preset',
+            'ultrafast',
+            '-pix_fmt',
+            'yuv420p',
+            neutralVidPath,
+          ],
+          12000
+        );
+      }
+      params.onLog?.(`Đã tạo nền CSS trung tính (${themeMeta.label}) dạng video lặp mượt.`);
+      return {
+        cacheKey,
+        assets: effectiveSentences.map((sentence, idx) => ({
+          index: idx,
+          sentence,
+          prompt: `Neutral Studio (${themeMeta.label})`,
+          kind: 'video',
+          localPath: neutralVidPath,
+          previewUrl: `/files/cache/${cacheKey}/neutral_${themeMeta.id}.mp4`,
+          thumbUrl: `/files/cache/${cacheKey}/neutral_${themeMeta.id}.jpg`,
+          sourceLabel: `Nền Studio: ${themeMeta.label}`,
+        })),
+      };
+    }
+
+    params.onLog?.(`Đã tạo nền trung tính CSS Studio (${themeMeta.label}) cho ${effectiveSentences.length} câu.`);
+    return {
+      cacheKey,
+      assets: effectiveSentences.map((sentence, idx) => ({
+        index: idx,
+        sentence,
+        prompt: `Neutral Studio (${themeMeta.label})`,
+        kind: 'image',
+        localPath: neutralImgPath,
+        previewUrl: `/files/cache/${cacheKey}/neutral_${themeMeta.id}.jpg`,
+        thumbUrl: `/files/cache/${cacheKey}/neutral_${themeMeta.id}.jpg`,
+        sourceLabel: `Nền Studio: ${themeMeta.label}`,
+      })),
+    };
+  }
 
   // If user edited/replaced/deleted scenes in the storyboard, honor them directly!
   if (params.customScenes && params.customScenes.length > 0) {
@@ -1870,6 +2146,33 @@ async function resolveSceneAssets(params: {
     params.onLog?.('Chưa có tệp tải lên khớp loại tư liệu -> tự động tìm từ kho trực tuyến.');
   }
 
+  // Enrich per-sentence English queries & context keywords via real translation when needed
+  const perSentenceEnglish = await Promise.all(
+    effectiveSentences.map(async (sent, idx) => {
+      const mapped = extractEnglishSearchTerms(sent, '').filter(
+        (t) => !t.includes('cinematic nature landscape')
+      );
+      if (mapped.length > 0 && !hasVietnameseDiacritics(sent) && !hasCjkChars(sent)) {
+        return mapped[0];
+      }
+      if (idx < 10 && (hasVietnameseDiacritics(sent) || hasCjkChars(sent))) {
+        const tr = await translateToEn(sent);
+        if (tr && tr.length >= 4) return tr;
+      }
+      return mapped[0] ?? effectivePrompts[idx] ?? searchTerms[idx % Math.max(1, searchTerms.length)] ?? 'scene';
+    })
+  );
+
+  // Merge translated per-sentence terms into searchTerms before querying stock media
+  const enrichedQueries = Array.from(
+    new Set([
+      ...searchTerms,
+      ...perSentenceEnglish
+        .map((q) => tokenizeEnglishContextWords(q).slice(0, 3).join(' '))
+        .filter((q) => q.length >= 4),
+    ])
+  ).slice(0, 7);
+
   const desiredClipCount = Math.max(8, effectiveSentences.length * 2);
   let mixkitVideos: MediaAssetItem[] = [];
   if (
@@ -1878,16 +2181,16 @@ async function resolveSceneAssets(params: {
       params.materialSource === 'hybrid_real' ||
       params.materialSource === 'local_upload')
   ) {
-    params.onLog?.(`Đang tìm video B-roll HD sát ngữ cảnh cho: ${searchTerms.slice(0, 4).join(', ')}...`);
-    mixkitVideos = await searchMixkitVideos(searchTerms, desiredClipCount + 8, visualMood);
+    params.onLog?.(`Đang tìm video B-roll HD sát ngữ cảnh cho: ${enrichedQueries.slice(0, 4).join(', ')}...`);
+    mixkitVideos = await searchMixkitVideos(enrichedQueries, desiredClipCount + 8, visualMood);
     if (mixkitVideos.length > 0) {
       params.onLog?.(`Đã tìm thấy ${mixkitVideos.length} video B-roll HD thực tế từ Mixkit.`);
     }
   }
 
   const [archiveItems, wmItems] = await Promise.all([
-    mediaTypeFilter === 'image_only' ? Promise.resolve([]) : searchArchiveOrgMp4s(searchTerms, 4),
-    searchWikimediaCommons(searchTerms, 12, mediaTypeFilter),
+    mediaTypeFilter === 'image_only' ? Promise.resolve([]) : searchArchiveOrgMp4s(enrichedQueries, 4),
+    searchWikimediaCommons(enrichedQueries, 14, mediaTypeFilter),
   ]);
   const stockImages = mediaTypeFilter === 'video_only' ? [] : wmItems.filter((i) => i.kind === 'image');
   const stockVideos =
@@ -1895,10 +2198,20 @@ async function resolveSceneAssets(params: {
       ? []
       : [...mixkitVideos, ...wmItems.filter((i) => i.kind === 'video'), ...archiveItems];
 
-  const getSentenceContextKeywords = (sentence: string, prompt: string): string[] => {
-    const mapped = extractEnglishSearchTerms(sentence, '');
+  const subjectContextWords = Array.from(
+    new Set([
+      ...tokenizeEnglishContextWords(params.subject),
+      ...searchTerms.flatMap((t) => tokenizeEnglishContextWords(t)),
+    ])
+  );
+
+  const getSentenceContextKeywords = (sentence: string, prompt: string, translated: string): string[] => {
+    const mapped = extractEnglishSearchTerms(sentence, '').filter(
+      (t) => !t.includes('cinematic nature landscape')
+    );
     return Array.from(
       new Set([
+        ...tokenizeEnglishContextWords(translated),
         ...tokenizeEnglishContextWords(prompt),
         ...tokenizeEnglishContextWords(sentence),
         ...mapped.flatMap((m) => tokenizeEnglishContextWords(m)),
@@ -1906,125 +2219,217 @@ async function resolveSceneAssets(params: {
     );
   };
 
-  // Image-only mode: use context-matched Wikimedia photos or AI mood-matched illustrations per sentence
+  // Image-only mode: prefer clean context-matched stock photos (2-4 reused across sentences), or max 3 clean pleasant AI images
   if (mediaTypeFilter === 'image_only') {
     let imgUseCount = 0;
-    const usedImgUrls = new Set<string>();
-    const resolvedImages = await Promise.all(
-      effectiveSentences.map(async (sentence, idx): Promise<ResolvedSceneAsset | null> => {
-        const prompt = effectivePrompts[idx] ?? searchTerms[idx % searchTerms.length] ?? 'scene';
-        const ctxWords = getSentenceContextKeywords(sentence, prompt);
-        const scored = stockImages
-          .map((item) => ({
-            item,
-            score: scoreAssetContextRelevance(item.name, ctxWords) - (usedImgUrls.has(item.url) ? 2 : 0),
-          }))
-          .sort((a, b) => b.score - a.score);
-        const bestPhoto = scored[0];
+    const cleanStockImgPool: ResolvedSceneAsset[] = [];
+    const seenImgUrls = new Set<string>();
 
-        if (bestPhoto && (bestPhoto.score > 0 || params.materialSource === 'stock_free')) {
-          usedImgUrls.add(bestPhoto.item.url);
-          const wmFile = `wm_photo_${idx}.jpg`;
-          const wmPath = path.join(sceneCacheDir, wmFile);
-          const ok = await downloadRemoteMedia(bestPhoto.item.url, 'image', wmPath);
-          if (ok) {
-            imgUseCount++;
-            return {
-              index: idx,
-              sentence,
-              prompt,
-              kind: 'image',
-              localPath: wmPath,
-              previewUrl: `/files/cache/${cacheKey}/${wmFile}`,
-              sourceLabel: 'Wikimedia Ảnh thật',
-            };
-          }
-        }
+    const scoredStockImgs = stockImages
+      .map((item) => ({
+        item,
+        score: computeVisualMatchScore(item.name, subjectContextWords, subjectContextWords),
+      }))
+      .filter((x) => x.score >= 2)
+      .sort((a, b) => b.score - a.score);
 
-        const aiFile = `scene_${idx}_ai.jpg`;
-        const aiPath = path.join(sceneCacheDir, aiFile);
-        const aiPrompt = `${prompt}, ${moodSuffix}, no text`;
-        const aiOk = await fetchPollinationsSceneImage({
-          prompt: aiPrompt,
-          width,
-          height,
-          outPath: aiPath,
-          seed: 4200 + idx * 17,
+    for (const candidate of scoredStockImgs.slice(0, 4)) {
+      if (seenImgUrls.has(candidate.item.url)) continue;
+      const wmFile = `wm_photo_${cleanStockImgPool.length}.jpg`;
+      const wmPath = path.join(sceneCacheDir, wmFile);
+      if (await downloadRemoteMedia(candidate.item.url, 'image', wmPath)) {
+        seenImgUrls.add(candidate.item.url);
+        imgUseCount++;
+        cleanStockImgPool.push({
+          index: cleanStockImgPool.length,
+          sentence: effectiveSentences[cleanStockImgPool.length] ?? params.subject,
+          prompt: candidate.item.name,
+          kind: 'image',
+          localPath: wmPath,
+          previewUrl: `/files/cache/${cacheKey}/${wmFile}`,
+          sourceLabel: 'Wikimedia Ảnh thật (Chọn lọc)',
         });
-        if (aiOk) {
-          return {
-            index: idx,
-            sentence,
-            prompt: aiPrompt,
-            kind: 'image',
-            localPath: aiPath,
-            previewUrl: `/files/cache/${cacheKey}/${aiFile}`,
-            sourceLabel: 'Ảnh AI Theo Ngữ Cảnh',
-          };
-        }
+      }
+    }
 
-        if (stockImages.length > 0) {
-          const fallbackImg = stockImages[idx % stockImages.length];
-          const wmFile = `wm_fb_${idx}.jpg`;
-          const wmPath = path.join(sceneCacheDir, wmFile);
-          if (await downloadRemoteMedia(fallbackImg.url, 'image', wmPath)) {
-            return {
-              index: idx,
-              sentence,
-              prompt,
-              kind: 'image',
-              localPath: wmPath,
-              previewUrl: `/files/cache/${cacheKey}/${wmFile}`,
-              sourceLabel: 'Wikimedia Ảnh thật',
-            };
-          }
-        }
-        return null;
-      })
-    );
-
-    const validImgs = resolvedImages.filter((a): a is ResolvedSceneAsset => a !== null);
-    if (validImgs.length > 0) {
+    if (cleanStockImgPool.length > 0) {
       params.onLog?.(
-        `Đã chuẩn bị ${validImgs.length} ảnh tĩnh khớp ngữ cảnh & phong cách "${visualMood}" (${imgUseCount} ảnh Wikimedia).`
+        `Đã chọn lọc ${cleanStockImgPool.length} ảnh thật sạch, hợp ngữ cảnh & luân phiên mượt cho ${effectiveSentences.length} câu.`
       );
-      return { cacheKey, assets: validImgs };
+      return {
+        cacheKey,
+        assets: effectiveSentences.map((sentence, idx) => {
+          const base = cleanStockImgPool[idx % cleanStockImgPool.length];
+          return { ...base, index: idx, sentence };
+        }),
+      };
+    }
+
+    // Fallback to at most 3 tasteful non-creepy AI illustrations reused cleanly across sentences
+    const maxAi = Math.min(3, effectiveSentences.length);
+    const aiPool: ResolvedSceneAsset[] = [];
+    for (let idx = 0; idx < maxAi; idx++) {
+      const enSent = perSentenceEnglish[idx] ?? '';
+      const basePrompt =
+        enSent.length >= 6
+          ? `${enSent}, pleasant natural photography`
+          : effectivePrompts[idx] ?? searchTerms[idx % searchTerms.length] ?? 'calm study scene';
+      const aiFile = `scene_${idx}_ai.jpg`;
+      const aiPath = path.join(sceneCacheDir, aiFile);
+      const aiPrompt = formatCleanAiPrompt(basePrompt, moodSuffix);
+      const aiOk = await fetchPollinationsSceneImage({
+        prompt: aiPrompt,
+        width,
+        height,
+        outPath: aiPath,
+        seed: 4200 + idx * 17,
+      });
+      if (aiOk) {
+        aiPool.push({
+          index: idx,
+          sentence: effectiveSentences[idx],
+          prompt: aiPrompt,
+          kind: 'image',
+          localPath: aiPath,
+          previewUrl: `/files/cache/${cacheKey}/${aiFile}`,
+          sourceLabel: 'Ảnh minh họa chọn lọc',
+        });
+      }
+    }
+
+    if (aiPool.length > 0) {
+      params.onLog?.(
+        `Đã chuẩn bị ${aiPool.length} ảnh tĩnh sáng sủa hợp ngữ cảnh cho ${effectiveSentences.length} câu (${imgUseCount} ảnh Wikimedia).`
+      );
+      return {
+        cacheKey,
+        assets: effectiveSentences.map((sentence, idx) => {
+          const base = aiPool[idx % aiPool.length];
+          return { ...base, index: idx, sentence };
+        }),
+      };
     }
   }
 
-  // Video-first or Mixed mode: assign each sentence the highest context-scoring distinct video/image
+  // Video-first or Mixed mode: prefer 2-4 clean context-matched real clips/photos before touching AI
   if (
-    stockVideos.length >= 2 &&
-    (mediaTypeFilter === 'video_only' ||
-      params.materialSource === 'mixkit_video' ||
-      params.materialSource === 'hybrid_real')
+    mediaTypeFilter === 'video_only' ||
+    params.materialSource === 'mixkit_video' ||
+    params.materialSource === 'hybrid_real'
   ) {
-    const usedVideoUrls = new Set<string>();
-    const assets: ResolvedSceneAsset[] = [];
+    const verifiedPool: ResolvedSceneAsset[] = [];
+    const usedPoolUrls = new Set<string>();
+    const allContextWords = Array.from(
+      new Set([
+        ...subjectContextWords,
+        ...effectiveSentences.flatMap((sent, idx) =>
+          getSentenceContextKeywords(sent, effectivePrompts[idx] ?? '', perSentenceEnglish[idx] ?? '')
+        ),
+      ])
+    );
 
-    for (let i = 0; i < effectiveSentences.length; i++) {
-      const sentence = effectiveSentences[i];
-      const prompt = effectivePrompts[i] ?? searchTerms[i % searchTerms.length] ?? 'scene';
-      const ctxWords = getSentenceContextKeywords(sentence, prompt);
-      const ranked = stockVideos
+    const rankedGlobalVideos = stockVideos
+      .map((item) => ({
+        item,
+        score: computeVisualMatchScore(item.name, allContextWords, subjectContextWords),
+      }))
+      .filter((x) => x.score >= 2)
+      .sort((a, b) => b.score - a.score);
+
+    for (const cand of rankedGlobalVideos.slice(0, 4)) {
+      if (usedPoolUrls.has(cand.item.url)) continue;
+      if (cand.item.source === 'mixkit_free') {
+        usedPoolUrls.add(cand.item.url);
+        verifiedPool.push({
+          index: verifiedPool.length,
+          sentence: effectiveSentences[verifiedPool.length] ?? params.subject,
+          prompt: cand.item.name,
+          kind: 'video',
+          localPath: '',
+          remoteUrl: cand.item.url,
+          previewUrl: cand.item.url,
+          thumbUrl: cand.item.previewThumbUrl,
+          sourceLabel: cand.score >= 4 ? 'Mixkit HD (Khớp ngữ cảnh)' : 'Mixkit Stock HD',
+        });
+      } else {
+        const ext = cand.item.mimeType?.includes('ogg') ? '.ogv' : '.mp4';
+        const vidFile = `stock_pool_${verifiedPool.length}${ext}`;
+        const vidPath = path.join(sceneCacheDir, vidFile);
+        if (await downloadRemoteMedia(cand.item.url, 'video', vidPath)) {
+          usedPoolUrls.add(cand.item.url);
+          verifiedPool.push({
+            index: verifiedPool.length,
+            sentence: effectiveSentences[verifiedPool.length] ?? params.subject,
+            prompt: cand.item.name,
+            kind: 'video',
+            localPath: vidPath,
+            previewUrl: `/files/cache/${cacheKey}/${vidFile}`,
+            sourceLabel: cand.item.source === 'archive_free' ? 'Archive.org MP4' : 'Wikimedia Video',
+          });
+        }
+      }
+      if (verifiedPool.length >= 4) break;
+    }
+
+    if (verifiedPool.length < 2 && mediaTypeFilter !== 'video_only') {
+      const rankedGlobalImages = stockImages
         .map((item) => ({
           item,
-          score: scoreAssetContextRelevance(item.name, ctxWords) - (usedVideoUrls.has(item.url) ? 3 : 0),
+          score: computeVisualMatchScore(item.name, allContextWords, subjectContextWords),
         }))
+        .filter((x) => x.score >= 3)
         .sort((a, b) => b.score - a.score);
-      const top = ranked[0];
 
-      // In hybrid_real + all mode, if stock video score <= 0 and scene index alternates, generate crisp context-exact AI scene image
-      if (
-        mediaTypeFilter === 'all' &&
-        params.materialSource === 'hybrid_real' &&
-        top.score <= 0 &&
-        i % 2 === 1 &&
-        i < 8
-      ) {
+      for (const cand of rankedGlobalImages.slice(0, 3)) {
+        if (usedPoolUrls.has(cand.item.url)) continue;
+        const wmFile = `wm_pool_${verifiedPool.length}.jpg`;
+        const wmPath = path.join(sceneCacheDir, wmFile);
+        if (await downloadRemoteMedia(cand.item.url, 'image', wmPath)) {
+          usedPoolUrls.add(cand.item.url);
+          verifiedPool.push({
+            index: verifiedPool.length,
+            sentence: effectiveSentences[verifiedPool.length] ?? params.subject,
+            prompt: cand.item.name,
+            kind: 'image',
+            localPath: wmPath,
+            previewUrl: `/files/cache/${cacheKey}/${wmFile}`,
+            sourceLabel: 'Wikimedia Ảnh thật (Khớp ngữ cảnh)',
+          });
+        }
+        if (verifiedPool.length >= 4) break;
+      }
+    }
+
+    if (verifiedPool.length > 0) {
+      params.onLog?.(
+        `Đã chọn lọc ${verifiedPool.length} tư liệu sạch khớp ngữ cảnh, luân phiên mượt cho ${effectiveSentences.length} câu.`
+      );
+      return {
+        cacheKey,
+        assets: effectiveSentences.map((sentence, idx) => {
+          const picked = verifiedPool[idx % verifiedPool.length];
+          return {
+            ...picked,
+            index: idx,
+            sentence,
+          };
+        }),
+      };
+    }
+
+    // Only synthesize up to 3 clean non-creepy AI illustrations if stock yielded zero relevant matches
+    if (mediaTypeFilter !== 'video_only') {
+      const maxAi = Math.min(3, effectiveSentences.length);
+      const aiPool: ResolvedSceneAsset[] = [];
+      for (let i = 0; i < maxAi; i++) {
+        const enSent = perSentenceEnglish[i] ?? '';
+        const basePrompt =
+          enSent.length >= 6
+            ? `${enSent}, warm lifestyle photography`
+            : effectivePrompts[i] ?? searchTerms[i % searchTerms.length] ?? 'pleasant study workspace';
         const aiFile = `scene_${i}_ai.jpg`;
         const aiPath = path.join(sceneCacheDir, aiFile);
-        const aiPrompt = `${prompt}, ${moodSuffix}, no text`;
+        const aiPrompt = formatCleanAiPrompt(basePrompt, moodSuffix);
         const aiOk = await fetchPollinationsSceneImage({
           prompt: aiPrompt,
           width,
@@ -2033,65 +2438,26 @@ async function resolveSceneAssets(params: {
           seed: 5100 + i * 23,
         });
         if (aiOk) {
-          assets.push({
+          aiPool.push({
             index: i,
-            sentence,
+            sentence: effectiveSentences[i],
             prompt: aiPrompt,
             kind: 'image',
             localPath: aiPath,
             previewUrl: `/files/cache/${cacheKey}/${aiFile}`,
-            sourceLabel: 'Ảnh AI Theo Ngữ Cảnh',
-          });
-          continue;
-        }
-      }
-
-      const chosen = top.item;
-      usedVideoUrls.add(chosen.url);
-      if (chosen.source === 'mixkit_free') {
-        assets.push({
-          index: i,
-          sentence,
-          prompt: chosen.name,
-          kind: 'video',
-          localPath: '',
-          remoteUrl: chosen.url,
-          previewUrl: chosen.url,
-          thumbUrl: chosen.previewThumbUrl,
-          sourceLabel: 'Mixkit Stock HD',
-        });
-      } else {
-        const ext = chosen.mimeType?.includes('ogg') ? '.ogv' : '.mp4';
-        const vidFile = `stock_vid_${i}${ext}`;
-        const vidPath = path.join(sceneCacheDir, vidFile);
-        const ok = await downloadRemoteMedia(chosen.url, 'video', vidPath);
-        if (ok) {
-          assets.push({
-            index: i,
-            sentence,
-            prompt,
-            kind: 'video',
-            localPath: vidPath,
-            previewUrl: `/files/cache/${cacheKey}/${vidFile}`,
-            sourceLabel: chosen.source === 'archive_free' ? 'Archive.org MP4' : 'Wikimedia Video',
-          });
-        } else {
-          assets.push({
-            index: i,
-            sentence,
-            prompt: mixkitVideos[i % Math.max(1, mixkitVideos.length)]?.name ?? prompt,
-            kind: 'video',
-            localPath: '',
-            remoteUrl: mixkitVideos[i % Math.max(1, mixkitVideos.length)]?.url ?? chosen.url,
-            previewUrl: mixkitVideos[i % Math.max(1, mixkitVideos.length)]?.url ?? chosen.url,
-            sourceLabel: 'Mixkit Stock HD',
+            sourceLabel: 'Ảnh minh họa chọn lọc',
           });
         }
       }
-    }
-
-    if (assets.length > 0) {
-      return { cacheKey, assets };
+      if (aiPool.length > 0) {
+        return {
+          cacheKey,
+          assets: effectiveSentences.map((sentence, idx) => {
+            const picked = aiPool[idx % aiPool.length];
+            return { ...picked, index: idx, sentence };
+          }),
+        };
+      }
     }
   }
 
@@ -2100,7 +2466,7 @@ async function resolveSceneAssets(params: {
     const hookFile = 'scene_0_ai.jpg';
     const hookPath = path.join(sceneCacheDir, hookFile);
     const aiOk = await fetchPollinationsSceneImage({
-      prompt: `${effectivePrompts[0] ?? searchTerms[0]}, ${moodSuffix}, no text`,
+      prompt: formatCleanAiPrompt(effectivePrompts[0] ?? searchTerms[0] ?? 'pleasant scene', moodSuffix),
       width,
       height,
       outPath: hookPath,
@@ -2114,7 +2480,7 @@ async function resolveSceneAssets(params: {
         kind: 'image',
         localPath: hookPath,
         previewUrl: `/files/cache/${cacheKey}/${hookFile}`,
-        sourceLabel: 'Pollinations AI Scene',
+        sourceLabel: 'Ảnh minh họa chọn lọc',
       };
     }
   }
@@ -2294,21 +2660,7 @@ async function normalizeMediaToClip(params: {
 
   try {
     if (kind === 'image') {
-      const overW = Math.round(width * 1.12);
-      const overH = Math.round(height * 1.12);
       const durStr = safeDur.toFixed(2);
-      let cropExpr: string;
-      const mode = motionVariant % 4;
-      if (mode === 0) {
-        cropExpr = `crop=${width}:${height}:x='(iw-${width})*t/${durStr}':y='(ih-${height})/2'`;
-      } else if (mode === 1) {
-        cropExpr = `crop=${width}:${height}:x='(iw-${width})*(1-t/${durStr})':y='(ih-${height})/2'`;
-      } else if (mode === 2) {
-        cropExpr = `crop=${width}:${height}:x='(iw-${width})/2':y='(ih-${height})*t/${durStr}'`;
-      } else {
-        cropExpr = `crop=${width}:${height}:x='(iw-${width})/2':y='(ih-${height})*(1-t/${durStr})'`;
-      }
-
       await runFfmpeg(
         [
           '-y',
@@ -2319,7 +2671,7 @@ async function normalizeMediaToClip(params: {
           '-i',
           sourcePath,
           '-vf',
-          `scale=${overW}:${overH}:force_original_aspect_ratio=increase,crop=${overW}:${overH},${cropExpr},${colorGrade},fps=30,format=yuv420p`,
+          `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},${colorGrade},fps=30,format=yuv420p`,
           '-t',
           durStr,
           '-an',
@@ -2517,6 +2869,9 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         pauseKind: seg.pauseKind,
         countdownStartSec,
         countdownEndSec,
+        roleKind: seg.roleKind,
+        roleLabel: seg.roleLabel,
+        contextLabel: seg.contextLabel,
       });
 
       const pct = 8 + Math.round(((i + 1) / segments.length) * 20);
@@ -2568,6 +2923,10 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       terms: config.terms,
       scenePrompts: config.scenePrompts ?? [],
       materialSource: config.materialSource,
+      neutralBgTheme: config.neutralBgTheme,
+      studio2411Theme: config.studio2411Theme,
+      scriptStyle: config.scriptStyle,
+      pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
       mediaTypeFilter: config.mediaTypeFilter ?? 'all',
       visualMood: config.visualMood ?? 'auto',
       aspectRatio: config.aspectRatio,
@@ -2809,7 +3168,21 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     fs.writeFileSync(srtOutPath, srtContent, 'utf-8');
 
     const assPath = path.join(workDir, 'subtitles.ass');
-    const assContent = buildAssFromCues(shortSubCues, config.subtitle, width, height);
+    const isLightNeutralExport =
+      ((config.materialSource === 'neutral_css_bg' &&
+        getNeutralBgThemeMeta(config.neutralBgTheme).isLight) ||
+        (config.materialSource === 'studio_2411' &&
+          getStudio2411ThemeMeta(config.studio2411Theme).isLight)) &&
+      config.subtitle.boxStyle !== 'dark_box';
+    const effectiveSubtitleForAss = isLightNeutralExport
+      ? {
+          ...config.subtitle,
+          textColor: '#0F172A',
+          highlightColor: '#0D6EFD',
+          strokeColor: '#FFFFFF',
+        }
+      : config.subtitle;
+    const assContent = buildAssFromCues(shortSubCues, effectiveSubtitleForAss, width, height);
     fs.writeFileSync(assPath, assContent, 'utf-8');
 
     let bgmPath: string | null = null;
@@ -3583,6 +3956,11 @@ async function startServer() {
       ? req.body.scenePrompts.map(String)
       : [];
     const materialSource = (req.body?.materialSource ?? 'hybrid_real') as MaterialSource;
+    const neutralBgTheme = req.body?.neutralBgTheme as NeutralBgTheme | undefined;
+    const studio2411Theme = req.body?.studio2411Theme as Studio2411ThemeId | undefined;
+    const scriptStyle = req.body?.scriptStyle as ScriptStyle | undefined;
+    const pauseBetweenLinesSec =
+      typeof req.body?.pauseBetweenLinesSec === 'number' ? req.body.pauseBetweenLinesSec : 5;
     const mediaTypeFilter = (req.body?.mediaTypeFilter ?? 'all') as MediaTypeFilter;
     const visualMood = (req.body?.visualMood ?? 'auto') as VisualMood;
     const aspectRatio = (req.body?.aspectRatio ?? '9:16') as VideoAspectRatio;
@@ -3603,6 +3981,10 @@ async function startServer() {
         terms,
         scenePrompts,
         materialSource,
+        neutralBgTheme,
+        studio2411Theme,
+        scriptStyle,
+        pauseBetweenLinesSec,
         mediaTypeFilter,
         visualMood,
         aspectRatio,
@@ -3689,7 +4071,7 @@ async function startServer() {
         fs.mkdirSync(aiCacheDir, { recursive: true });
         const aiFile = `ai_${crypto.createHash('sha1').update(`${query}_${width}_${height}_${Date.now()}`).digest('hex').slice(0, 10)}.jpg`;
         const aiPath = path.join(aiCacheDir, aiFile);
-        const aiPrompt = `${searchTerms[0] ?? query}, ${moodSuffix}, no text`;
+        const aiPrompt = formatCleanAiPrompt(searchTerms[0] ?? query, moodSuffix);
         const aiOk = await fetchPollinationsSceneImage({
           prompt: aiPrompt,
           width,
@@ -3705,7 +4087,7 @@ async function startServer() {
             kind: 'image',
             previewUrl: `/files/cache/scene_alts/${aiFile}`,
             thumbUrl: `/files/cache/scene_alts/${aiFile}`,
-            sourceLabel: 'Ảnh AI Pollinations',
+            sourceLabel: 'Ảnh AI chọn lọc',
           });
         }
       }
@@ -3730,7 +4112,7 @@ async function startServer() {
     let cleanEn = prompt;
     if (!/^[a-zA-Z0-9\s,.-]{2,}$/.test(prompt)) {
       const translated = await translateToEn(prompt);
-      cleanEn = translated || extractEnglishSearchTerms(prompt, '')[0] || 'cinematic scene';
+      cleanEn = translated || extractEnglishSearchTerms(prompt, '')[0] || 'pleasant office scene';
     }
 
     const aiCacheDir = path.join(CACHE_DIR, 'scene_alts');
@@ -3738,7 +4120,7 @@ async function startServer() {
     const aiFile = `ai_${Date.now()}_${Math.floor(Math.random() * 999)}.jpg`;
     const aiPath = path.join(aiCacheDir, aiFile);
     const ok = await fetchPollinationsSceneImage({
-      prompt: `${cleanEn}, ${moodSuffix}, no text`,
+      prompt: formatCleanAiPrompt(cleanEn, moodSuffix),
       width,
       height,
       outPath: aiPath,

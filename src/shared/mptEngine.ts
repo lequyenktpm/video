@@ -2,8 +2,13 @@ import {
   FullAnswerRecapMode,
   LanguageCode,
   MediaTypeFilter,
+  NeutralBgTheme,
   RenderJobConfig,
+  ScriptRoleKind,
   ScriptStyle,
+  Studio2411AnimationIn,
+  Studio2411ComponentVariant,
+  Studio2411SceneComponentOverride,
   SubtitleConfig,
   SubtitleCue,
   SubtitleEffect,
@@ -13,6 +18,74 @@ import {
   VisualMood,
   VoiceOptionId,
 } from './types';
+
+export interface NeutralBgThemeMeta {
+  id: NeutralBgTheme;
+  label: string;
+  description: string;
+  bgTopHex: string;
+  bgBottomHex: string;
+  gridHex: string;
+  accentHex: string;
+  isLight: boolean;
+}
+
+export const NEUTRAL_BG_THEMES: NeutralBgThemeMeta[] = [
+  {
+    id: 'slate_studio',
+    label: 'Slate Trung Tính',
+    description: 'Xám xanh đậm tối giản, chữ nổi bật',
+    bgTopHex: '#1e293b',
+    bgBottomHex: '#0f172a',
+    gridHex: '#334155',
+    accentHex: '#38bdf8',
+    isLight: false,
+  },
+  {
+    id: 'charcoal_pro',
+    label: 'Xám Than Studio',
+    description: 'Nền than trung tính sang trọng',
+    bgTopHex: '#27272a',
+    bgBottomHex: '#18181b',
+    gridHex: '#3f3f46',
+    accentHex: '#facc15',
+    isLight: false,
+  },
+  {
+    id: 'soft_indigo',
+    label: 'Xám Xanh Dịu',
+    description: 'Tông chàm xám dịu mắt cho học ngoại ngữ',
+    bgTopHex: '#2a3347',
+    bgBottomHex: '#1b2232',
+    gridHex: '#3e4c69',
+    accentHex: '#2dd4bf',
+    isLight: false,
+  },
+  {
+    id: 'warm_paper',
+    label: 'Giấy Kem Ấm',
+    description: 'Nền giấy trung tính sáng dịu mắt',
+    bgTopHex: '#f5f2eb',
+    bgBottomHex: '#e7e1d4',
+    gridHex: '#d5cdbd',
+    accentHex: '#0d6efd',
+    isLight: true,
+  },
+  {
+    id: 'clean_grid',
+    label: 'Lưới Sáng Học Tập',
+    description: 'Nền trắng xám chuẩn thẻ học tập',
+    bgTopHex: '#f8fafc',
+    bgBottomHex: '#e2e8f0',
+    gridHex: '#cbd5e1',
+    accentHex: '#0d6efd',
+    isLight: true,
+  },
+];
+
+export function getNeutralBgThemeMeta(theme?: NeutralBgTheme): NeutralBgThemeMeta {
+  return NEUTRAL_BG_THEMES.find((t) => t.id === theme) ?? NEUTRAL_BG_THEMES[0];
+}
 
 export async function safeParseJsonResponse<T>(
   res: Response,
@@ -164,6 +237,211 @@ export function isOutroTag(line: string): boolean {
   return /^\s*(?:\[OUTRO\]|(?:Outro|Kết\s*thúc)\s*[:：])/i.test(line);
 }
 
+export type PresentationIconKey =
+  | 'megaphone'
+  | 'bell'
+  | 'chat_quote'
+  | 'hand_raise'
+  | 'card_text'
+  | 'alert_triangle'
+  | 'clock'
+  | 'waves'
+  | 'coffee'
+  | 'briefcase'
+  | 'sparkles'
+  | 'heart'
+  | 'lightbulb'
+  | 'globe'
+  | 'bar_chart'
+  | 'message_dots';
+
+export type PresentationRoleTone = 'indigo' | 'emerald' | 'sky' | 'slate' | 'amber';
+
+export interface ScriptLinePresentation {
+  cleanText: string;
+  detectedLang: 'vi' | 'en' | 'ja';
+  roleKind: ScriptRoleKind;
+  roleLabel: string;
+  roleIconKey: PresentationIconKey;
+  roleTone: PresentationRoleTone;
+  contextIconKey: PresentationIconKey;
+  contextLabel: string;
+  hasPause: boolean;
+  pauseSec?: number;
+}
+
+export function resolvePresentationLang(
+  cleanText: string,
+  options?: {
+    language?: LanguageCode;
+    isSecondarySlot?: boolean;
+  }
+): 'vi' | 'en' | 'ja' {
+  const trimmed = cleanText.trim();
+  if (hasCjkChars(trimmed)) return 'ja';
+  if (hasVietnameseDiacritics(trimmed)) return 'vi';
+
+  const langOpt = options?.language;
+  if (langOpt === 'en') return 'en';
+  if (langOpt === 'ja') return 'ja';
+  if (langOpt === 'ja_en') {
+    return detectLineLanguage(trimmed, options?.isSecondarySlot ? 'en' : 'ja');
+  }
+  if (langOpt === 'bilingual') {
+    return detectLineLanguage(trimmed, options?.isSecondarySlot ? 'en' : 'vi');
+  }
+  if (langOpt === 'vi_ja') {
+    return detectLineLanguage(trimmed, options?.isSecondarySlot ? 'ja' : 'vi');
+  }
+  return detectLineLanguage(trimmed, hasVietnameseDiacritics(trimmed) ? 'vi' : 'en');
+}
+
+const CONTEXT_LABELS_BY_LANG: Record<
+  PresentationIconKey,
+  { vi: string; en: string; ja: string }
+> = {
+  alert_triangle: { vi: 'Lưu ý', en: 'Caution', ja: '注意' },
+  clock: { vi: 'Thời gian', en: 'Timing', ja: '時間' },
+  waves: { vi: 'Đại dương', en: 'Ocean', ja: '海・自然' },
+  coffee: { vi: 'Ẩm thực', en: 'Cafe & Food', ja: 'カフェ' },
+  briefcase: { vi: 'Công việc', en: 'Career', ja: '仕事・面接' },
+  sparkles: { vi: 'Khám phá', en: 'Discovery', ja: '発見' },
+  heart: { vi: 'Cảm xúc', en: 'Mindset', ja: '気持ち' },
+  lightbulb: { vi: 'Mẹo & Học', en: 'Key Tip', ja: '学習ポイント' },
+  globe: { vi: 'Thế giới', en: 'World', ja: '世界' },
+  bar_chart: { vi: 'Số liệu', en: 'Key Stat', ja: 'データ' },
+  message_dots: { vi: 'Chi tiết', en: 'Context', ja: '詳細' },
+  megaphone: { vi: 'Mở đầu', en: 'Intro', ja: '導入' },
+  bell: { vi: 'Kết thúc', en: 'Closing', ja: 'まとめ' },
+  chat_quote: { vi: 'Đáp án', en: 'Answer', ja: '解答' },
+  hand_raise: { vi: 'Câu hỏi', en: 'Question', ja: '質問' },
+  card_text: { vi: 'Nội dung', en: 'Insight', ja: 'ポイント' },
+};
+
+const ROLE_LABELS_BY_LANG: Record<
+  ScriptRoleKind,
+  { vi: string; en: string; ja: string }
+> = {
+  title: { vi: 'Mở đầu', en: 'Intro', ja: '導入' },
+  outro: { vi: 'Kết thúc', en: 'Closing', ja: 'まとめ' },
+  question: { vi: 'Người hỏi', en: 'Question', ja: '質問' },
+  answer: { vi: 'Người trả lời', en: 'Answer', ja: '解答' },
+  narration: { vi: 'Nội dung', en: 'Insight', ja: 'ポイント' },
+};
+
+export function detectLineContextVisual(
+  cleanText: string,
+  lang?: 'vi' | 'en' | 'ja'
+): {
+  contextIconKey: PresentationIconKey;
+  contextLabel: string;
+} {
+  const resolvedLang =
+    lang ?? detectLineLanguage(cleanText, hasVietnameseDiacritics(cleanText) ? 'vi' : 'en');
+  const t = cleanText.toLowerCase();
+  let key: PresentationIconKey = 'message_dots';
+
+  if (/(cẩn thận|chú ý|nguy hiểm|đừng quá|cấm|rủi ro|watch out|careful|warning|気をつけて|注意)/i.test(t)) {
+    key = 'alert_triangle';
+  } else if (/(giây|phút|thời gian|đồng hồ|trôi|nhanh|chậm|second|minute|time|rush|1分|5秒|時間)/i.test(t)) {
+    key = 'clock';
+  } else if (/(đại dương|biển|sóng|san hô|sứa|mariana|nước|lặn|ocean|sea|water|coral|jellyfish|深海|海)/i.test(t)) {
+    key = 'waves';
+  } else if (/(cà phê|espresso|latte|quán ăn|nấu|món ăn|ẩm thực|coffee|cafe|food|latte|コーヒー|カフェ|料理)/i.test(t)) {
+    key = 'coffee';
+  } else if (/(phỏng vấn|công sở|công việc|làm việc|hồ sơ|khách hàng|đồng nghiệp|tuyển dụng|tập trung|interview|office|work|job|business|desk|colleague|proactive|strength|weakness|面接|仕事|会社|長所|短所)/i.test(t)) {
+    key = 'briefcase';
+  } else if (/(vũ trụ|hành tinh|ánh sáng|phát sáng|khoa học|công nghệ|robot|áp suất|science|physics|space|glow|light|technology|宇宙|光|科学)/i.test(t)) {
+    key = 'sparkles';
+  } else if (/(nghỉ ngơi|đừng lo|sức khỏe|bình tĩnh|vui|hạnh phúc|cảm ơn|cố lên|take it easy|push yourself|relax|worry|thank|appreciate|happy|無理|ありがとう|心配|頑張)/i.test(t)) {
+    key = 'heart';
+  } else if (/(học|luyện|nhớ|mẹo|bí quyết|lặp lại|tiếng anh|tiếng nhật|practice|learn|speak|habit|study|translate|英語|練習|瞬間英作文)/i.test(t)) {
+    key = 'lightbulb';
+  } else if (/(núi|rừng|thành phố|nhật bản|máy bay|du lịch|mountain|forest|city|japan|flight|tokyo|山|自然)/i.test(t)) {
+    key = 'globe';
+  } else if (/(\d+%|top\s*\d|số\s*[123]|nghìn|triệu|tỷ|第[123]位)/i.test(t)) {
+    key = 'bar_chart';
+  }
+
+  return {
+    contextIconKey: key,
+    contextLabel: CONTEXT_LABELS_BY_LANG[key][resolvedLang],
+  };
+}
+
+export function analyzeScriptLinePresentation(
+  rawLine: string,
+  options: {
+    isSecondarySlot?: boolean;
+    isIntroOrOutro?: boolean;
+    scriptStyle?: ScriptStyle;
+    language?: LanguageCode;
+  } = {}
+): ScriptLinePresentation {
+  const pauseMatch = rawLine.match(/\[PAUSE(?::(\d+(?:\.\d+)?))?\]/i);
+  const hasPause = Boolean(pauseMatch);
+  const pauseSec = pauseMatch?.[1] ? parseFloat(pauseMatch[1]) : undefined;
+  const cleanText = stripNarrationTags(rawLine);
+  const detectedLang = resolvePresentationLang(cleanText, {
+    language: options.language,
+    isSecondarySlot: options.isSecondarySlot,
+  });
+  const ctx = detectLineContextVisual(cleanText, detectedLang);
+
+  const isExplicitTitle = isTitleOrIntroTag(rawLine) || isLikelyIntroPhrase(cleanText);
+  const isExplicitOutro = isOutroTag(rawLine) || isOutroCtaLine(cleanText);
+  const isExplicitQuestion =
+    /^\s*(?:\[(?:Q|V1|1)\]|(?:Q|Question|Câu\s*hỏi|Hỏi|Speaker\s*1|Người\s*1)\s*[:：])/i.test(
+      rawLine
+    );
+  const isExplicitAnswer =
+    /^\s*(?:\[(?:A|B|V2|2|EN|JA)\]|(?:A|Answer|Trả\s*lời|Đáp\s*án|Speaker\s*2|Người\s*2|English|Japanese|Tiếng\s*Anh|Tiếng\s*Nhật)\s*[:：])/i.test(
+      rawLine
+    );
+
+  let roleKind: ScriptRoleKind = 'narration';
+  let roleIconKey: PresentationIconKey = 'card_text';
+  let roleTone: PresentationRoleTone = 'slate';
+
+  if (isExplicitTitle || (options.isIntroOrOutro && !isExplicitOutro)) {
+    roleKind = 'title';
+    roleIconKey = 'megaphone';
+    roleTone = 'sky';
+  } else if (isExplicitOutro) {
+    roleKind = 'outro';
+    roleIconKey = 'bell';
+    roleTone = 'slate';
+  } else if (isExplicitAnswer || options.isSecondarySlot) {
+    roleKind = 'answer';
+    roleIconKey = 'chat_quote';
+    roleTone = 'emerald';
+  } else if (
+    isExplicitQuestion ||
+    hasPause ||
+    ((options.scriptStyle === 'language_challenge' ||
+      options.scriptStyle === 'quiz_riddle' ||
+      options.scriptStyle === 'bilingual_dialogue') &&
+      /[?？]/.test(cleanText))
+  ) {
+    roleKind = 'question';
+    roleIconKey = 'hand_raise';
+    roleTone = 'indigo';
+  }
+
+  return {
+    cleanText,
+    detectedLang,
+    roleKind,
+    roleLabel: ROLE_LABELS_BY_LANG[roleKind][detectedLang],
+    roleIconKey,
+    roleTone,
+    contextIconKey: ctx.contextIconKey,
+    contextLabel: ctx.contextLabel,
+    hasPause,
+    pauseSec,
+  };
+}
+
 export interface PlannedNarrationSegment {
   text: string;
   voiceId: VoiceOptionId;
@@ -173,6 +451,18 @@ export interface PlannedNarrationSegment {
   pauseKind?: 'thinking' | 'repeat' | 'recap';
   segmentKind?: 'speech' | 'recap' | 'summary';
   isIntroOrOutro?: boolean;
+  roleKind?: ScriptRoleKind;
+  roleLabel?: string;
+  contextLabel?: string;
+  cueGroupId?: string;
+  cueGroupFullText?: string;
+}
+
+export interface MixedLanguageRun {
+  text: string;
+  lang: 'vi' | 'en' | 'ja';
+  voiceId: VoiceOptionId;
+  voiceSlot: 'primary' | 'secondary';
 }
 
 function getFallbackVoiceForLangCode(
@@ -187,14 +477,127 @@ function getFallbackVoiceForLangCode(
   return { voiceId: 'vi-VN-HoaiMyNeural', slot: 'primary' };
 }
 
+/**
+ * Splits a single line containing mixed languages (e.g. Japanese + English,
+ * Vietnamese + English, or Vietnamese + Japanese) into ordered spoken runs
+ * so free TTS speaks each language run with its matching native voice.
+ */
+export function splitMixedLanguageRuns(
+  cleanText: string,
+  options: {
+    primaryLang: 'vi' | 'en' | 'ja';
+    secondaryLang: 'vi' | 'en' | 'ja';
+    primaryVoice: VoiceOptionId;
+    secondaryVoice: VoiceOptionId;
+    defaultSlot?: 'primary' | 'secondary';
+    defaultLang?: 'vi' | 'en' | 'ja';
+  }
+): MixedLanguageRun[] {
+  const trimmed = cleanText.trim();
+  if (!trimmed) return [];
+
+  const {
+    primaryLang,
+    secondaryLang,
+    primaryVoice,
+    secondaryVoice,
+    defaultSlot = 'primary',
+    defaultLang = primaryLang,
+  } = options;
+
+  // Tokenize CJK runs vs quoted phrases vs clause boundaries
+  const cjkSpanRegex =
+    /([\u3040-\u30ff\u4e00-\u9faf\u3005-\u3007ー〜・]+(?:[\s、。！？「」『』（）0-9]*[\u3040-\u30ff\u4e00-\u9faf\u3005-\u3007ー〜・]+)*[、。！？「」『』（）]*)/g;
+
+  const coarseChunks = trimmed.split(cjkSpanRegex).filter((s) => s.length > 0);
+  const finePieces: string[] = [];
+  for (const part of coarseChunks) {
+    if (hasCjkChars(part)) {
+      finePieces.push(part);
+    } else {
+      // Split non-CJK span across quoted blocks or sentence-ending punctuation
+      const sub = part.split(/([「『"“][^"”」』]+[」』"”]|(?<=[.!?])\s+)/).filter((s) => s.length > 0);
+      finePieces.push(...sub);
+    }
+  }
+
+  const classified: Array<{ text: string; lang: 'vi' | 'en' | 'ja'; hasLetters: boolean }> = [];
+  for (const rawPiece of finePieces) {
+    const piece = rawPiece.trim();
+    if (!piece) continue;
+    const hasCjk = hasCjkChars(piece);
+    const hasVi = hasVietnameseDiacritics(piece);
+    const hasAsciiWord = /[a-zA-Z]{2,}/.test(piece);
+    const hasAnyLetters = hasCjk || hasVi || /[a-zA-ZÀ-ỹ]/.test(piece);
+
+    if (!hasAnyLetters) {
+      // Attach trailing standalone punctuation to the previous token if present
+      if (classified.length > 0) {
+        classified[classified.length - 1].text = `${classified[classified.length - 1].text}${
+          rawPiece.startsWith(' ') ? ' ' : ''
+        }${piece}`;
+      }
+      continue;
+    }
+
+    let pieceLang: 'vi' | 'en' | 'ja' = defaultLang;
+    if (hasCjk) {
+      pieceLang = 'ja';
+    } else if (hasVi) {
+      pieceLang = 'vi';
+    } else if (hasAsciiWord) {
+      if (primaryLang === 'en' || secondaryLang === 'en') {
+        pieceLang = 'en';
+      } else {
+        pieceLang = detectLineLanguage(piece, defaultLang === 'ja' ? 'en' : defaultLang);
+      }
+    }
+
+    const prev = classified[classified.length - 1];
+    if (prev && prev.lang === pieceLang) {
+      const joiner = pieceLang === 'ja' ? '' : ' ';
+      prev.text = `${prev.text}${joiner}${piece}`.trim();
+    } else {
+      classified.push({ text: piece, lang: pieceLang, hasLetters: true });
+    }
+  }
+
+  if (classified.length <= 1) {
+    const solo = classified[0];
+    const soloLang = solo?.lang ?? defaultLang;
+    const mapped =
+      soloLang === defaultLang
+        ? { voiceId: defaultSlot === 'secondary' ? secondaryVoice : primaryVoice, slot: defaultSlot }
+        : getFallbackVoiceForLangCode(soloLang, primaryVoice, secondaryVoice);
+    return [
+      {
+        text: trimmed,
+        lang: soloLang,
+        voiceId: mapped.voiceId,
+        voiceSlot: mapped.slot,
+      },
+    ];
+  }
+
+  return classified.map((item) => {
+    const mapped = getFallbackVoiceForLangCode(item.lang, primaryVoice, secondaryVoice);
+    return {
+      text: item.text,
+      lang: item.lang,
+      voiceId: mapped.voiceId,
+      voiceSlot: mapped.slot,
+    };
+  });
+}
+
 function isOutroCtaLine(cleanText: string): boolean {
-  return /theo dõi|đăng ký|lưu video|bình luận|chia sẻ|hẹn gặp lại|tạm biệt|cảm ơn.*xem|chúc bạn.*(?:thành công|may mắn|tốt lành)|follow|subscribe|save this|comment|see you|thanks for watching|thank you for watching|good job|great job|well done|keep practicing|until next time|that's all for today|goodbye|bye for now|保存|フォロー|コメント|チャンネル登録|お疲れ様|また次回|またね|ありがとうございました|今回はここまで|応援してい/i.test(
+  return /theo dõi|đăng ký|lưu video|bình luận|chia sẻ|hẹn gặp lại|tạm biệt|cảm ơn.*xem|chúc bạn.*(?:thành công|may mắn|tốt lành)|follow|subscribe|save this|comment|see you|thanks for watching|thank you|good job|great job|well done|keep practicing|until next time|that's all for today|goodbye|bye for now|cảm ơn bạn|cảm ơn mọi người|保存|フォロー|コメント|チャンネル登録|お疲れ様|また次回|またね|ありがとうございました|ありがとうございます|今回はここまで|応援してい/i.test(
     cleanText
   );
 }
 
 function isLikelyIntroPhrase(cleanText: string): boolean {
-  return /1[-\s]?minute\s+instant\s+translation|instant\s+translation\s+challenge|chào mừng|sẵn sàng|thử thách|welcome to|are you ready|speaking challenge|today we(?:'ll| will) practice|hôm nay chúng ta|クイズ|チャレンジ|スタート|瞬間英作文|自己PRする方法/i.test(
+  return /1[-\s]?minute\s+instant\s+translation|instant\s+translation\s+challenge|bây\s+giờ.*(?:đọc|nghe)|5\s*giây\s*để\s*dịch|now\s+i\s+(?:will|'ll)\s+read|you\s+have\s+\d+\s*seconds?\s+to\s+translate|今から(?:日本語|問題)を読み上げ|5秒以内|chào mừng|sẵn sàng|thử thách|welcome to|are you ready|speaking challenge|today we(?:'ll| will) practice|hôm nay chúng ta|クイズ|チャレンジ|スタート|瞬間英作文|自己PRする方法/i.test(
     cleanText
   );
 }
@@ -222,62 +625,59 @@ export function buildVideoEndingSummary(params: {
   const cleanSubject = subject.replace(/[?!。？！]+$/g, '').trim();
 
   if (isQaOrLearning) {
-    const sampleQuestion = (questions[0] ?? cleanSubject).replace(/[?!。？！]+$/g, '').trim();
     const firstKey = (targetHighlights[0] ?? '').replace(/[.!?。！？]+$/g, '').trim();
     const count = Math.max(1, targetHighlights.length || sourceHighlights.length);
 
     if (primaryLang === 'ja' || language === 'ja_en') {
-      const qPart = sampleQuestion ? `「${sampleQuestion.slice(0, 48)}」について、` : '';
-      const keyPart = firstKey ? `「${firstKey.slice(0, 56)}」などの` : '';
+      const keyPart = firstKey ? `「${firstKey.slice(0, 34)}」など` : '';
       return {
         voiceLang: 'ja',
-        text: `今日のまとめ：${qPart}${keyPart}実践フレーズを${count}つ学びました。ぜひ声に出して復習しましょう！`,
+        text: `今日のまとめ：${keyPart}${count}つの重要表現を復習しましょう！`,
       };
     }
     if (primaryLang === 'en' && !isBilingualLanguage(language)) {
-      const qPart = sampleQuestion ? `on "${sampleQuestion.slice(0, 55)}"` : 'today';
+      const keyPart = firstKey ? `like "${firstKey.slice(0, 38)}"` : `on ${cleanSubject.slice(0, 36) || 'today'}`;
       return {
         voiceLang: 'en',
-        text: `Quick recap: we practiced ${count} key expressions ${qPart}. Review them out loud to lock them in!`,
+        text: `Quick recap: ${count} key phrases ${keyPart}.`,
       };
     }
-    const qPart = sampleQuestion ? `chủ đề "${sampleQuestion.slice(0, 52)}" ` : '';
-    const keyPart = firstKey ? `với mẫu câu trọng tâm "${firstKey.slice(0, 56)}"` : '';
+    const keyPart = firstKey ? `như "${firstKey.slice(0, 38)}"` : cleanSubject.slice(0, 38);
     return {
       voiceLang: 'vi',
-      text: `Tóm tắt bài học hôm nay: chúng ta đã luyện ${count} câu trả lời ${qPart}${keyPart}.`,
+      text: `Tóm tắt nhanh: ${count} mẫu câu trọng tâm (${keyPart}).`,
     };
   }
 
-  // Knowledge / storytelling / tips video summary
+  // Concise 1-sentence knowledge summary for longer videos
   const middleFacts = sourceHighlights.filter((s) => !isOutroCtaLine(s));
   const coreFact = (middleFacts[1] ?? middleFacts[0] ?? '').replace(/[.!?。！？]+$/g, '').trim();
   if (!coreFact && !cleanSubject) return null;
 
   if (primaryLang === 'ja') {
-    const topicLabel = cleanSubject || '今日のテーマ';
+    const topicLabel = (cleanSubject || '今日のテーマ').slice(0, 26);
     return {
       voiceLang: 'ja',
       text: coreFact
-        ? `今日のまとめ：${topicLabel}について、${coreFact.slice(0, 75)}という大切な知識を学びました。`
-        : `今日のまとめ：${topicLabel}の重要なポイントを振り返りました。`,
+        ? `まとめ：${topicLabel}の要点は「${coreFact.slice(0, 44)}」。`
+        : `まとめ：${topicLabel}のポイントを振り返りました。`,
     };
   }
   if (primaryLang === 'en') {
-    const topicLabel = cleanSubject || 'this topic';
+    const topicLabel = (cleanSubject || 'this topic').slice(0, 32);
     return {
       voiceLang: 'en',
       text: coreFact
-        ? `Key takeaway on ${topicLabel}: ${coreFact.slice(0, 90)}.`
-        : `Key takeaway: remember the core insights we explored about ${topicLabel}.`,
+        ? `Key takeaway: ${coreFact.slice(0, 68)}.`
+        : `Key takeaway: remember the main point on ${topicLabel}.`,
     };
   }
-  const topicLabel = cleanSubject || 'chủ đề hôm nay';
+  const topicLabel = (cleanSubject || 'chủ đề hôm nay').slice(0, 36);
   return {
     voiceLang: 'vi',
     text: coreFact
-      ? `Tóm tắt kiến thức hôm nay: qua chủ đề ${topicLabel}, điểm đáng nhớ nhất là ${coreFact.slice(0, 95)}.`
-      : `Tóm tắt kiến thức hôm nay: chúng ta đã cùng tìm hiểu những góc nhìn nổi bật về ${topicLabel}.`,
+      ? `Tóm tắt nhanh: ${coreFact.slice(0, 70)}.`
+      : `Tóm tắt nhanh: điểm cốt lõi về ${topicLabel}.`,
   };
 }
 
@@ -348,7 +748,9 @@ export function planNarrationSegments(
     Math.min(5, Number(config.targetRepeatPauseSec ?? 2.0))
   );
   const fullAnswerRecapMode: FullAnswerRecapMode = config.fullAnswerRecapMode ?? 'off';
-  const summarizeAtEnd = Boolean(config.summarizeAtEnd);
+  const isVeryShortVideo = rawLines.length <= 5;
+  // Short videos (<= 5 lines) skip summary bloat & keep closing minimal
+  const summarizeAtEnd = Boolean(config.summarizeAtEnd) && !isVeryShortVideo;
 
   const segments: PlannedNarrationSegment[] = [];
   const collectedQuestions: string[] = [];
@@ -533,7 +935,8 @@ export function planNarrationSegments(
     rawLine: string,
     lineIdx: number,
     totalCount: number,
-    linesList: string[]
+    linesList: string[],
+    batchKey = 'main'
   ) => {
     const pauseMatch = rawLine.match(/\[PAUSE(?::(\d+(?:\.\d+)?))?\]/i);
     const explicitPauseSec = pauseMatch
@@ -679,39 +1082,92 @@ export function planNarrationSegments(
         isBilingualLanguage(config.language) ||
         config.scriptStyle === 'language_challenge');
 
-    const subChunks = splitScriptSentences(cleanText, 165);
+    const linePres = analyzeScriptLinePresentation(rawLine, {
+      isSecondarySlot: chosenSlot === 'secondary',
+      isIntroOrOutro,
+      scriptStyle: config.scriptStyle,
+      language: config.language,
+    });
+
+    // Check if single line contains mixed scripts/languages (e.g. "お疲れ様でした！Thank you!" or "Cảm ơn! Watch out!")
+    const mixedRuns = splitMixedLanguageRuns(cleanText, {
+      primaryLang,
+      secondaryLang,
+      primaryVoice,
+      secondaryVoice,
+      defaultSlot: chosenSlot,
+      defaultLang: detectedLang,
+    });
+    const isMixedSingleLine = mixedRuns.length >= 2;
     const totalReads = isTargetForRepeat ? 1 + targetRepeatCount : 1;
 
     for (let readPass = 0; readPass < totalReads; readPass++) {
       const isLastPass = readPass === totalReads - 1;
-      subChunks.forEach((chunk, chunkIdx) => {
-        const isLastChunk = chunkIdx === subChunks.length - 1;
-        let pauseAfter = 0;
-        let pauseKind: PlannedNarrationSegment['pauseKind'] = undefined;
-        if (isLastChunk) {
-          if (!isLastPass) {
-            pauseAfter = targetRepeatPauseSec;
-            pauseKind = 'repeat';
-          } else {
-            pauseAfter = finalPostLinePause;
-            pauseKind = finalPauseKind;
+      if (isMixedSingleLine) {
+        const groupId = `${batchKey}_${lineIdx}_p${readPass}`;
+        mixedRuns.forEach((run, runIdx) => {
+          const isLastRun = runIdx === mixedRuns.length - 1;
+          let pauseAfter = 0;
+          let pauseKind: PlannedNarrationSegment['pauseKind'] = undefined;
+          if (isLastRun) {
+            if (!isLastPass) {
+              pauseAfter = targetRepeatPauseSec;
+              pauseKind = 'repeat';
+            } else {
+              pauseAfter = finalPostLinePause;
+              pauseKind = finalPauseKind;
+            }
           }
-        }
-        segments.push({
-          text: chunk,
-          voiceId: chosenVoice,
-          voiceSlot: chosenSlot,
-          detectedLang,
-          pauseAfterSec: pauseAfter,
-          pauseKind,
-          segmentKind: 'speech',
-          ...(isIntroOrOutro ? { isIntroOrOutro: true } : {}),
+          segments.push({
+            text: run.text,
+            voiceId: run.voiceId,
+            voiceSlot: run.voiceSlot,
+            detectedLang: run.lang,
+            pauseAfterSec: pauseAfter,
+            pauseKind,
+            segmentKind: 'speech',
+            roleKind: linePres.roleKind,
+            roleLabel: linePres.roleLabel,
+            contextLabel: linePres.contextLabel,
+            cueGroupId: groupId,
+            cueGroupFullText: cleanText,
+            ...(isIntroOrOutro ? { isIntroOrOutro: true } : {}),
+          });
         });
-      });
+      } else {
+        const subChunks = splitScriptSentences(cleanText, 165);
+        subChunks.forEach((chunk, chunkIdx) => {
+          const isLastChunk = chunkIdx === subChunks.length - 1;
+          let pauseAfter = 0;
+          let pauseKind: PlannedNarrationSegment['pauseKind'] = undefined;
+          if (isLastChunk) {
+            if (!isLastPass) {
+              pauseAfter = targetRepeatPauseSec;
+              pauseKind = 'repeat';
+            } else {
+              pauseAfter = finalPostLinePause;
+              pauseKind = finalPauseKind;
+            }
+          }
+          segments.push({
+            text: chunk,
+            voiceId: chosenVoice,
+            voiceSlot: chosenSlot,
+            detectedLang,
+            pauseAfterSec: pauseAfter,
+            pauseKind,
+            segmentKind: 'speech',
+            roleKind: linePres.roleKind,
+            roleLabel: linePres.roleLabel,
+            contextLabel: linePres.contextLabel,
+            ...(isIntroOrOutro ? { isIntroOrOutro: true } : {}),
+          });
+        });
+      }
     }
   };
 
-  mainLines.forEach((line, idx) => processLine(line, idx, mainLines.length, mainLines));
+  mainLines.forEach((line, idx) => processLine(line, idx, mainLines.length, mainLines, 'main'));
   flushAnswerRecap();
 
   if (summarizeAtEnd) {
@@ -754,7 +1210,7 @@ export function planNarrationSegments(
   if (pendingOutroLines.length > 0) {
     inAnswerBlock = false;
     pendingOutroLines.forEach((line, idx) =>
-      processLine(line, idx, pendingOutroLines.length, pendingOutroLines)
+      processLine(line, idx, pendingOutroLines.length, pendingOutroLines, 'outro')
     );
   }
 
@@ -779,6 +1235,7 @@ export function buildCountdownCues(
       text: String(num),
       voiceSlot: 'primary',
       isCountdown: true,
+      countdownTotalSteps: steps,
     });
   }
   return result;
@@ -795,6 +1252,11 @@ export interface RawSegmentTiming {
   pauseKind?: 'thinking' | 'repeat' | 'recap';
   countdownStartSec?: number;
   countdownEndSec?: number;
+  roleKind?: ScriptRoleKind;
+  roleLabel?: string;
+  contextLabel?: string;
+  cueGroupId?: string;
+  cueGroupFullText?: string;
 }
 
 export function buildDualSubtitleCues(
@@ -826,6 +1288,9 @@ export function buildDualSubtitleCues(
         text: rec.text,
         voiceSlot: rec.voiceSlot,
         isIntroOrOutro: rec.isIntroOrOutro,
+        roleKind: rec.roleKind,
+        roleLabel: rec.roleLabel,
+        contextLabel: rec.contextLabel,
       });
       if (rec.countdownStartSec !== undefined && rec.countdownEndSec !== undefined) {
         if (!rec.isIntroOrOutro && rec.countdownEndSec > rec.endSec + 0.05) {
@@ -836,6 +1301,9 @@ export function buildDualSubtitleCues(
             text: rec.text,
             voiceSlot: rec.voiceSlot,
             isStickySource: true,
+            roleKind: rec.roleKind,
+            roleLabel: rec.roleLabel,
+            contextLabel: rec.contextLabel,
           });
         }
         const dur = Math.max(0.5, rec.countdownEndSec - rec.countdownStartSec);
@@ -881,6 +1349,9 @@ export function buildDualSubtitleCues(
         text: rec.text,
         voiceSlot: rec.voiceSlot,
         isIntroOrOutro: rec.isIntroOrOutro,
+        roleKind: rec.roleKind,
+        roleLabel: rec.roleLabel,
+        contextLabel: rec.contextLabel,
       });
       if (rec.countdownStartSec !== undefined && rec.countdownEndSec !== undefined) {
         const dur = Math.max(0.5, rec.countdownEndSec - rec.countdownStartSec);
@@ -910,6 +1381,9 @@ export function buildDualSubtitleCues(
         endSec: rec.endSec,
         text: rec.text,
         voiceSlot: 'primary',
+        roleKind: rec.roleKind,
+        roleLabel: rec.roleLabel,
+        contextLabel: rec.contextLabel,
       });
       if (rec.countdownStartSec !== undefined && rec.countdownEndSec !== undefined) {
         if (rec.countdownEndSec > rec.endSec + 0.05) {
@@ -920,6 +1394,9 @@ export function buildDualSubtitleCues(
             text: rec.text,
             voiceSlot: 'primary',
             isStickySource: true,
+            roleKind: rec.roleKind,
+            roleLabel: rec.roleLabel,
+            contextLabel: rec.contextLabel,
           });
         }
         const dur = Math.max(0.5, rec.countdownEndSec - rec.countdownStartSec);
@@ -949,6 +1426,9 @@ export function buildDualSubtitleCues(
       endSec: rec.endSec,
       text: rec.text,
       voiceSlot: 'primary',
+      roleKind: rec.roleKind,
+      roleLabel: rec.roleLabel,
+      contextLabel: rec.contextLabel,
     });
 
     // 2. Pinned source caption underneath until the next source sentence starts
@@ -961,6 +1441,9 @@ export function buildDualSubtitleCues(
         voiceSlot: 'primary',
         isStickySource: true,
         companionTargetLines: maxTargetLines,
+        roleKind: rec.roleKind,
+        roleLabel: rec.roleLabel,
+        contextLabel: rec.contextLabel,
       });
     }
 
@@ -996,6 +1479,9 @@ export function buildDualSubtitleCues(
         text: firstTgt.text,
         voiceSlot: 'secondary',
         companionSourceLines: sourceLines,
+        roleKind: firstTgt.roleKind,
+        roleLabel: firstTgt.roleLabel,
+        contextLabel: firstTgt.contextLabel,
       });
       k = m + 1;
     }
@@ -1283,6 +1769,9 @@ export function splitCueIntoShortSubCues(
         isIntroOrOutro: cue.isIntroOrOutro,
         companionSourceLines: cue.companionSourceLines,
         companionTargetLines: cue.companionTargetLines,
+        roleKind: cue.roleKind,
+        roleLabel: cue.roleLabel,
+        contextLabel: cue.contextLabel,
       });
       continue;
     }
@@ -1367,6 +1856,9 @@ export function splitCueIntoShortSubCues(
         isIntroOrOutro: cue.isIntroOrOutro,
         companionSourceLines: cue.companionSourceLines,
         companionTargetLines: cue.companionTargetLines,
+        roleKind: cue.roleKind,
+        roleLabel: cue.roleLabel,
+        contextLabel: cue.contextLabel,
       });
       cursor = end;
     });
@@ -1584,7 +2076,7 @@ export function resolveCountdownCenterY(
 ): number {
   const minCenterY = Math.round(height * 0.14 + countdownHeightPx / 2);
   const maxCenterY = Math.round(height * 0.86 - countdownHeightPx / 2);
-  const preferredY = Math.max(minCenterY, Math.min(maxCenterY, Math.round(height * 0.45)));
+  const preferredY = Math.max(minCenterY, Math.min(maxCenterY, Math.round(height * 0.53)));
 
   if (overlappingBands.length === 0) {
     return preferredY;
@@ -1780,14 +2272,18 @@ export function buildAssFromCues(
     `Style: Secondary,${effectiveFontName},${latinBudget.scaledFontSize},${secPrimary},${secSecondary},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
     `Style: StickySource,${stickyStyleFont},${stickyFontSize},${stickyColour},&H00FFFFFF,${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.3,0,${borderStyle},${sourceLatinBudget.outlineWidth.toFixed(1)},${sourceLatinBudget.shadowDepth.toFixed(1)},${stickyAlignment},${sourceLatinBudget.marginH},${sourceLatinBudget.marginH},${stickyBaseMarginV},1`,
     `Style: Countdown,${effectiveFontName},${countdownFontSize},${highlightColour},&H00FFFFFF,${outlineColour},&H80000000,-1,0,0,0,100,100,0,0,1,${countdownOutline.toFixed(1)},${countdownShadow.toFixed(1)},5,20,20,0,1`,
+    `Style: CountdownMeta,${effectiveFontName},${Math.max(14, Math.round(latinBudget.scaledFontSize * 0.52))},&H00FFFFFF,&H00FFFFFF,&H000F172A,&H990F172A,-1,0,0,0,100,100,0.4,0,3,${Math.max(2, Math.round(4 * latinBudget.resScale))},0,5,16,16,0,1`,
+    `Style: RoleBadge,${effectiveFontName},${Math.max(14, Math.round(latinBudget.scaledFontSize * 0.52))},&H00FFFFFF,&H00FFFFFF,&H001E293B,&HAA1E293B,-1,0,0,0,100,100,0.3,0,3,${Math.max(2, Math.round(4 * latinBudget.resScale))},0,2,16,16,0,1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ];
 
   const nonCountdownCues = cues.filter((c) => !c.isCountdown);
+  const showRoleBadges = subtitle.showRoleBadges !== false;
 
-  const events = cues.map((cue) => {
+  const events: string[] = [];
+  for (const cue of cues) {
     if (cue.isCountdown) {
       const cleanNum = escapeAssText(cue.text.trim());
       const overlappingBands = nonCountdownCues
@@ -1795,7 +2291,23 @@ export function buildAssFromCues(
         .map(estimateCueBand);
       const cdCenterY = resolveCountdownCenterY(overlappingBands, countdownBoxHeight, height);
       const cdCenterX = Math.round(width / 2);
-      return `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},Countdown,,0,0,0,,{\\an5\\pos(${cdCenterX},${cdCenterY})\\fscx62\\fscy62\\t(0,145,\\fscx120\\fscy120)\\t(145,280,\\fscx100\\fscy100)\\fad(30,110)}${cleanNum}`;
+      const totalSteps = Math.max(1, cue.countdownTotalSteps ?? 5);
+      const numVal = Math.max(1, Number(cue.text.trim()) || 1);
+      const barWidth = Math.round(Math.min(width * 0.36, 180 * latinBudget.resScale));
+      const fillWidth = Math.max(12, Math.round((numVal / totalSteps) * barWidth));
+      const barY = Math.min(height - 30, cdCenterY + Math.round(countdownFontSize * 0.62));
+      const labelY = Math.max(30, cdCenterY - Math.round(countdownFontSize * 0.62));
+
+      events.push(
+        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},Countdown,,0,0,0,,{\\an5\\pos(${cdCenterX},${cdCenterY})\\fscx62\\fscy62\\t(0,145,\\fscx120\\fscy120)\\t(145,280,\\fscx100\\fscy100)\\fad(30,110)}${cleanNum}`
+      );
+      events.push(
+        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${labelY})\\1c${highlightColour}\\3c&H00171717&\\fad(30,100)}THINK`
+      );
+      events.push(
+        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},CountdownMeta,,0,0,0,,{\\an5\\pos(${cdCenterX},${barY})\\p1\\1c${highlightColour}\\3c&H00000000&\\bord1\\fad(30,100)}m ${-Math.round(barWidth / 2)} 0 l ${-Math.round(barWidth / 2) + fillWidth} 0 l ${-Math.round(barWidth / 2) + fillWidth} ${Math.max(6, Math.round(7 * latinBudget.resScale))} l ${-Math.round(barWidth / 2)} ${Math.max(6, Math.round(7 * latinBudget.resScale))}{\\p0}`
+      );
+      continue;
     }
 
     const cueHasCjk = hasAnyCjk && hasCjkChars(cue.text);
@@ -1822,7 +2334,10 @@ export function buildAssFromCues(
       }
       const staticBody = formatAssCueBody(wrapped, totalDur, 'static');
       const fontOverride = cueHasCjk && stickyStyleFont !== preferredCjkFont ? `{\\fn${preferredCjkFont}}` : '';
-      return `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},StickySource,,0,0,${stickyEventMarginV},,${fontOverride}${staticBody}`;
+      events.push(
+        `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},StickySource,,0,0,${stickyEventMarginV},,${fontOverride}${staticBody}`
+      );
+      continue;
     }
 
     const companionSrcLines = cue.companionSourceLines ?? 0;
@@ -1859,8 +2374,35 @@ export function buildAssFromCues(
       cue.isStaticHold && (effect === 'karaoke' || effect === 'laser')
         ? `{\\1c${highlightColour}}`
         : '';
-    return `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},${styleName},,0,0,${eventMarginV},,${alignOverride}${cjkFontPrefix}${staticHoldColorPrefix}${formattedBody}`;
-  });
+    events.push(
+      `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},${styleName},,0,0,${eventMarginV},,${alignOverride}${cjkFontPrefix}${staticHoldColorPrefix}${formattedBody}`
+    );
+
+    if (showRoleBadges && cue.roleKind && (cue.roleKind === 'question' || cue.roleKind === 'answer' || cue.roleKind === 'title')) {
+      const badgeLang: 'vi' | 'en' | 'ja' = hasCjkChars(cue.text)
+        ? 'ja'
+        : hasVietnameseDiacritics(cue.text)
+        ? 'vi'
+        : 'en';
+      const badgeColor =
+        cue.roleKind === 'question'
+          ? '&H00FD6E0D&'
+          : cue.roleKind === 'answer'
+          ? '&H00548719&'
+          : '&H00F0CA0D&';
+      const badgeText =
+        cue.roleKind === 'question'
+          ? `● ${cue.roleLabel || ROLE_LABELS_BY_LANG.question[badgeLang]}`
+          : cue.roleKind === 'answer'
+          ? `● ${cue.roleLabel || ROLE_LABELS_BY_LANG.answer[badgeLang]}`
+          : `★ ${cue.roleLabel || ROLE_LABELS_BY_LANG.title[badgeLang]}`;
+      const band = estimateCueBand(cue);
+      const badgeY = Math.max(28, band.topPx - Math.round(18 * latinBudget.resScale));
+      events.push(
+        `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},RoleBadge,,0,0,0,,{\\an2\\pos(${Math.round(width / 2)},${badgeY})\\3c${badgeColor}\\4c${badgeColor}}${escapeAssText(badgeText)}`
+      );
+    }
+  }
 
   return [...header, ...events, ''].join('\n');
 }
@@ -1913,78 +2455,28 @@ export function buildMoneyPrinterPrompt(params: {
   const cleanSubject = subject.trim();
   const cleanUserScript = rawScript.trim();
 
-  const mediaFilterDesc: Record<MediaTypeFilter, string> = {
-    all: 'Kết hợp video B-roll và ảnh minh họa chất lượng cao.',
-    video_only: 'CHỈ đề xuất cảnh Video B-roll chuyển động thực tế (MP4 stock footage, tránh mô tả ảnh tĩnh).',
-    image_only: 'CHỈ đề xuất Ảnh minh họa / Photography sắc nét đúng ngữ cảnh từng câu (tỉ lệ ' + aspectRatio + ').',
-  };
+  const shortLengthRule =
+    count <= 5
+      ? `QUY TẮC ĐỘ DÀI NGẮN (<= ${count} dòng): Video rất ngắn nên KHÔNG viết Outro dài dòng hay tóm tắt rườm rà; câu kết CHỈ cần 1 lời cảm ơn cực ngắn đúng ngôn ngữ bài ("Thank you!", "ありがとうございます！", hoặc "Cảm ơn bạn!").`
+      : `QUY TẮC ĐỘ DÀI: Nếu có kết bài / tóm tắt (${summarizeAtEnd ? 'Đang bật' : 'Đang tắt'}), giữ thật ngắn gọn súc tích tối đa 1 câu ngắn và lời cảm ơn.`;
 
-  const moodDesc: Record<VisualMood, string> = {
-    auto: 'Tự nhiên, chân thực theo nội dung.',
-    bright: 'Tươi sáng, rạng rỡ, ánh nắng ấm áp (bright natural daylight, warm uplifting mood).',
-    moody: 'U tối, sâu lắng, ánh sáng tương phản kịch tính (moody dark shadows, dramatic low-key lighting).',
-    vibrant: 'Sinh động, rực rỡ, nhiều năng lượng (vibrant colorful dynamic energy, rich tones).',
-    minimal: 'Tối giản, gọn gàng, chuyên nghiệp (minimalist clean modern aesthetic, soft neutral tones).',
-    cinematic: 'Điện ảnh cao cấp, chiều sâu trường ảnh (cinematic 35mm film look, golden hour depth of field).',
-  };
+  const componentCreativeGuide = `
+6. TẠO "sceneComponents" (Kiến trúc KineticSub 2411 — sáng tạo từng cảnh, 1-1 với từng dòng script):
+   - Mỗi dòng script có 1 object { "variant", "animationIn", "title", "subtitle", "labels", "highlightWord", "formula" }.
+   - SÁNG TẠO & KHÔNG LẶP LẠI: Luôn đa dạng hóa "variant" giữa các câu liên tiếp (tuyệt đối KHÔNG lặp 1 variant 2 lần liền nhau):
+     * "css-browser-mockup" | "bs-card-header": hợp câu mở đầu / chủ đề chính
+     * "css-flashcard" | "gauge-tone": hợp câu hỏi / thử thách dịch [PAUSE]
+     * "css-compare" | "css-equation": hợp câu đáp án / đối chiếu cấu trúc ngữ pháp (VD labels: ["Ngữ cảnh", "Mẫu câu chuẩn"], formula: "S + V + O")
+     * "css-roadmap" | "staircase-3d" | "bs-progress-meter": hợp các bước / số liệu / thứ hạng
+     * "bs-alert-callout": hợp câu cảnh báo / lưu ý quan trọng
+     * "css-glass-quote": hợp triết lý / trích dẫn / lời cảm ơn kết thúc
+   - "animationIn": chọn luân phiên từ ["pop-up", "slide-up", "drop-in", "fade-scale"].
+   - RÀNG BUỘC NGÔN NGỮ TUYỆT ĐỐI: Mọi "title", "subtitle", "labels", "highlightWord" PHẢI viết 100% bằng ĐÚNG NGÔN NGỮ của câu đó (nếu câu là tiếng Anh thì 100% tiếng Anh; tiếng Nhật thì 100% tiếng Nhật; TUYỆT ĐỐI KHÔNG trộn nhãn tiếng Việt vào câu tiếng Anh/Nhật!).`;
 
-  const configContextBlock = `
-CẤU HÌNH VIDEO HIỆN TẠI NGƯỜI DÙNG ĐÃ CHỌN (Bắt buộc đồng bộ vào JSON):
-- Tỷ lệ khung hình: ${aspectRatio}
-- Loại tư liệu nền: ${mediaFilterDesc[mediaTypeFilter]}
-- Phong cách hình ảnh / Ánh sáng: ${moodDesc[visualMood]}
-- Giọng đọc & Học ngoại ngữ: ${dualVoiceEnabled ? '2 giọng đọc song ngữ' : '1 giọng đọc'}, khoảng chờ đếm ngược 5s: ${pauseBetweenLinesSec > 0 ? `${pauseBetweenLinesSec}s (chỉ bật trước câu dịch nội dung chính, KHÔNG chèn vào Tiêu đề/Intro/Outro)` : 'Tắt'}, lặp câu đích: ${targetRepeatCount > 0 ? `Đọc ${1 + targetRepeatCount} lần` : 'Đọc 1 lần'}, đọc lại cả đoạn câu trả lời: ${fullAnswerRecapMode}, tóm tắt cuối video: ${summarizeAtEnd ? 'Có' : 'Không'}, giữ phụ đề gốc bên dưới: ${stickyDualSubtitle ? 'Có' : 'Không'}, hiệu ứng phụ đề: ${subtitleEffect}.`;
-
-  const styleDesc: Record<ScriptStyle, string> = {
-    curious_facts:
-      'Mở đầu bằng câu hỏi hoặc sự thật có thực gây tò mò trong 3 giây đầu, sau đó đưa ra các dữ kiện, con số và sự thật khoa học/lịch sử chính xác.',
-    storytelling:
-      'Kể lại câu chuyện/sự kiện có thật mạch lạc, giàu hình ảnh, tôn trọng đúng mốc thời gian và nhân vật/địa danh thực tế.',
-    tips_howto: 'Đi thẳng vào vấn đề, liệt kê kiến thức hoặc mẹo thực tế có cơ sở khoa học rõ ràng, dễ áp dụng.',
-    news_fast: 'Nhịp độ nhanh, súc tích, nêu thông tin sự kiện có thật đắt giá ngay câu đầu tiên.',
-    language_challenge:
-      'Thử thách phản xạ học dịch câu kiểu Instant Translation / 瞬間英作文. BẮT BUỘC phân biệt rõ Tiêu đề/Intro (không đếm ngược) và các cặp nội dung Q:/A: (gồm câu nguồn + câu đích chuẩn).',
-    bilingual_dialogue:
-      'Hội thoại / Podcast 2 người đối đáp tự nhiên, mỗi lượt nói 1 dòng gắn tag [V1] hoặc [V2] (hoặc [VI]/[EN]/[JA]) để 2 giọng đọc luân phiên.',
-    quiz_riddle:
-      'Đố vui kiến thức có thực: đặt câu hỏi kèm [PAUSE] cho người xem đoán, rồi bật mí đáp án chính xác dựa trên sự thật.',
-    motivational:
-      'Truyền cảm hứng, triết lý sống sâu sắc, nhịp chậm truyền cảm, câu văn súc tích đọng lại cảm xúc.',
-    top_list:
-      'Dạng Top xếp hạng (Top 3 / Top 5) gồm các sự kiện, địa danh hoặc dữ kiện có thật từ ít bất ngờ đến gây kinh ngạc nhất.',
-  };
-
-  let langDesc =
-    'Viết cả "subject" và "script" 100% bằng tiếng Việt tự nhiên để đọc thành tiếng (không dùng emoji, không hashtag, không ghi "MC:" hay "Người dẫn:").';
-  if (language === 'en') {
-    langDesc =
-      'Write BOTH "subject" and "script" 100% in crisp, natural conversational English (no Vietnamese, no emojis, no hashtags, no speaker labels).';
-  } else if (language === 'ja') {
-    langDesc =
-      '「subject」と「script」は100%自然な日本語のみで書いてください（ベトナム語や絵文字・ハッシュタグ・話者ラベルは絶対に含めないでください）。1文ごとに改行してください。';
-  } else if (language === 'bilingual') {
-    langDesc =
-      'Write alternating lines in Vietnamese (tagged [VI] or Tiêu đề:/Q:/A:) and natural English (tagged [EN] or English:).';
-  } else if (language === 'vi_ja') {
-    langDesc =
-      'Write alternating lines in Vietnamese (tagged [VI]) and natural Japanese (tagged [JA]).';
-  } else if (language === 'ja_en') {
-    langDesc =
-      'Write alternating lines in natural Japanese (tagged Tiêu đề:/Tiêu đề nhỏ:/Q:/A:/[JA]) and natural English (tagged English:/[EN]) following the 1-minute Instant Translation (瞬間英作文) / Interview style.';
-  }
-
-  const factualRule =
-    scriptStyle === 'language_challenge' || scriptStyle === 'bilingual_dialogue'
-      ? ''
-      : '\nNGUYÊN TẮC SỰ THẬT: Chỉ trình bày kiến thức, sự kiện, số liệu và tên riêng CÓ THẬT trong lịch sử/khoa học/tin tức thực tế. Tuyệt đối KHÔNG bịa đặt hay hư cấu chi tiết giả.';
-
-  const verifiedBlock =
-    verifiedFacts.length > 0
-      ? `\nDỮ LIỆU THỰC TẾ ĐÃ XÁC MINH (Wikipedia / Tin tức thực tế — hãy ưu tiên sử dụng các dữ kiện này):\n${verifiedFacts
-          .slice(0, 10)
-          .map((f, i) => `${i + 1}. ${f}`)
-          .join('\n')}\n`
-      : '';
+  const strictFileContract = `
+QUY TẮC XUẤT FILE BẮT BUỘC (STRICT FILE OUTPUT):
+- CHỈ xuất ra duy nhất 1 tệp tin tải xuống tên là \`script_2411.json\` (hoặc nếu giao diện chat không hỗ trợ nút tạo file thì chỉ trả về DUY NHẤT 1 code block \`\`\`json ... \`\`\` chứa JSON hợp lệ UTF-8).
+- TUYỆT ĐỐI KHÔNG viết bất kỳ lời chào, giải thích, markdown hay văn bản nào bên ngoài file JSON.`;
 
   if (mode === 'from_user_script' && cleanUserScript) {
     const userLineCount = cleanUserScript.split('\n').map((l) => l.trim()).filter(Boolean).length;
@@ -1992,34 +2484,41 @@ CẤU HÌNH VIDEO HIỆN TẠI NGƯỜI DÙNG ĐÃ CHỌN (Bắt buộc đồng 
       pauseBetweenLinesSec > 0
         ? `CHÈN NHỊP ĐẾM NGƯỢC ${pauseBetweenLinesSec}s \`[PAUSE]\`: tự động phân tích và chèn \`[PAUSE]\` vào cuối các dòng câu hỏi (\`Q:\`) hoặc câu nguồn nội dung chính cần người xem suy nghĩ trước khi hiện câu dịch/đáp án. Tuyệt đối KHÔNG chèn \`[PAUSE]\` vào \`Tiêu đề:\`, \`Tiêu đề nhỏ:\`, phần mở đầu (Intro) hay kết thúc (Outro).`
         : 'Không chèn `[PAUSE]` vì người dùng đang tắt thời gian chờ đếm ngược.';
-    return `Bạn là đạo diễn hình ảnh & biên tập viên song ngữ chuẩn MoneyPrinterTurbo.
+    return `Bạn là đạo diễn hình ảnh & kiến trúc sư Component 2411 chuẩn MoneyPrinterTurbo.
 Người dùng đã nhập ĐOẠN NỘI DUNG LỜI THOẠI GỐC bên dưới (có thể là văn bản tự do, đoạn hội thoại chưa tách câu, hoặc kịch bản thô chưa gắn thẻ).
-Nhiệm vụ của bạn là PHÂN TÍCH đoạn nội dung đó, giữ nguyên 100% ý nghĩa gốc của người dùng và chuẩn hóa thành JSON hoàn chỉnh:
+Nhiệm vụ của bạn là PHÂN TÍCH đoạn nội dung đó, giữ nguyên 100% ý nghĩa gốc của người dùng và chuẩn hóa thành tệp JSON hoàn chỉnh:
 1. PHÂN TÍCH & TÁCH CÂU: Tách các đoạn dài thành từng câu ngắn gọn (1 câu / 1 lượt nói trên mỗi dòng \`\\n\`) để đọc TTS và chạy phụ đề khớp nhịp. Ngôn ngữ & phong cách mục tiêu: "${language}" · ${styleDesc[scriptStyle]}
 2. CHUẨN HÓA THẺ CẤU TRÚC (tự động nhận diện phần mở đầu, câu hỏi, câu trả lời, ngôn ngữ từng dòng):
    - Hỗ trợ đầy đủ các thẻ: \`Tiêu đề:\`, \`Tiêu đề nhỏ:\`, \`Q:\`, \`A:\`, \`English:\`, \`[VI]\`, \`[EN]\`, \`[JA]\`, \`[V1]\`, \`[V2]\`.
-   - Phần mở đầu (như \`1-Minute Instant Translation Challenge!\`, \`Tiêu đề:\`) và phần kết (Outro) CHỈ xuất hiện 1 lần duy nhất (không lặp lại, không chèn \`[PAUSE]\`).
-   - Nếu nội dung có câu hỏi/trả lời (như phỏng vấn, Q&A) mà người dùng chưa gắn thẻ, hãy tự gắn \`Tiêu đề:\` / \`Tiêu đề nhỏ:\` / \`Q:\` / \`A:\` tương ứng.
-   - Nếu đang ở chế độ song ngữ (${language}) mà có câu nguồn nào chưa có câu dịch đích bên dưới (hoặc thiếu bản dịch câu cuối), hãy tự động dịch tự nhiên và chèn thêm dòng \`English:\` / \`[EN]\` / \`[JA]\` / \`[VI]\` ngay bên dưới câu đó. Nếu là 1 ngôn ngữ dùng 2 giọng đọc, dùng \`[V1]\` / \`[V2]\` hoặc \`Q:\` / \`A:\` để 2 giọng đối đáp tự nhiên.
+   - Phần mở đầu (Intro / Tiêu đề) và phần kết (Outro) CHỈ viết bằng ngôn ngữ gốc (KHÔNG dịch sang ngôn ngữ đích, KHÔNG chèn \`[PAUSE]\`, CHỈ xuất hiện 1 lần). Riêng Intro nói rõ luật chơi kiểu "Now I will read..., you have 5 seconds to translate" / "今から日本語を読み上げます...".
+   - ${shortLengthRule}
+   - Nếu nội dung có câu hỏi/trả lời mà người dùng chưa gắn thẻ, hãy tự gắn \`Q:\` / \`A:\` tương ứng.
+   - Nếu đang ở chế độ song ngữ (${language}) mà có câu hỏi/câu nội dung chính nào chưa có câu dịch đích bên dưới (trừ Intro/Outro), hãy tự động dịch tự nhiên và chèn thêm dòng \`English:\` / \`[EN]\` / \`[JA]\` / \`[VI]\` ngay bên dưới câu đó.
    - ${pauseInstruction}
-3. ĐẶT "subject": Ngắn gọn, thu hút dựa đúng theo nội dung/Tiêu đề bài người dùng nhập.
-4. TẠO "terms": 4–6 từ khóa tìm B-roll tiếng Anh ngắn, sát bối cảnh thực tế của lời thoại (ví dụ phỏng vấn công sở, thuyết trình, bán hàng... tránh từ khóa thiên nhiên chung chung không liên quan).
-5. TẠO "scenePrompts": Mảng mô tả cảnh quay bằng tiếng Anh tương ứng 1-1 với TỪNG DÒNG trong "script" sau khi đã tách câu (khớp chặt chẽ bối cảnh từng câu + phong cách ánh sáng "${visualMood}" + loại tư liệu "${mediaTypeFilter}" + khung hình ${aspectRatio}, không chứa chữ trên ảnh).
+3. ĐẶT "subject": Ngắn gọn, thu hút dựa đúng theo nội dung/Tiêu đề bài người dùng nhập (viết đúng ngôn ngữ nguồn của bài).
+4. TẠO "terms": 4–6 từ khóa tìm B-roll tiếng Anh ngắn, sát bối cảnh thực tế của lời thoại.
+5. TẠO "scenePrompts": Mảng mô tả cảnh quay bằng tiếng Anh tương ứng 1-1 với TỪNG DÒNG trong "script" (phong cách "${visualMood}", loại "${mediaTypeFilter}", tỉ lệ ${aspectRatio}, no text).
+${componentCreativeGuide}
 ${configContextBlock}
 
 NỘI DUNG LỜI THOẠI GỐC NGƯỜI DÙNG NHẬP (${userLineCount} dòng thô):
 """
 ${cleanUserScript}
 """
+${strictFileContract}
 
-Chỉ trả về đúng 1 khối JSON hợp lệ (không giải thích thừa bên ngoài JSON):
+Cấu trúc JSON mẫu (script_2411.json):
 {
-  "subject": "Tiêu đề video ngắn gọn theo nội dung bài",
-  "script": "Tiêu đề: ...\\nEnglish: ...\\nQ: ... [PAUSE]\\nEnglish: ...",
-  "terms": ["relevant context keyword 1", "relevant context keyword 2", "relevant context keyword 3", "relevant context keyword 4"],
+  "subject": "Title matching source language",
+  "script": "Tiêu đề: ...\\nQ: ... [PAUSE]\\nEnglish: ...",
+  "terms": ["relevant context keyword 1", "relevant context keyword 2"],
   "scenePrompts": [
     "scene prompt 1 matching line 1 context and ${visualMood} mood, ${aspectRatio}, no text",
     "scene prompt 2 matching line 2 context and ${visualMood} mood, ${aspectRatio}, no text"
+  ],
+  "sceneComponents": [
+    { "variant": "css-browser-mockup", "animationIn": "drop-in", "title": "Native title matching line language", "subtitle": "5s Drill", "labels": ["Listen", "Translate"], "highlightWord": "5s" },
+    { "variant": "css-flashcard", "animationIn": "pop-up", "title": "Core Phrase", "subtitle": "Speak Out Loud", "labels": ["Prompt", "Target"], "highlightWord": "key" }
   ],
   "visualMood": "${visualMood}",
   "mediaTypeFilter": "${mediaTypeFilter}"
@@ -2031,18 +2530,20 @@ Chỉ trả về đúng 1 khối JSON hợp lệ (không giải thích thừa b�
       ? `Hướng/lĩnh vực tham khảo (có thể mở rộng sáng tạo nếu muốn): "${cleanSubject}". Nếu từ khóa đang ở ngôn ngữ khác, hãy chuyển sang chủ đề mới thuần ngôn ngữ đích.`
       : 'Tự chọn 1 chủ đề kiến thức, địa danh, hiện tượng khoa học hoặc sự kiện lịch sử CÓ THẬT (vũ trụ, tâm lý học, lịch sử, tự nhiên, công nghệ). Tránh chủ đề hư cấu hoặc lặp lại nhàm chán.';
 
-    return `Bạn là đạo diễn nội dung & biên kịch video ngắn (TikTok / YouTube Shorts / Reels) chuẩn MoneyPrinterTurbo.
-Nhiệm vụ trọn gói (All-in-One): Bạn hãy TỰ CHỌN CHỦ ĐỀ CÓ THẬT hấp dẫn, VIẾT KỊCH BẢN chi tiết, và ĐỀ XUẤT TỪ KHÓA TÌM ẢNH / VIDEO B-ROLL chuẩn cho từng cảnh quay.
+    return `Bạn là đạo diễn nội dung & kiến trúc sư Component 2411 chuẩn MoneyPrinterTurbo.
+Nhiệm vụ trọn gói (All-in-One): Bạn hãy TỰ CHỌN CHỦ ĐỀ CÓ THẬT hấp dẫn, VIẾT KỊCH BẢN chi tiết, và ĐỀ XUẤT COMPONENT + TỪ KHÓA TÌM ẢNH / VIDEO B-ROLL chuẩn cho từng cảnh quay.
 ${nicheHint}
 Phong cách: ${styleDesc[scriptStyle]}
 ${langDesc}${factualRule}${verifiedBlock}${configContextBlock}
 Yêu cầu BẮT BUỘC:
 1. "subject": Tên chủ đề thu hút bằng ngôn ngữ mục tiêu (ngắn gọn 6-14 từ, gây tò mò ngay khi đọc).
-2. "script": Gồm đúng ${count} dòng ngắn gọn đọc thành tiếng, mỗi câu/lượt nói nằm trên 1 dòng riêng biệt. Nếu là song ngữ/phỏng vấn, dùng tag Tiêu đề:/Tiêu đề nhỏ:/Q:/A:/English: hoặc [VI]/[EN]/[JA].
+2. "script": Gồm đúng ${count} dòng ngắn gọn đọc thành tiếng, mỗi câu/lượt nói nằm trên 1 dòng riêng biệt. Nếu là song ngữ/phỏng vấn, dùng tag Tiêu đề:/Tiêu đề nhỏ:/Q:/A:/English: hoặc [VI]/[EN]/[JA]. ${shortLengthRule}
 3. "terms": Mảng gồm 4-6 cụm từ khóa tìm kiếm bằng tiếng Anh ngắn gọn (2-3 từ mỗi cụm) sát với bối cảnh thực tế của kịch bản để tìm tư liệu ${mediaTypeFilter}.
 4. "scenePrompts": Mảng gồm đúng ${count} mô tả cảnh quay bằng tiếng Anh tương ứng 1-1 với từng dòng trong "script" (bám sát ngữ cảnh câu nói + phong cách ánh sáng ${visualMood}, khung hình ${aspectRatio}, không chữ trên ảnh).
+${componentCreativeGuide}
+${strictFileContract}
 
-Chỉ trả về đúng 1 khối JSON hợp lệ theo mẫu sau (không giải thích thừa bên ngoài JSON):
+Cấu trúc JSON mẫu (script_2411.json):
 {
   "subject": "Tiêu đề chủ đề thuần ngôn ngữ đích",
   "script": "Dòng 1...\\nDòng 2...\\n...",
@@ -2051,22 +2552,28 @@ Chỉ trả về đúng 1 khối JSON hợp lệ theo mẫu sau (không giải t
     "visual query for line 1 matching context and ${visualMood} mood, no text",
     "visual query for line 2 matching context and ${visualMood} mood, no text"
   ],
+  "sceneComponents": [
+    { "variant": "bs-card-header", "animationIn": "drop-in", "title": "Matched Title", "subtitle": "Hook", "labels": ["Topic", "Focus"] },
+    { "variant": "css-compare", "animationIn": "slide-up", "title": "Matched Concept", "subtitle": "Breakdown", "labels": ["A", "B"] }
+  ],
   "visualMood": "${visualMood}",
   "mediaTypeFilter": "${mediaTypeFilter}"
 }`;
   }
 
-  return `Bạn là biên kịch chuyên tạo video ngắn (TikTok / YouTube Shorts / Reels) chuẩn MoneyPrinterTurbo.
+  return `Bạn là biên kịch & kiến trúc sư Component 2411 chuẩn MoneyPrinterTurbo.
 Chủ đề: "${cleanSubject || 'Kiến thức khoa học thú vị'}"
 Phong cách: ${styleDesc[scriptStyle]}
 ${langDesc}${factualRule}${verifiedBlock}${configContextBlock}
 Yêu cầu BẮT BUỘC:
 1. "subject": Chuẩn hóa lại tên chủ đề theo đúng ngôn ngữ đã chọn.
-2. "script": Gồm đúng ${count} dòng ngắn gọn, mỗi câu/lượt nói nằm trên 1 dòng riêng biệt.
+2. "script": Gồm đúng ${count} dòng ngắn gọn, mỗi câu/lượt nói nằm trên 1 dòng riêng biệt. ${shortLengthRule}
 3. "terms": Mảng gồm 3-6 cụm từ khóa tiếng Anh ngắn (2-3 từ) để tìm tư liệu ${mediaTypeFilter} sát với ngữ cảnh từng phần.
 4. "scenePrompts": Mảng gồm đúng ${count} mô tả cảnh quay bằng tiếng Anh (tương ứng 1-1 với từng dòng trong script, bám sát ngữ cảnh, phong cách ${visualMood}, không chứa chữ viết trên ảnh).
+${componentCreativeGuide}
+${strictFileContract}
 
-Chỉ trả về đúng JSON hợp lệ theo mẫu sau (không giải thích thừa):
+Cấu trúc JSON mẫu (script_2411.json):
 {
   "subject": "${cleanSubject || 'Tiêu đề chủ đề'}",
   "script": "Dòng 1...\\nDòng 2...\\n...",
@@ -2075,13 +2582,83 @@ Chỉ trả về đúng JSON hợp lệ theo mẫu sau (không giải thích th�
     "visual description for line 1 matching context and ${visualMood} mood, no text",
     "visual description for line 2 matching context and ${visualMood} mood, no text"
   ],
+  "sceneComponents": [
+    { "variant": "bs-card-header", "animationIn": "drop-in", "title": "Matched Title", "subtitle": "Context", "labels": ["Step 1", "Step 2"] },
+    { "variant": "css-roadmap", "animationIn": "slide-up", "title": "Core Takeaway", "subtitle": "Insight", "labels": ["Fact", "Impact"] }
+  ],
   "visualMood": "${visualMood}",
   "mediaTypeFilter": "${mediaTypeFilter}"
 }`;
 }
 
+const VALID_2411_VARIANTS: ReadonlySet<string> = new Set([
+  'bs-card-header',
+  'css-compare',
+  'css-roadmap',
+  'css-glass-quote',
+  'css-equation',
+  'css-flashcard',
+  'bs-progress-meter',
+  'bs-alert-callout',
+  'css-browser-mockup',
+  'gauge-tone',
+  'staircase-3d',
+]);
+
+const VALID_2411_ANIMATIONS: ReadonlySet<string> = new Set([
+  'pop-up',
+  'slide-up',
+  'drop-in',
+  'fade-scale',
+]);
+
+export function sanitizeSceneComponentsList(
+  rawList: unknown
+): Studio2411SceneComponentOverride[] | undefined {
+  if (!Array.isArray(rawList) || rawList.length === 0) return undefined;
+  const normalized: Studio2411SceneComponentOverride[] = rawList.map((item) => {
+    if (!item || typeof item !== 'object') return {};
+    const obj = item as Record<string, unknown>;
+    const variantRaw = typeof obj.variant === 'string' ? obj.variant.trim() : '';
+    const animRaw = typeof obj.animationIn === 'string' ? obj.animationIn.trim() : '';
+    const labels = Array.isArray(obj.labels)
+      ? obj.labels.map((x) => String(x).trim()).filter(Boolean).slice(0, 4)
+      : undefined;
+    const progressPct =
+      typeof obj.progressPct === 'number' && Number.isFinite(obj.progressPct)
+        ? Math.max(5, Math.min(100, Math.round(obj.progressPct)))
+        : undefined;
+    return {
+      ...(VALID_2411_VARIANTS.has(variantRaw)
+        ? { variant: variantRaw as Studio2411ComponentVariant }
+        : {}),
+      ...(VALID_2411_ANIMATIONS.has(animRaw)
+        ? { animationIn: animRaw as Studio2411AnimationIn }
+        : {}),
+      ...(typeof obj.title === 'string' && obj.title.trim()
+        ? { title: obj.title.trim().slice(0, 90) }
+        : {}),
+      ...(typeof obj.subtitle === 'string' && obj.subtitle.trim()
+        ? { subtitle: obj.subtitle.trim().slice(0, 80) }
+        : {}),
+      ...(labels && labels.length > 0 ? { labels } : {}),
+      ...(typeof obj.highlightWord === 'string' && obj.highlightWord.trim()
+        ? { highlightWord: obj.highlightWord.trim().slice(0, 40) }
+        : {}),
+      ...(typeof obj.formula === 'string' && obj.formula.trim()
+        ? { formula: obj.formula.trim().slice(0, 72) }
+        : {}),
+      ...(typeof obj.accentColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(obj.accentColor.trim())
+        ? { accentColor: obj.accentColor.trim() }
+        : {}),
+      ...(progressPct !== undefined ? { progressPct } : {}),
+    };
+  });
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 /**
- * Parses either structured JSON output (from ChatGPT/Gemini Web, Gemini API, or Pollinations AI)
+ * Parses either structured JSON output (from ChatGPT/Gemini Web, Gemini API, .json files, or Pollinations AI)
  * OR plain multi-line script pasted by the user.
  */
 export function parseAiWebOrJsonOutput(
@@ -2092,6 +2669,7 @@ export function parseAiWebOrJsonOutput(
   script: string;
   terms: string[];
   scenePrompts: string[];
+  sceneComponents?: Studio2411SceneComponentOverride[];
   visualMood?: VisualMood;
   mediaTypeFilter?: MediaTypeFilter;
 } | null {
@@ -2108,6 +2686,14 @@ export function parseAiWebOrJsonOutput(
         terms?: string[];
         scenePrompts?: string[];
         mediaSearchQueries?: string[];
+        sceneComponents?: unknown;
+        components?: unknown;
+        scenes?: Array<{
+          text?: string;
+          narration?: string;
+          componentSpec?: unknown;
+          visualElements?: unknown;
+        }>;
         visualMood?: VisualMood;
         mediaTypeFilter?: MediaTypeFilter;
       };
@@ -2119,13 +2705,21 @@ export function parseAiWebOrJsonOutput(
           : undefined;
       const effectiveSubject = parsedSubject || subject;
 
-      const rawScript = Array.isArray(parsed.script)
+      let rawScript = Array.isArray(parsed.script)
         ? parsed.script.map((s) => String(s).trim()).filter(Boolean).join('\n')
         : typeof parsed.script === 'string'
         ? parsed.script
         : '';
 
-      if (rawScript.trim().length > 6) {
+      // Also accept lequyenktpm/2411 scenes JSON structure when imported as a .json file
+      if (!rawScript.trim() && Array.isArray(parsed.scenes) && parsed.scenes.length > 0) {
+        rawScript = parsed.scenes
+          .map((s) => String(s.text ?? s.narration ?? '').trim())
+          .filter(Boolean)
+          .join('\n');
+      }
+
+      if (rawScript.trim().length > 3) {
         const cleanScript = rawScript
           .replace(/\\n/g, '\n')
           .split('\n')
@@ -2146,11 +2740,19 @@ export function parseAiWebOrJsonOutput(
         const scenePrompts = rawPrompts
           ? rawPrompts.map((p) => String(p).trim()).filter(Boolean)
           : buildScenePromptsFromScript(sentences, effectiveSubject, terms);
+        const sceneComponents = sanitizeSceneComponentsList(
+          parsed.sceneComponents ??
+            parsed.components ??
+            (Array.isArray(parsed.scenes)
+              ? parsed.scenes.map((s) => s.componentSpec ?? {})
+              : undefined)
+        );
         return {
           subject: parsedSubject,
           script: cleanScript,
           terms,
           scenePrompts,
+          ...(sceneComponents ? { sceneComponents } : {}),
           visualMood: parsed.visualMood,
           mediaTypeFilter: parsed.mediaTypeFilter,
         };
@@ -2207,7 +2809,50 @@ const VI_KEYWORD_MAP: Array<[RegExp, string]> = [
   [/lịch sử|cổ đại|đế chế|di tích|history|ancient|歴史/i, 'ancient architecture ruins'],
   [/não bộ|tâm lý|giấc mơ|suy nghĩ|brain|psychology|脳/i, 'abstract light brain'],
   [/nhật bản|tokyo|kyoto|hoa anh đào|sakura|japan|日本|桜/i, 'japan tokyo cherry blossom'],
+  [/cẩn thận|chú ý|watch out|careful|気をつけて/i, 'person warning gesture street'],
+  [/nghỉ ngơi|đừng quá|take it easy|relax|無理しないで/i, 'calm person relaxing tea'],
+  [/nước|mưa|thời tiết|bầu trời|rain|weather|sky|clouds|天気|雨/i, 'weather sky clouds'],
+  [/gia đình|bạn bè|nói chuyện|trò chuyện|family|friends|talk|conversation|家族|友達/i, 'friends talking cafe'],
+  [/đọc sách|sách|thư viện|kiến thức|book|reading|library|本|読書/i, 'person reading book library'],
+  [/ngủ|giấc ngủ|đêm|sleep|night|dream|睡眠|夜/i, 'peaceful night bedroom'],
 ];
+
+export function computeVisualMatchScore(
+  assetTitle: string,
+  sentenceKeywords: string[],
+  subjectKeywords: string[] = []
+): number {
+  const lower = assetTitle.toLowerCase();
+  if (
+    /(diagram|chart|flowchart|graph|infographic|flag of|coat of arms|signature|logo|icon|blueprint|poster|stamp|coin|newspaper|book cover|page \d|scan|gravestone|statue of|horror|creepy|scary|skull|skeleton|zombie|ghost|monster|blood|gore|surgery|corpse|autopsy|morgue|cemetery|coffin|spider|cockroach|nightmare|demon|devil|warfare|dead body|wound|injury)/i.test(
+      lower
+    )
+  ) {
+    return -10;
+  }
+
+  let score = 0;
+  let sentenceHits = 0;
+  for (const kw of sentenceKeywords) {
+    const clean = kw.toLowerCase().trim();
+    if (clean.length < 3) continue;
+    if (lower.includes(clean)) {
+      score += 5;
+      sentenceHits += 1;
+    }
+  }
+  if (sentenceHits >= 2) {
+    score += 6;
+  }
+  for (const kw of subjectKeywords) {
+    const clean = kw.toLowerCase().trim();
+    if (clean.length < 3) continue;
+    if (!sentenceKeywords.includes(clean) && lower.includes(clean)) {
+      score += 2;
+    }
+  }
+  return score;
+}
 
 export function extractEnglishSearchTerms(subject: string, script: string): string[] {
   const combined = `${subject} ${script}`.trim();
@@ -2219,10 +2864,17 @@ export function extractEnglishSearchTerms(subject: string, script: string): stri
     }
   }
 
-  const asciiWords = subject
+  const asciiWords = `${subject} ${script}`
+    .replace(/\[(?:V1|V2|1|2|A|B|Q|VI|EN|JA|PAUSE(?::\d+)?)\]/gi, ' ')
     .replace(/[^a-zA-Z0-9\s]/g, ' ')
     .split(/\s+/)
-    .filter((w) => w.length >= 4);
+    .filter(
+      (w) =>
+        w.length >= 4 &&
+        !/^(english|japanese|vietnamese|question|answer|title|subtitle|this|that|with|from|into|your|about|what|when|how|watch|just|minute|second|instant|translation|challenge)$/i.test(
+          w
+        )
+    );
 
   if (asciiWords.length >= 2) {
     matched.push(asciiWords.slice(0, 4).join(' '));
@@ -2232,7 +2884,7 @@ export function extractEnglishSearchTerms(subject: string, script: string): stri
     matched.push('cinematic nature landscape', 'city sunset timelapse', 'dramatic light rays');
   }
 
-  return Array.from(new Set(matched)).slice(0, 5);
+  return Array.from(new Set(matched)).slice(0, 6);
 }
 
 export function buildScenePromptsFromScript(
@@ -2241,18 +2893,24 @@ export function buildScenePromptsFromScript(
   terms: string[]
 ): string[] {
   return sentences.map((sentence, idx) => {
-    const matchedForSentence = extractEnglishSearchTerms(sentence, subject);
+    const matchedForSentence = extractEnglishSearchTerms(sentence, '').filter(
+      (t) => !t.includes('cinematic nature landscape')
+    );
+    const subjectMatched = extractEnglishSearchTerms(subject, '').filter(
+      (t) => !t.includes('cinematic nature landscape')
+    );
     const baseConcept =
+      matchedForSentence[0] ??
       terms[idx % Math.max(1, terms.length)] ??
-      matchedForSentence[idx % matchedForSentence.length] ??
+      subjectMatched[0] ??
       'dramatic cinematic scenery';
     const cameraAngles = [
-      'wide cinematic establishing shot, dramatic golden lighting',
-      'close-up architectural or nature detail, shallow depth of field',
-      'dynamic low-angle perspective, atmospheric depth',
-      'sweeping aerial view, dramatic natural light rays',
+      'wide cinematic establishing shot, natural lighting',
+      'close-up subject detail, shallow depth of field',
+      'dynamic medium perspective, atmospheric depth',
+      'cinematic storytelling composition, natural color grading',
     ];
-    return `${baseConcept}, ${cameraAngles[idx % cameraAngles.length]}, photorealistic, high contrast, no text, no watermark`;
+    return `${baseConcept}, ${cameraAngles[idx % cameraAngles.length]}, photorealistic, no text, no watermark`;
   });
 }
 
@@ -2485,6 +3143,7 @@ export function generateOfflineVietnameseScript(
       : extractEnglishSearchTerms(topic, '');
 
   let sentences: string[];
+  const isShort = count <= 5;
   if (
     scriptStyle === 'language_challenge' ||
     ((language === 'vi_ja' || language === 'ja_en') &&
@@ -2493,44 +3152,50 @@ export function generateOfflineVietnameseScript(
   ) {
     if (language === 'ja_en') {
       sentences = [
-        '[JA] 1分瞬間英作文チャレンジ！今から出す日本語を5秒で英語にしてみましょう！',
-        '[JA] 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
-        '[EN] Watch out for her!',
-        '[JA] 続いて「無理しないでね」はどう言いますか？ [PAUSE]',
-        '[EN] Take it easy and don’t push yourself too hard!',
-        '[JA] いくつ言えましたか？気に入ったら保存して、毎日声に出して練習しましょう！',
+        'Tiêu đề: 今から日本語を読み上げます。5秒以内に英語で言ってみましょう！',
+        'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+        'English: Watch out for her!',
+        'Q: 続いて「無理しないでね」はどう言いますか？ [PAUSE]',
+        'English: Take it easy and don’t push yourself too hard!',
+        isShort
+          ? 'Outro: ありがとうございました！'
+          : 'Outro: お疲れ様でした！また練習しましょう！',
       ];
     } else if (language === 'vi_ja') {
       sentences = [
-        '[VI] Thử thách phản xạ dịch câu tiếng Nhật trong 5 giây! Bạn sẵn sàng chưa?',
-        '[VI] Câu đầu tiên: "Hôm nay bạn vất vả rồi" nói tiếng Nhật thế nào? [PAUSE]',
+        'Tiêu đề: Bây giờ mình sẽ đọc từng câu, bạn có 5 giây để dịch sang tiếng Nhật nhé!',
+        'Q: Câu đầu tiên: "Hôm nay bạn vất vả rồi" nói tiếng Nhật thế nào? [PAUSE]',
         '[JA] 今日もお疲れ様でした！',
-        '[VI] Câu thứ 2: "Đừng lo lắng quá nhé" trong tiếng Nhật là gì? [PAUSE]',
+        'Q: Câu thứ 2: "Đừng lo lắng quá nhé" trong tiếng Nhật là gì? [PAUSE]',
         '[JA] あまり心配しないでくださいね！',
-        '[VI] Bạn dịch đúng hết chứ? Lưu video lại và bình luận câu bạn muốn học tiếp nhé!',
+        isShort
+          ? 'Outro: Cảm ơn bạn đã luyện tập!'
+          : 'Outro: Cảm ơn bạn, hẹn gặp lại ở bài luyện tiếp theo!',
       ];
     } else if (language === 'ja') {
       sentences = [
-        `[V1] 5秒チャレンジ！${topic}の重要フレーズに挑戦しましょう！`,
-        `[V1] 質問です。${topic}について正しいのはどちらでしょうか？ [PAUSE]`,
-        `[V2] 正解は、多くの人が見落としがちな小さな仕組みに隠されています。`,
-        `[V1] いくつ正解できましたか？保存して毎日のトレーニングに役立ててくださいね！`,
+        `Tiêu đề: 今から${topic}の問題を読み上げます。5秒以内に答えてみましょう！`,
+        `Q: ${topic}について正しいのはどちらでしょうか？ [PAUSE]`,
+        `A: 正解は、多くの人が見落としがちな小さな仕組みに隠されています。`,
+        `Outro: ありがとうございました！`,
       ];
     } else if (language === 'en') {
       sentences = [
-        `[V1] Welcome to the 5-second speaking challenge on ${topic}! Ready?`,
-        `[V1] Question 1: How do native speakers react smoothly in this situation? [PAUSE]`,
-        `[V2] Keep it natural, concise, and confident!`,
-        `[V1] How many did you get right? Save this video and practice out loud every day!`,
+        `Tiêu đề: Now I will read each prompt on ${topic}, and you have 5 seconds to answer!`,
+        `Q: How do native speakers react naturally in this situation? [PAUSE]`,
+        `A: Keep it natural, concise, and confident!`,
+        `Outro: Thank you!`,
       ];
     } else {
       sentences = [
-        '[VI] Chào mừng bạn đến với thử thách phản xạ dịch câu tiếng Anh trong 5 giây! Sẵn sàng chưa nào?',
-        '[VI] Câu 1: "Hãy cẩn thận với cô ấy!" bạn nói tiếng Anh thế nào? [PAUSE]',
-        '[EN] Watch out for her!',
-        '[VI] Câu 2: "Cứ từ từ, đừng vội nhé!" dịch sang tiếng Anh là gì? [PAUSE]',
-        '[EN] Take your time, there is no rush!',
-        '[VI] Bạn dịch đúng được mấy câu? Lưu video và bình luận đáp án bên dưới nhé!',
+        'Tiêu đề: Bây giờ mình sẽ đọc câu tiếng Việt, bạn có 5 giây để dịch sang tiếng Anh nhé!',
+        'Q: Câu 1: "Hãy cẩn thận với cô ấy!" bạn nói tiếng Anh thế nào? [PAUSE]',
+        'English: Watch out for her!',
+        'Q: Câu 2: "Cứ từ từ, đừng vội nhé!" dịch sang tiếng Anh là gì? [PAUSE]',
+        'English: Take your time, there is no rush!',
+        isShort
+          ? 'Outro: Cảm ơn bạn!'
+          : 'Outro: Cảm ơn bạn đã luyện phản xạ hôm nay!',
       ];
     }
   } else if (scriptStyle === 'bilingual_dialogue') {
@@ -2553,14 +3218,14 @@ export function generateOfflineVietnameseScript(
         `[VI] Hôm nay cùng tìm hiểu chủ đề "${topic}" qua hội thoại hai giọng nhé!`,
         `[EN] That sounds awesome—let’s break down the key insight in just a few seconds.`,
         `[VI] Điều quan trọng nhất là lắng nghe cách ngắt nhịp và dùng từ tự nhiên.`,
-        `[EN] Practice out loud with us every day and save this clip for later!`,
+        `[EN] Practice out loud with us! Thank you!`,
       ];
     } else {
       sentences = [
         `[V1] Này bạn, hôm nay chúng ta bàn nhanh về "${topic}" nhé!`,
         `[V2] Quá tuyệt! Điều bất ngờ nhất ở chủ đề này là gì thế?`,
         `[V1] Chính là những chi tiết nhỏ mà hầu hết mọi người đều bỏ qua mỗi ngày.`,
-        `[V2] Đúng vậy, thử để ý một chút là thấy cuộc sống thú vị hơn hẳn luôn!`,
+        `[V2] Đúng vậy, thử để ý một chút là thấy cuộc sống thú vị hơn hẳn! Cảm ơn bạn!`,
       ];
     }
   } else if (scriptStyle === 'quiz_riddle') {
@@ -2569,18 +3234,18 @@ export function generateOfflineVietnameseScript(
         ? [
             `[V1] 5秒クイズ！${topic}にまつわる驚きの答えが分かりますか？ [PAUSE]`,
             `[V2] 正解は、一見すると逆に見える自然の法則にありました！`,
-            `[V1] あなたの予想は当たりましたか？コメントで教えてくださいね！`,
+            `[V1] ありがとうございました！`,
           ]
         : language === 'en'
         ? [
             `[V1] Quick 5-second riddle about ${topic}: can you guess the real answer? [PAUSE]`,
             `[V2] Surprise! The answer lies in a tiny detail most people overlook.`,
-            `[V1] Did you get it right? Save this and challenge a friend!`,
+            `[V1] Thank you for playing!`,
           ]
         : [
             `[V1] Đố bạn trong 5 giây về ${topic}: đâu là sự thật ít người đoán trúng? [PAUSE]`,
             `[V2] Đáp án bất ngờ nằm ngay ở chi tiết tưởng như ngược đời nhất!`,
-            `[V1] Bạn có đoán đúng không? Chia sẻ cho bạn bè cùng thử sức nhé!`,
+            `[V1] Cảm ơn bạn đã tham gia!`,
           ];
   } else if (scriptStyle === 'motivational') {
     sentences =
@@ -2589,20 +3254,20 @@ export function generateOfflineVietnameseScript(
             `今日、少しだけ立ち止まって${topic}について考えてみませんか。`,
             `大きな変化はいつも、誰にも見えない静かな一歩から始まります。`,
             `昨日の自分より1%だけ前に進むことが、やがて大きな自信に変わります。`,
-            `焦らなくて大丈夫。今日のあなたの歩みを心から応援しています！`,
+            `焦らなくて大丈夫。ありがとうございました！`,
           ]
         : language === 'en'
         ? [
             `Take a quiet breath and think about ${topic} for just ten seconds.`,
             `Every meaningful breakthrough begins with small, unseen consistency.`,
             `You do not need perfection today—just one honest step forward.`,
-            `Save this reminder for whenever you need a calm reset.`,
+            `Thank you!`,
           ]
         : [
             `Dành ra 10 giây hôm nay để suy ngẫm về ${topic} bạn nhé.`,
             `Mọi bứt phá lớn lao đều bắt đầu từ những bước nhỏ âm thầm mỗi ngày.`,
             `Bạn không cần phải hoàn hảo ngay lập tức, chỉ cần kiên trì hơn hôm qua một chút.`,
-            `Lưu lại video này làm động lực cho hành trình rực rỡ phía trước nhé!`,
+            `Cảm ơn bạn đã lắng nghe!`,
           ];
   } else if (scriptStyle === 'top_list') {
     sentences =
@@ -2618,13 +3283,13 @@ export function generateOfflineVietnameseScript(
             `Here are the top 3 eye-opening insights about ${topic}.`,
             `Number three: subtle daily details quietly shape the biggest outcomes.`,
             `Number two: experts rely on simple fundamentals more than complex tricks.`,
-            `And number one: you can start applying this immediately today!`,
+            `And number one: you can start applying this immediately today! Thank you!`,
           ]
         : [
             `Top 3 điều bất ngờ nhất về ${topic} mà ai cũng nên biết một lần.`,
             `Số 3: Những thói quen nhỏ hằng ngày quyết định tới 80% kết quả lâu dài.`,
             `Số 2: Người giỏi nhất luôn tập trung vào những nguyên lý cơ bản nhất.`,
-            `Và số 1: Bạn hoàn toàn có thể áp dụng bí quyết này ngay từ hôm nay!`,
+            `Và số 1: Bạn hoàn toàn có thể áp dụng bí quyết này ngay hôm nay! Cảm ơn bạn!`,
           ];
   } else if (language === 'ja') {
     sentences = [
@@ -2632,57 +3297,57 @@ export function generateOfflineVietnameseScript(
       `一見すると普通の光景に見えても、その背景には緻密な仕組みや歴史が隠れています。`,
       `最新の調査や観察によって、${topic}の意外な側面が次々と明らかになってきました。`,
       `小さな視点の違いに気づくだけで、毎日の見方が大きく変わるはずです。`,
-      `気になる方は保存して、次回のショート動画もぜひフォローしてくださいね！`,
+      `ありがとうございました！`,
     ];
   } else if (language === 'en') {
     sentences = [
       `Stop scrolling—what you are about to learn about ${topic} will completely surprise you.`,
       `Even today, scientists and explorers are still uncovering hidden mechanisms behind ${topic}.`,
-      `What looks ordinary at first glance actually hides extraordinary energy and precision beneath the surface.`,
+      `What looks ordinary at first glance actually hides extraordinary precision beneath the surface.`,
       `Researchers found that small historical details completely reshape how we understand ${topic}.`,
-      `Follow this channel for more mind-blowing short discoveries every single day.`,
+      `Thank you!`,
     ];
   } else if (language === 'bilingual') {
     sentences = [
       `[VI] Bạn có biết sự thật gây kinh ngạc đằng sau ${topic} chưa?`,
       `[EN] Most people miss the most fascinating detail hidden inside ${topic}.`,
       `[VI] Khi quan sát cận cảnh, từng chi tiết nhỏ đều ẩn chứa quy luật đầy bất ngờ.`,
-      `[EN] Save this video and follow for more bilingual insights every day!`,
+      `[EN] Thank you!`,
     ];
   } else if (/kim tự tháp|ai cập|pharaoh/i.test(topic)) {
     sentences = [
       'Làm thế nào người Ai Cập cổ đại có thể dựng nên những kim tự tháp khổng lồ với độ chính xác gần như tuyệt đối?',
       'Hơn 138 kim tự tháp đã được tìm thấy, trong đó Đại Kim tự tháp Giza gồm hơn 2,3 triệu khối đá nặng hàng chục tấn.',
       'Nhiều hành lang bí ẩn bên trong kim tự tháp hướng thẳng về các chòm sao cổ xưa với kỹ thuật thiên văn đáng kinh ngạc.',
-      'Theo dõi kênh để cùng giải mã thêm những kỳ quan bí ẩn của thế giới cổ đại nhé!',
+      isShort ? 'Cảm ơn bạn đã xem!' : 'Cảm ơn bạn đã cùng khám phá kỳ quan cổ đại này!',
     ];
   } else if (/đại dương|mariana|biển/i.test(topic)) {
     sentences = [
       'Hơn tám mươi phần trăm đại dương sâu thẳm trên Trái Đất vẫn chưa từng được con người đặt chân tới.',
       'Ở độ sâu tối đen hàng nghìn mét, nhiều sinh vật biển tự phát sáng rực rỡ để săn mồi giữa bóng tối.',
       'Tại đáy rãnh Mariana, áp suất nước lớn gấp hơn một nghìn lần mặt đất nhưng sự sống vẫn tồn tại.',
-      'Theo dõi kênh để cùng khám phá thêm những bí ẩn kỳ vĩ của hành tinh xanh mỗi ngày nhé!',
+      isShort ? 'Cảm ơn bạn đã xem!' : 'Cảm ơn bạn đã đồng hành khám phá đại dương xanh!',
     ];
   } else if (/mèo|hộp/i.test(topic)) {
     sentences = [
       'Vì sao một chú mèo sẵn sàng bỏ qua chiếc giường êm ái để chui vào hộp giấy chật chội?',
       'Theo bản năng săn mồi tự nhiên, không gian kín bốn phía giúp mèo cảm thấy an toàn và giảm căng thẳng.',
       'Bìa cứng còn giữ nhiệt cơ thể cực tốt, biến chiếc hộp nhỏ thành tổ ấm lý tưởng cho mèo ngủ say.',
-      'Thử đặt một chiếc hộp cạnh góc làm việc xem boss nhà bạn có lập tức chiếm đóng không nhé!',
+      'Thử đặt một chiếc hộp cạnh góc làm việc xem boss nhà bạn có lập tức chiếm đóng không nhé! Cảm ơn bạn!',
     ];
   } else if (/tập trung|thói quen|sáng/i.test(topic)) {
     sentences = [
       'Chỉ cần thay đổi 15 phút đầu tiên mỗi sáng, khả năng tập trung cả ngày của bạn sẽ tăng gấp đôi.',
       'Thói quen mở điện thoại ngay khi vừa tỉnh giấc khiến não bộ bị quá tải bởi hàng loạt thông báo.',
       'Thay vào đó, hãy uống một ly nước ấm, đón ánh nắng tự nhiên và viết ra đúng 3 việc quan trọng nhất.',
-      'Áp dụng thử ngay sáng mai để cảm nhận sự khác biệt rõ rệt trong hiệu suất làm việc của bạn!',
+      'Áp dụng thử ngay sáng mai để cảm nhận sự khác biệt rõ rệt! Cảm ơn bạn!',
     ];
   } else {
     sentences = [
       `Ít ai ngờ rằng đằng sau ${topic} lại ẩn chứa một sự thật thú vị đến vậy.`,
       `Khi tìm hiểu sâu hơn về ${topic}, những chi tiết tưởng nhỏ bé lại quyết định kết quả lớn nhất.`,
       `Các quan sát thực tế cho thấy chỉ cần hiểu đúng quy luật này, góc nhìn của bạn sẽ thay đổi hoàn toàn.`,
-      `Hãy lưu lại video và theo dõi kênh để không bỏ lỡ những chủ đề hấp dẫn tiếp theo!`,
+      isShort ? 'Cảm ơn bạn đã xem!' : `Cảm ơn bạn đã theo dõi chủ đề hôm nay!`,
     ];
   }
 

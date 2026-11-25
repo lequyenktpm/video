@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronUp,
   ClipboardPaste,
+  Clock,
   Copy,
   Download,
   ExternalLink,
@@ -12,12 +13,15 @@ import {
   Folder,
   FolderPlus,
   Image as ImageIcon,
+  Layers,
+  LayoutGrid,
+  ListChecks,
   Loader2,
+  Palette,
   RefreshCw,
   RotateCcw,
   Search,
   Sparkles,
-  Timer,
   Trash2,
   Upload,
   Volume2,
@@ -33,10 +37,12 @@ import {
   MaterialSource,
   MediaAssetItem,
   MediaTypeFilter,
+  NeutralBgTheme,
   RenderJobConfig,
   RenderJobStatus,
   ScenePreviewItem,
   ScriptStyle,
+  Studio2411ThemeId,
   StudioTab,
   SubtitleBoxStyle,
   SubtitleEffect,
@@ -51,6 +57,7 @@ import {
   VoiceOptionId,
 } from '../shared/types';
 import {
+  analyzeScriptLinePresentation,
   buildMoneyPrinterPrompt,
   buildScenePromptsFromScript,
   doesVoiceMatchLanguage,
@@ -58,23 +65,40 @@ import {
   generateOfflineVietnameseScript,
   getDefaultSecondaryVoiceForLanguage,
   getDefaultVoiceForLanguage,
+  getNeutralBgThemeMeta,
   getPresetsForLanguage,
   getScriptLengthSummary,
   hasCjkChars,
   hasVietnameseDiacritics,
   isBilingualLanguage,
   isKnownPresetSubject,
+  NEUTRAL_BG_THEMES,
   normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
   planNarrationSegments,
+  PresentationRoleTone,
   safeParseJsonResponse,
   slugifyOutputFilename,
   splitScriptSentences,
   stripNarrationTags,
   updateScriptLinePreservingTag,
 } from '../shared/mptEngine';
+import {
+  getStudio2411ThemeMeta,
+  STUDIO_2411_THEMES,
+} from '../shared/studioComponents2411';
 import { TopicDiscoveryBar } from './TopicDiscoveryBar';
 import { SubtitlePreviewCaption } from './SubtitlePreviewCaption';
+import { PresentationIcon } from './PresentationIcon';
+import { Studio2411StageCard } from './Studio2411StageCard';
+
+const BREAKDOWN_TONE_CLASSES: Record<PresentationRoleTone, string> = {
+  indigo: 'text-indigo-700 bg-indigo-50 border-indigo-200',
+  emerald: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  sky: 'text-sky-700 bg-sky-50 border-sky-200',
+  amber: 'text-amber-800 bg-amber-50 border-amber-200',
+  slate: 'text-slate-700 bg-slate-100 border-slate-200',
+};
 
 const SUBTITLE_COLOR_THEMES: Array<{
   name: string;
@@ -455,6 +479,16 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   };
 
   const activePreviewCaption = rawActiveSentence;
+  const activeRawLine =
+    activeRawLineIdx !== null ? rawNonEmptyLines[activeRawLineIdx] : activePreviewCaption;
+  const activeSegMeta = activeSegIdx >= 0 ? previewBaseSegments[activeSegIdx] : undefined;
+  const activeIsSecondarySlot = activeSegMeta?.voiceSlot === 'secondary';
+  const activeIsIntroOrOutro = Boolean(activeSegMeta?.isIntroOrOutro);
+  const activeNeutralMeta = getNeutralBgThemeMeta(config.neutralBgTheme);
+  const active2411Meta = getStudio2411ThemeMeta(config.studio2411Theme);
+  const isLightNeutralBg =
+    (config.materialSource === 'neutral_css_bg' && activeNeutralMeta.isLight) ||
+    (config.materialSource === 'studio_2411' && active2411Meta.isLight);
 
   const promptSubjectInput =
     aiWebPromptMode === 'all_in_one' && isKnownPresetSubject(config.subject)
@@ -685,6 +719,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           terms: effTerms,
           scenePrompts: nextScenePrompts,
           materialSource: config.materialSource,
+          neutralBgTheme: config.neutralBgTheme ?? 'slate_studio',
+          studio2411Theme: config.studio2411Theme ?? 'cards_pastel',
+          scriptStyle: config.scriptStyle,
+          pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
           mediaTypeFilter: config.mediaTypeFilter ?? 'all',
           visualMood: config.visualMood ?? 'auto',
           aspectRatio: config.aspectRatio,
@@ -1003,16 +1041,131 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
               >
                 <option value="mixkit_video">Video B-roll HD chuyển động mượt (Mixkit Free)</option>
-                <option value="hybrid_real">B-roll HD + Cảnh AI minh họa</option>
+                <option value="studio_2411">Thẻ học tập Component 2411 (Flashcard &amp; Infographic)</option>
+                <option value="hybrid_real">B-roll HD + Cảnh minh họa chọn lọc</option>
+                <option value="neutral_css_bg">Nền Trung Tính Studio (CSS Tối giản — Chữ siêu nét)</option>
                 <option value="stock_free">Kho Video &amp; Ảnh Archive / Wikimedia</option>
                 <option value="local_upload">
                   Video/Ảnh tải lên từ máy ({uploadedVisuals.length} tệp)
                 </option>
               </select>
               <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                B-roll là video/ảnh nền minh họa chạy sau chữ. Nên chọn <strong>Mixkit Free</strong> để có video thật chuyển động mượt, hoặc <strong>B-roll HD + AI</strong> khi cần ảnh sát nội dung từng câu.
+                Chọn <strong>Thẻ học tập Component 2411</strong> hoặc <strong>Nền Trung Tính Studio</strong> để hiển thị Flashcard + vector biểu tượng học tập sắc nét, hoặc chọn <strong>Mixkit / B-roll</strong> khi cần video cảnh thật phù hợp ngữ cảnh.
               </p>
             </div>
+
+            {config.materialSource === 'studio_2411' && (
+              <div
+                data-testid="studio-2411-theme-picker"
+                className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                    <Layers className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
+                    <span>Chọn giao diện thẻ học Component 2411</span>
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    Đồng bộ SVG/PNG khi xuất MP4
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {STUDIO_2411_THEMES.map((theme) => {
+                    const selected = (config.studio2411Theme ?? 'cards_pastel') === theme.id;
+                    return (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        data-testid={`studio-2411-theme-${theme.id}`}
+                        onClick={() => {
+                          setPreviewScenes([]);
+                          onChangeConfig({
+                            studio2411Theme: theme.id as Studio2411ThemeId,
+                            customScenes: undefined,
+                          });
+                        }}
+                        className={`p-2 rounded-lg border text-left transition-all ${
+                          selected
+                            ? 'border-indigo-600 ring-2 ring-indigo-200 bg-white'
+                            : 'border-slate-200 bg-white/80 hover:border-slate-400'
+                        }`}
+                      >
+                        <div
+                          className="w-full h-7 rounded border border-black/10 mb-1.5 flex items-center justify-between px-1.5"
+                          style={{
+                            background: `linear-gradient(135deg, ${theme.bgTopHex}, ${theme.bgBottomHex})`,
+                          }}
+                        >
+                          <span
+                            className="w-4 h-2.5 rounded-sm border"
+                            style={{
+                              backgroundColor: theme.cardBgHex,
+                              borderColor: theme.cardBorderHex,
+                            }}
+                          />
+                          <span
+                            className="w-2 h-2 rounded-full"
+                            style={{ backgroundColor: theme.accentHex }}
+                          />
+                        </div>
+                        <div className="text-[11px] font-semibold text-slate-900 truncate">
+                          {theme.label}
+                        </div>
+                        <div className="text-[10px] text-slate-500 truncate">{theme.subtitle}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {config.materialSource === 'neutral_css_bg' && (
+              <div
+                data-testid="neutral-bg-theme-picker"
+                className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                    <Palette className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
+                    <span>Chọn tông Nền Trung Tính (CSS Studio)</span>
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    Chữ &amp; icon nổi bật tối đa
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {NEUTRAL_BG_THEMES.map((theme) => {
+                    const selected = (config.neutralBgTheme ?? 'slate_studio') === theme.id;
+                    return (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        data-testid={`neutral-theme-${theme.id}`}
+                        onClick={() => {
+                          setPreviewScenes([]);
+                          onChangeConfig({
+                            neutralBgTheme: theme.id as NeutralBgTheme,
+                            customScenes: undefined,
+                          });
+                        }}
+                        className={`p-2 rounded-lg border text-left transition-all ${
+                          selected
+                            ? 'border-indigo-600 ring-2 ring-indigo-200 bg-white'
+                            : 'border-slate-200 bg-white/80 hover:border-slate-400'
+                        }`}
+                      >
+                        <div
+                          className={`w-full h-7 rounded border border-black/10 mb-1.5 mpt-neutral-bg-${theme.id}`}
+                        />
+                        <div className="text-[11px] font-semibold text-slate-900 truncate">
+                          {theme.label}
+                        </div>
+                        <div className="text-[10px] text-slate-500 truncate">{theme.description}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div>
               <label htmlFor="mpt-media-filter" className="block text-xs font-medium text-slate-700 mb-1">
@@ -1579,19 +1732,31 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           </div>
 
           <div className="pt-4 border-t border-slate-100 space-y-4">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-sm font-semibold text-slate-900">
                 Phụ đề tự động (tách 1–2 dòng gọn gàng)
               </h3>
-              <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={config.subtitle.enabled}
-                  onChange={(e) => updateSubtitle({ enabled: e.target.checked })}
-                  className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                />
-                <span>Hiển thị phụ đề</span>
-              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                  <input
+                    id="mpt-show-role-badges"
+                    type="checkbox"
+                    checked={config.subtitle.showRoleBadges !== false}
+                    onChange={(e) => updateSubtitle({ showRoleBadges: e.target.checked })}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                  />
+                  <span>Nhãn vai trò &amp; icon ngữ cảnh</span>
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.subtitle.enabled}
+                    onChange={(e) => updateSubtitle({ enabled: e.target.checked })}
+                    className="rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                  />
+                  <span>Hiển thị phụ đề</span>
+                </label>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2270,6 +2435,74 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               placeholder="Nhập hoặc dán lời thoại bất kỳ (đoạn văn, phỏng vấn, hội thoại...). Dùng mục Tạo Prompt AI Web ngay bên dưới để AI tự tách câu, gắn thẻ, chèn [PAUSE] 5s và xuất JSON."
               className="w-full px-3.5 py-2.5 text-sm leading-relaxed border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
             />
+
+            {rawNonEmptyLines.length > 0 && (
+              <div
+                data-testid="script-presentation-breakdown"
+                className="mt-2.5 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-slate-700">
+                  <span className="inline-flex items-center gap-1.5">
+                    <ListChecks className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
+                    <span>Phân vai &amp; Ngữ cảnh từng câu (bấm để xem trước)</span>
+                  </span>
+                  <span className="text-slate-500 font-normal">
+                    {rawNonEmptyLines.length} dòng
+                  </span>
+                </div>
+                <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+                  {rawNonEmptyLines.map((line, lineIdx) => {
+                    const segInfo = previewBaseSegments[lineIdx];
+                    const pres = analyzeScriptLinePresentation(line, {
+                      isSecondarySlot: segInfo?.voiceSlot === 'secondary',
+                      isIntroOrOutro: segInfo?.isIntroOrOutro,
+                      scriptStyle: config.scriptStyle,
+                    });
+                    const isSelectedLine = activeRawLineIdx === lineIdx;
+                    return (
+                      <button
+                        key={lineIdx}
+                        type="button"
+                        onClick={() => {
+                          setActiveSceneIdx(Math.min(lineIdx, Math.max(0, totalPreviewItems - 1)));
+                          setCaptionReplayNonce((n) => n + 1);
+                        }}
+                        aria-current={isSelectedLine ? 'true' : undefined}
+                        className={`w-full py-1.5 px-2.5 flex items-center justify-between gap-2 text-left text-xs transition-colors ${
+                          isSelectedLine
+                            ? 'bg-indigo-50/90 text-slate-900 font-medium'
+                            : 'bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <span
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold shrink-0 ${
+                              BREAKDOWN_TONE_CLASSES[pres.roleTone]
+                            }`}
+                          >
+                            <PresentationIcon iconKey={pres.roleIconKey} className="w-3 h-3 shrink-0" />
+                            <span>{pres.roleLabel}</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 shrink-0">
+                            <PresentationIcon iconKey={pres.contextIconKey} className="w-3 h-3 text-slate-500 shrink-0" />
+                            <span>{pres.contextLabel}</span>
+                          </span>
+                          <span className="truncate">{pres.cleanText || line}</span>
+                        </div>
+                        {pres.hasPause && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[10px] font-mono font-semibold shrink-0">
+                            <Clock className="w-3 h-3" aria-hidden="true" />
+                            <span>
+                              {pres.pauseSec ?? Math.round(config.pauseBetweenLinesSec || 5)}s
+                            </span>
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           <div>
@@ -2485,7 +2718,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   }
                   className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-md whitespace-nowrap"
                 >
-                  <Timer className="w-3 h-3" aria-hidden="true" />
+                  <Clock className="w-3 h-3" aria-hidden="true" />
                   <span>
                     {previewCountdown !== null
                       ? 'Dừng đếm ngược'
@@ -2538,7 +2771,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           <div className="bg-slate-950 rounded-xl border border-slate-200 p-4 flex justify-center">
             <div
               data-testid="studio-preview-stage"
-              className={`relative overflow-hidden rounded-lg bg-slate-900 border border-slate-800 ${
+              className={`relative overflow-hidden rounded-lg border border-slate-800 ${
+                config.materialSource === 'neutral_css_bg' && !activeScene
+                  ? `mpt-neutral-bg-${activeNeutralMeta.id}`
+                  : 'bg-slate-900'
+              } ${
                 config.aspectRatio === '9:16'
                   ? 'aspect-[9/16] w-full max-w-[245px]'
                   : config.aspectRatio === '1:1'
@@ -2555,19 +2792,45 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     autoPlay
                     loop
                     playsInline
-                    className="absolute inset-0 w-full h-full object-cover"
+                    className="animate-mpt-scene-fade absolute inset-0 w-full h-full object-cover"
                   />
                 ) : (
                   <img
                     key={activeScene.previewUrl}
                     src={activeScene.previewUrl}
                     alt={activeScene.sentence}
-                    className="absolute inset-0 w-full h-full object-cover"
+                    className="animate-mpt-scene-fade absolute inset-0 w-full h-full object-cover"
                   />
                 )
+              ) : config.materialSource === 'studio_2411' ? (
+                <Studio2411StageCard
+                  rawLine={activeRawLine}
+                  lineIndex={safeActiveIdx}
+                  totalLines={Math.max(1, totalPreviewItems)}
+                  isSecondarySlot={activeIsSecondarySlot}
+                  isIntroOrOutro={activeIsIntroOrOutro}
+                  scriptStyle={config.scriptStyle}
+                  themeId={config.studio2411Theme}
+                  pauseBetweenLinesSec={config.pauseBetweenLinesSec ?? 5}
+                  aspectRatio={config.aspectRatio}
+                  countdownActive={previewCountdown !== null}
+                />
+              ) : config.materialSource === 'neutral_css_bg' ? (
+                <div
+                  data-testid="studio-neutral-bg-overlay"
+                  className="absolute inset-0 flex flex-col items-center justify-between p-4 pointer-events-none"
+                >
+                  <div className="mt-7 w-full flex justify-center">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900/75 border border-slate-500/40 text-white text-[9px] font-medium">
+                      <LayoutGrid className="w-2.5 h-2.5 text-sky-300" aria-hidden="true" />
+                      <span>{activeNeutralMeta.label} · CSS Studio</span>
+                    </span>
+                  </div>
+                  <div className="w-full h-px bg-current opacity-10" />
+                </div>
               ) : (
                 <div
-                  className={`absolute inset-0 flex flex-col items-center justify-center p-5 text-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 transition-opacity ${
+                  className={`absolute inset-0 flex flex-col items-center justify-center p-5 pb-20 text-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 transition-opacity ${
                     previewCountdown !== null ? 'opacity-0' : 'opacity-100'
                   }`}
                 >
@@ -2578,17 +2841,21 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </div>
               )}
 
-              <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between text-[10px] text-white font-mono drop-shadow">
-                <span className="px-1.5 py-0.5 rounded bg-black/55">
+              <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1.5 text-[10px] text-white font-mono drop-shadow">
+                <span className="px-1.5 py-0.5 rounded bg-black/55 whitespace-nowrap shrink-0">
                   {config.aspectRatio} · {config.videoQuality ?? '720p'}
                 </span>
-                <span className="px-1.5 py-0.5 rounded bg-black/55 truncate max-w-[150px]">
+                <span className="px-1.5 py-0.5 rounded bg-black/55 truncate max-w-[130px]">
                   {activeScene
                     ? activeScene.sourceLabel
+                    : config.materialSource === 'studio_2411'
+                    ? active2411Meta.label
+                    : config.materialSource === 'neutral_css_bg'
+                    ? activeNeutralMeta.label
                     : config.materialSource === 'mixkit_video'
                     ? 'Mixkit B-roll HD'
                     : config.materialSource === 'hybrid_real'
-                    ? 'B-roll + AI Scene'
+                    ? 'B-roll + Chọn lọc'
                     : 'Tư liệu chọn'}
                 </span>
               </div>
@@ -2600,7 +2867,13 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   aspectRatio={config.aspectRatio}
                   replayNonce={captionReplayNonce}
                   countdownNumber={previewCountdown}
+                  countdownTotalSec={Math.max(1, Math.min(10, Math.round(config.pauseBetweenLinesSec || 5)))}
                   pinnedSourceText={pinnedSourceForPreview}
+                  rawLine={activeRawLine}
+                  scriptStyle={config.scriptStyle}
+                  isSecondarySlot={activeIsSecondarySlot}
+                  isIntroOrOutro={activeIsIntroOrOutro}
+                  isLightBackground={isLightNeutralBg}
                 />
               )}
             </div>
