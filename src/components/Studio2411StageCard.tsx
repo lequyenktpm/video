@@ -704,8 +704,8 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 </div>
 
                 <div
-                  className={`flex-1 min-w-0 rounded-xl rounded-tl-sm border ${
-                    isLandscape ? 'px-2.5 py-1.5' : isSquare ? 'px-2.5 py-2' : 'px-3 py-2.5'
+                  className={`w-fit min-w-[76px] max-w-full rounded-xl rounded-tl-sm border ${
+                    isLandscape ? 'px-2.5 py-1.5' : isSquare ? 'px-2.5 py-1.5' : 'px-3 py-2'
                   }`}
                   style={{
                     backgroundColor: theme.surfaceTintHex,
@@ -717,7 +717,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                       promptBubbleText,
                       isLandscape ? 'text-[11px]' : isSquare ? 'text-[11.5px]' : 'text-[13px]',
                       isLandscape ? 'text-[10px]' : 'text-[11.5px]'
-                    )} font-semibold leading-snug tracking-[0.015em] break-words whitespace-normal ${
+                    )} font-semibold leading-snug tracking-[0.015em] [overflow-wrap:break-word] whitespace-normal ${
                       isCompactStage ? 'line-clamp-3' : ''
                     }`}
                     style={{ color: theme.textHex }}
@@ -774,87 +774,91 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 )}
               </div>
 
-              <div
-                className={`flex-1 min-w-0 rounded-xl rounded-tl-sm border ${
-                  isLandscape ? 'px-2.5 py-1' : isSquare ? 'px-2.5 py-1.5' : 'px-3 py-2'
-                }`}
-                style={{
-                  backgroundColor: theme.surfaceTintHex,
-                  borderColor: primaryAccent,
-                  borderWidth: isAActive ? '1.5px' : '1px',
-                }}
-              >
+              <div className="flex-1 min-w-0 flex justify-start">
                 <div
-                  className={`${dynamicTextCls(
-                    promptBubbleText,
-                    isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]',
-                    isLandscape ? 'text-[9.5px]' : 'text-[11px]'
-                  )} font-semibold leading-snug tracking-[0.015em] break-words whitespace-normal ${
-                    isCompactStage ? 'line-clamp-2' : ''
+                  className={`w-fit min-w-[76px] max-w-full rounded-xl rounded-tl-sm border ${
+                    isLandscape ? 'px-2.5 py-1' : isSquare ? 'px-2.5 py-1.5' : 'px-3 py-1.5'
                   }`}
-                  style={{ color: theme.textHex }}
+                  style={{
+                    backgroundColor: theme.surfaceTintHex,
+                    borderColor: primaryAccent,
+                    borderWidth: isAActive ? '1.5px' : '1px',
+                  }}
                 >
-                  {promptBubbleText}
+                  <div
+                    className={`${dynamicTextCls(
+                      promptBubbleText,
+                      isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]',
+                      isLandscape ? 'text-[9.5px]' : 'text-[11px]'
+                    )} font-semibold leading-snug tracking-[0.015em] [overflow-wrap:break-word] whitespace-normal ${
+                      isCompactStage ? 'line-clamp-2' : ''
+                    }`}
+                    style={{ color: theme.textHex }}
+                  >
+                    {promptBubbleText}
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* Row 2: Speaker B animated 3-dot thinking bubble OR target answer bubble */}
             <div className={`flex items-center justify-end gap-2 transition-opacity duration-200 ${isBActive ? 'opacity-100' : 'opacity-90'}`}>
-              <div
-                className={`flex-1 min-w-0 rounded-xl rounded-tr-sm border ${
-                  isLandscape ? 'px-2.5 py-1' : isSquare ? 'px-2.5 py-1.5' : 'px-3 py-2'
-                } ${isQuizPrompt ? 'border-dashed' : ''}`}
-                style={{
-                  backgroundColor: `${secondaryAccent}1C`,
-                  borderColor: secondaryAccent,
-                  borderWidth: isBActive ? '1.5px' : '1px',
-                }}
-              >
-                {isQuizPrompt ? (
-                  <div
-                    data-testid="studio-2411-thinking-bubble"
-                    className="flex items-center justify-between gap-2 py-0.5"
-                  >
-                    <div className="inline-flex items-center gap-1.5 pl-1">
-                      <span
-                        className="animate-2411-think-dot-1 w-2 h-2 rounded-full inline-block"
-                        style={{ backgroundColor: secondaryAccent }}
-                      />
-                      <span
-                        className="animate-2411-think-dot-2 w-2 h-2 rounded-full inline-block"
-                        style={{ backgroundColor: secondaryAccent }}
-                      />
-                      <span
-                        className="animate-2411-think-dot-3 w-2 h-2 rounded-full inline-block"
-                        style={{ backgroundColor: secondaryAccent }}
-                      />
-                    </div>
-                    <span
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-bold shrink-0"
-                      style={{
-                        backgroundColor: `${secondaryAccent}22`,
-                        color: secondaryAccent,
-                      }}
+              <div className="flex-1 min-w-0 flex justify-end">
+                <div
+                  className={`w-fit min-w-[92px] max-w-full rounded-xl rounded-tr-sm border ${
+                    isLandscape ? 'px-2.5 py-1' : isSquare ? 'px-2.5 py-1.5' : 'px-3 py-1.5'
+                  } ${isQuizPrompt ? 'border-dashed' : ''}`}
+                  style={{
+                    backgroundColor: `${secondaryAccent}1C`,
+                    borderColor: secondaryAccent,
+                    borderWidth: isBActive ? '1.5px' : '1px',
+                  }}
+                >
+                  {isQuizPrompt ? (
+                    <div
+                      data-testid="studio-2411-thinking-bubble"
+                      className="flex items-center justify-between gap-2.5 py-0.5"
                     >
-                      <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
-                      <span>Think {Math.max(1, spec.pauseSec || 5)}s</span>
-                    </span>
-                  </div>
-                ) : (
-                  <div
-                    className={`${dynamicTextCls(
-                      replyBubbleText,
-                      isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]',
-                      isLandscape ? 'text-[9.5px]' : 'text-[11px]'
-                    )} font-semibold leading-snug tracking-[0.015em] break-words whitespace-normal ${
-                      isCompactStage ? 'line-clamp-2' : ''
-                    }`}
-                    style={{ color: theme.textHex }}
-                  >
-                    {replyBubbleText}
-                  </div>
-                )}
+                      <div className="inline-flex items-center gap-1.5 pl-0.5">
+                        <span
+                          className="animate-2411-think-dot-1 w-2 h-2 rounded-full inline-block"
+                          style={{ backgroundColor: secondaryAccent }}
+                        />
+                        <span
+                          className="animate-2411-think-dot-2 w-2 h-2 rounded-full inline-block"
+                          style={{ backgroundColor: secondaryAccent }}
+                        />
+                        <span
+                          className="animate-2411-think-dot-3 w-2 h-2 rounded-full inline-block"
+                          style={{ backgroundColor: secondaryAccent }}
+                        />
+                      </div>
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-bold shrink-0"
+                        style={{
+                          backgroundColor: `${secondaryAccent}22`,
+                          color: secondaryAccent,
+                        }}
+                      >
+                        <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                        <span>Think {Math.max(1, spec.pauseSec || 5)}s</span>
+                      </span>
+                    </div>
+                  ) : (
+                    <div
+                      className={`${dynamicTextCls(
+                        replyBubbleText,
+                        isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]',
+                        isLandscape ? 'text-[9.5px]' : 'text-[11px]'
+                      )} font-semibold leading-snug tracking-[0.015em] [overflow-wrap:break-word] whitespace-normal ${
+                        isCompactStage ? 'line-clamp-2' : ''
+                      }`}
+                      style={{ color: theme.textHex }}
+                    >
+                      {replyBubbleText}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[34px]' : 'min-w-[40px]'}`}>
@@ -911,21 +915,21 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
               )}
             </div>
 
-            <div className="relative min-w-0 flex-1">
+            <div className="relative min-w-0 flex-1 flex justify-start">
               <div
-                className={`rounded-xl border ${isLandscape ? 'px-2 py-1 space-y-0.5' : 'px-2.5 py-1.5 space-y-1'}`}
+                className={`w-fit min-w-[96px] max-w-full rounded-xl border ${isLandscape ? 'px-2 py-1 space-y-0.5' : 'px-2.5 py-1.5 space-y-1'}`}
                 style={{
                   backgroundColor: theme.surfaceTintHex,
                   borderColor: primaryAccent,
                 }}
               >
                 <div
-                  className={`${dynamicTextCls(spec.speechText, isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]', 'text-[10.5px]')} font-semibold leading-snug tracking-[0.015em] break-words whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
+                  className={`${dynamicTextCls(spec.speechText, isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]', 'text-[10.5px]')} font-semibold leading-snug tracking-[0.015em] [overflow-wrap:break-word] whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
                   style={{ color: theme.textHex }}
                 >
                   {spec.speechText}
                 </div>
-                <div className="flex items-center justify-between gap-1.5 pt-0.5">
+                <div className="flex items-center justify-between gap-2 pt-0.5">
                   <span className="text-[9px] font-semibold leading-tight break-words truncate" style={{ color: theme.mutedTextHex }}>
                     {spec.subtitle}
                   </span>
@@ -1073,7 +1077,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             ? 'w-[74%] mt-[5%]'
             : isSquare
             ? 'w-[89%] mt-[6.5%]'
-            : 'w-[89%] mt-[9%]'
+            : 'w-[89%] mt-[10.5%]'
         }`}
       >
         <div

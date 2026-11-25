@@ -16,6 +16,7 @@ export const TopBar: React.FC<TopBarProps> = ({ activeTab, onSelectTab }) => {
   const tabs: Array<{ id: StudioTab; label: string }> = [
     { id: 'short_video', label: 'Tạo Video Ngắn' },
     { id: 'learning', label: 'Học Ngoại Ngữ & Đố Vui (5s)' },
+    { id: 'anime_story', label: 'Hoạt Hình Hội Thoại' },
   ];
 
   return (

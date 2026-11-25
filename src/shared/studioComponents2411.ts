@@ -240,7 +240,7 @@ function isConversationalLine(rawLine: string, scriptStyle?: ScriptStyle): boole
 }
 
 const GENERIC_SPEAKER_LABEL_RE =
-  /^(?:host|challenge|summary|practice|prompt|your\s*turn|reply|speaker|candidate|interviewer|speaker\s*1|speaker\s*2)$/i;
+  /^(?:host|challenge|summary|practice|prompt|your\s*turn|reply|speaker|candidate|interviewer|speaker\s*1|speaker\s*2|lesson\s*topic|today(?:'s)?\s*topic|topic|key\s*point|main\s*point|intro|outro|recap|note|tip|focus|narrator|teacher|student|assistant|guide)$/i;
 
 export function isGenericSpeakerLabel(label?: string): boolean {
   const clean = (label ?? '').trim();
@@ -529,10 +529,14 @@ export function build2411CardSpecForLine(params: {
       ? 'KEY RECAP'
       : 'FOCUS MODE');
 
-  const labels =
+  const rawLabels =
     override?.labels && override.labels.length > 0
       ? override.labels.slice(0, 3)
       : defaultLabelsForLine(variant, pres.hasPause, isSecondarySlot, isQaInterview, layoutKind);
+  const labels =
+    variant === 'friends-chat' || variant === 'avatar-speech'
+      ? rawLabels.map((lb) => (isGenericSpeakerLabel(lb) ? '' : lb))
+      : rawLabels;
 
   const rawOverrideHw = override?.highlightWord?.trim();
   const cleanHasCjk = hasCjkChars(cleanText);
@@ -739,6 +743,36 @@ function charVisualUnits(ch: string): number {
  * Wraps text strictly inside `maxUnitsPerLine` across as many lines as needed,
  * never appending "..." truncation and never overflowing a line's horizontal budget.
  */
+function segmentMixedWordUnits(word: string): string[] {
+  const segments: string[] = [];
+  const asciiRunRe = /[A-Za-z0-9_]+(?:[.'’-][A-Za-z0-9_]+)*/g;
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  while ((match = asciiRunRe.exec(word)) !== null) {
+    if (match.index > lastIdx) {
+      for (const ch of Array.from(word.slice(lastIdx, match.index))) {
+        segments.push(ch);
+      }
+    }
+    segments.push(match[0]);
+    lastIdx = match.index + match[0].length;
+  }
+  if (lastIdx < word.length) {
+    for (const ch of Array.from(word.slice(lastIdx))) {
+      segments.push(ch);
+    }
+  }
+  return segments.length > 0 ? segments : Array.from(word);
+}
+
+function measureVisualUnits(str: string): number {
+  let sum = 0;
+  for (const ch of Array.from(str)) {
+    sum += charVisualUnits(ch);
+  }
+  return sum;
+}
+
 function wrapAllSvgLines(text: string, maxUnitsPerLine: number): string[] {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (!clean) return [''];
@@ -759,20 +793,39 @@ function wrapAllSvgLines(text: string, maxUnitsPerLine: number): string[] {
 
   for (let ti = 0; ti < tokens.length; ti++) {
     const word = tokens[ti];
-    const wordUnits = Array.from(word).reduce((sum, ch) => sum + charVisualUnits(ch), 0);
+    const wordUnits = measureVisualUnits(word);
 
     if (wordUnits > budget) {
       if (current) flushLine();
       let chunk = '';
       let chunkUnits = 0;
-      for (const ch of Array.from(word)) {
-        const u = charVisualUnits(ch);
+      const pieces = segmentMixedWordUnits(word);
+      for (const piece of pieces) {
+        const u = measureVisualUnits(piece);
         if (chunk && chunkUnits + u > budget) {
           lines.push(chunk);
-          chunk = ch;
-          chunkUnits = u;
+          if (u > budget) {
+            let sub = '';
+            let subUnits = 0;
+            for (const ch of Array.from(piece)) {
+              const cu = charVisualUnits(ch);
+              if (sub && subUnits + cu > budget) {
+                lines.push(sub);
+                sub = ch;
+                subUnits = cu;
+              } else {
+                sub += ch;
+                subUnits += cu;
+              }
+            }
+            chunk = sub;
+            chunkUnits = subUnits;
+          } else {
+            chunk = piece;
+            chunkUnits = u;
+          }
         } else {
-          chunk += ch;
+          chunk += piece;
           chunkUnits += u;
         }
       }
@@ -1185,6 +1238,7 @@ export function build2411CardSvg(params: {
   const bodyTop = cardY + Math.round(cardH * 0.075);
   const bodyBottom = cardY + cardH - bottomBarReserve - (hasFooterContext ? stripH + 8 : 4);
   const bodyH = Math.max(108, bodyBottom - bodyTop);
+  let effectiveBodyH = bodyH;
   const iconScale = Math.max(0.62, Math.min(1.16, Math.min(cardW, cardH) / 290));
 
   let variantBodySvg = '';
@@ -1728,25 +1782,33 @@ export function build2411CardSvg(params: {
       const spkA = rawLabelA && !isGenericSpeakerLabel(rawLabelA) ? rawLabelA : '';
       const spkB = rawLabelB && !isGenericSpeakerLabel(rawLabelB) ? rawLabelB : '';
       const avColW = Math.round(innerW * 0.16);
+      const maxLinePx = (fitted: FittedSvgTextBlock) =>
+        fitted.lines.reduce(
+          (mx, ln) => Math.max(mx, Math.round(measureVisualUnits(ln) * fitted.fontSize * 0.59)),
+          0
+        );
 
       if (isIntro || isOutro) {
-        const avScale = Math.max(0.84, Math.min(1.16, bodyH / 160));
-        const leftAvCx = cardX + padX + Math.round(avColW * 0.54);
-        const leftAvCy = bodyTop + Math.round(bodyH * 0.48);
-        const b1X = cardX + padX + avColW + 14;
-        const b1W = innerW - avColW - 18;
-        const b1H = Math.max(90, bodyH - 8);
+        const avScale = Math.max(0.82, Math.min(1.08, bodyH / 170));
+        const maxB1W = innerW - avColW - 18;
         const b1Y = bodyTop + 4;
         const speakerAPose: 'talking' | 'thinking' | 'idle' = overridePoseA ?? 'talking';
         const introBubbleFit = fitTextToBox({
           text: spec.speechText,
-          boxW: b1W - 34,
-          boxH: b1H - 18,
-          baseFontSize: Math.round(bigSize * 1.06),
+          boxW: maxB1W - 36,
+          boxH: Math.max(84, bodyH - 22),
+          baseFontSize: Math.round(bigSize * 1.04),
           minFontSize: 15,
           maxLines: 4,
           lineHeightRatio: 1.28,
         });
+        const naturalW = maxLinePx(introBubbleFit) + 42;
+        const b1W = Math.min(maxB1W, Math.max(Math.round(maxB1W * 0.44), naturalW));
+        const b1H = Math.max(70, introBubbleFit.totalHeight + 34);
+        effectiveBodyH = b1H + 8;
+        const leftAvCx = cardX + padX + Math.round(avColW * 0.54);
+        const leftAvCy = b1Y + Math.round(b1H * 0.5);
+        const b1X = cardX + padX + avColW + 14;
 
         variantBodySvg = `
           ${buildSvgCharacterAvatar({
@@ -1764,7 +1826,7 @@ export function build2411CardSvg(params: {
             animFrame,
             side: 'left',
           })}
-          <polygon points="${b1X},${b1Y + Math.round(b1H * 0.36)} ${b1X - 12},${b1Y + Math.round(b1H * 0.50)} ${b1X},${b1Y + Math.round(b1H * 0.64)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2.1"/>
+          <polygon points="${b1X},${b1Y + Math.round(b1H * 0.34)} ${b1X - 12},${b1Y + Math.round(b1H * 0.50)} ${b1X},${b1Y + Math.round(b1H * 0.66)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2.1"/>
           <rect x="${b1X}" y="${b1Y}" width="${b1W}" height="${b1H}" rx="16" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="2.1"/>
           ${renderSvgTextLines({
             lines: introBubbleFit.lines,
@@ -1780,34 +1842,32 @@ export function build2411CardSvg(params: {
         break;
       }
 
-      const avScale = Math.max(0.72, Math.min(0.98, bodyH / 182));
+      const avScale = Math.max(0.72, Math.min(0.96, bodyH / 184));
       const rowGap = 12;
-      const rowH = Math.max(52, Math.floor((bodyH - rowGap) / 2));
-      const row1Y = bodyTop;
-      const row2Y = bodyTop + rowH + rowGap;
+      const maxRowH = Math.max(58, Math.floor((bodyH - rowGap) / 2));
 
       // Left Speaker A bubble (source prompt sentence)
-      const leftAvCx = cardX + padX + Math.round(avColW * 0.5);
-      const leftAvCy = row1Y + Math.round(rowH * 0.44);
-      const b1X = cardX + padX + avColW + 12;
-      const b1W = innerW - avColW - 14;
+      const maxB1W = innerW - avColW - 14;
       const promptBubbleText =
         isAnswerReveal && spec.promptPreviewText ? spec.promptPreviewText : spec.speechText;
       const b1Fit = fitTextToBox({
         text: promptBubbleText,
-        boxW: b1W - 28,
-        boxH: rowH - 12,
+        boxW: maxB1W - 30,
+        boxH: maxRowH - 12,
         baseFontSize: Math.round(titleSize * 1.12),
         minFontSize: 14,
         maxLines: 3,
         lineHeightRatio: 1.26,
       });
+      const b1W = Math.min(maxB1W, Math.max(Math.round(maxB1W * 0.42), maxLinePx(b1Fit) + 38));
+      const row1H = Math.max(60, b1Fit.totalHeight + 28);
+      const row1Y = bodyTop;
+      const leftAvCx = cardX + padX + Math.round(avColW * 0.5);
+      const leftAvCy = row1Y + Math.round(row1H * 0.48);
+      const b1X = cardX + padX + avColW + 12;
 
       // Right Speaker B bubble (animated 3-dot thinking bubble OR translated reply)
-      const rightAvCx = cardX + padX + innerW - Math.round(avColW * 0.5);
-      const rightAvCy = row2Y + Math.round(rowH * 0.44);
-      const b2W = innerW - avColW - 14;
-      const b2X = cardX + padX;
+      const maxB2W = innerW - avColW - 14;
       const replyBubbleText = isAnswerReveal
         ? spec.speechText
         : spec.subtitle && spec.subtitle !== promptBubbleText
@@ -1815,13 +1875,25 @@ export function build2411CardSvg(params: {
         : spec.highlightWord;
       const b2Fit = fitTextToBox({
         text: replyBubbleText,
-        boxW: b2W - 28,
-        boxH: rowH - 12,
+        boxW: maxB2W - 30,
+        boxH: maxRowH - 12,
         baseFontSize: Math.round(titleSize * 1.12),
         minFontSize: 14,
         maxLines: 3,
         lineHeightRatio: 1.26,
       });
+      const b2W = isQuizPrompt
+        ? Math.min(maxB2W, Math.max(240, Math.round(maxB2W * 0.72)))
+        : Math.min(maxB2W, Math.max(Math.round(maxB2W * 0.42), maxLinePx(b2Fit) + 38));
+      const row2H = isQuizPrompt
+        ? Math.max(58, Math.round(smallSize * 3.4))
+        : Math.max(60, b2Fit.totalHeight + 28);
+      const row2Y = row1Y + row1H + rowGap;
+      const rightAvCx = cardX + padX + innerW - Math.round(avColW * 0.5);
+      const rightAvCy = row2Y + Math.round(row2H * 0.48);
+      const b2X = cardX + padX + innerW - avColW - 12 - b2W;
+
+      effectiveBodyH = row1H + rowGap + row2H;
 
       const speakerAPose: 'talking' | 'thinking' | 'idle' =
         overridePoseA ?? (isQuizPrompt && !countdownActive ? 'talking' : 'idle');
@@ -1832,21 +1904,21 @@ export function build2411CardSvg(params: {
       const isBActive = speakerBPose !== 'idle';
 
       const thinkingBubbleContent = (() => {
-        const dotCenterY = row2Y + Math.round(rowH * 0.5);
-        const dotStartX = b2X + 32;
-        const dotStep = 19;
+        const dotCenterY = row2Y + Math.round(row2H * 0.5);
+        const dotStartX = b2X + 28;
+        const dotStep = 18;
         const activeDot = animFrame % 3;
         const dotsSvg = [0, 1, 2]
           .map((di) => {
             const isActive = di === activeDot;
             const cy = dotCenterY + (isActive ? -4.5 : 1);
-            const r = isActive ? 6.0 : 4.6;
+            const r = isActive ? 5.8 : 4.5;
             const op = isActive ? '1' : '0.45';
             return `<circle cx="${dotStartX + di * dotStep}" cy="${cy}" r="${r}" fill="${modeSecondaryHex}" fill-opacity="${op}"/>`;
           })
           .join('');
-        const chipW = Math.min(b2W - 104, 134);
-        const chipH = Math.max(26, Math.round(smallSize * 1.65));
+        const chipW = Math.min(b2W - 96, 128);
+        const chipH = Math.max(26, Math.round(smallSize * 1.6));
         const chipX = b2X + b2W - chipW - 14;
         const chipY = dotCenterY - Math.round(chipH / 2);
         const thinkLabel = `Think ${Math.max(1, spec.pauseSec || 5)}s`;
@@ -1875,12 +1947,12 @@ export function build2411CardSvg(params: {
             animFrame,
             side: 'left',
           })}
-          <polygon points="${b1X},${row1Y + Math.round(rowH * 0.34)} ${b1X - 10},${row1Y + Math.round(rowH * 0.48)} ${b1X},${row1Y + Math.round(rowH * 0.62)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="${isAActive ? '2.2' : '1.4'}"/>
-          <rect x="${b1X}" y="${row1Y}" width="${b1W}" height="${rowH}" rx="15" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="${isAActive ? '2.2' : '1.4'}"/>
+          <polygon points="${b1X},${row1Y + Math.round(row1H * 0.34)} ${b1X - 10},${row1Y + Math.round(row1H * 0.48)} ${b1X},${row1Y + Math.round(row1H * 0.62)}" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="${isAActive ? '2.2' : '1.4'}"/>
+          <rect x="${b1X}" y="${row1Y}" width="${b1W}" height="${row1H}" rx="15" fill="${theme.surfaceTintHex}" stroke="${modePrimaryHex}" stroke-width="${isAActive ? '2.2' : '1.4'}"/>
           ${renderSvgTextLines({
             lines: b1Fit.lines,
-            x: b1X + 15,
-            startY: centeredBlockStartY(row1Y, rowH, b1Fit),
+            x: b1X + 16,
+            startY: centeredBlockStartY(row1Y, row1H, b1Fit),
             lineHeight: b1Fit.lineHeight,
             fontFamily,
             fontSize: b1Fit.fontSize,
@@ -1905,15 +1977,15 @@ export function build2411CardSvg(params: {
             animFrame,
             side: 'right',
           })}
-          <polygon points="${b2X + b2W},${row2Y + Math.round(rowH * 0.34)} ${b2X + b2W + 10},${row2Y + Math.round(rowH * 0.48)} ${b2X + b2W},${row2Y + Math.round(rowH * 0.62)}" fill="${modeSecondaryHex}" fill-opacity="0.14" stroke="${modeSecondaryHex}" stroke-width="${isBActive ? '2.2' : '1.4'}"/>
-          <rect x="${b2X}" y="${row2Y}" width="${b2W}" height="${rowH}" rx="15" fill="${modeSecondaryHex}" fill-opacity="0.14" stroke="${modeSecondaryHex}" stroke-width="${isBActive ? '2.2' : '1.4'}" ${isQuizPrompt ? 'stroke-dasharray="6 4"' : ''}/>
+          <polygon points="${b2X + b2W},${row2Y + Math.round(row2H * 0.34)} ${b2X + b2W + 10},${row2Y + Math.round(row2H * 0.48)} ${b2X + b2W},${row2Y + Math.round(row2H * 0.62)}" fill="${modeSecondaryHex}" fill-opacity="0.14" stroke="${modeSecondaryHex}" stroke-width="${isBActive ? '2.2' : '1.4'}"/>
+          <rect x="${b2X}" y="${row2Y}" width="${b2W}" height="${row2H}" rx="15" fill="${modeSecondaryHex}" fill-opacity="0.14" stroke="${modeSecondaryHex}" stroke-width="${isBActive ? '2.2' : '1.4'}" ${isQuizPrompt ? 'stroke-dasharray="6 4"' : ''}/>
           ${
             isQuizPrompt
               ? thinkingBubbleContent
               : renderSvgTextLines({
                   lines: b2Fit.lines,
-                  x: b2X + 15,
-                  startY: centeredBlockStartY(row2Y, rowH, b2Fit),
+                  x: b2X + 16,
+                  startY: centeredBlockStartY(row2Y, row2H, b2Fit),
                   lineHeight: b2Fit.lineHeight,
                   fontFamily,
                   fontSize: b2Fit.fontSize,
@@ -1928,25 +2000,31 @@ export function build2411CardSvg(params: {
 
     case 'avatar-speech': {
       const avX = cardX + padX + Math.round(innerW * 0.13);
-      const avY = bodyTop + Math.round(bodyH * 0.46);
-      const avScale = Math.max(0.75, Math.min(1.12, bodyH / 160));
+      const avScale = Math.max(0.75, Math.min(1.08, bodyH / 165));
       const bX = cardX + padX + Math.round(innerW * 0.27);
       const bY = bodyTop + 2;
-      const bW = Math.round(innerW * 0.73);
-      const bH = Math.max(82, bodyH - 8);
+      const maxBW = Math.round(innerW * 0.73);
       const pillFont = Math.max(12, Math.round(smallSize * 0.82));
       const pillH = Math.max(24, Math.round(pillFont * 1.68));
-      const pillW = Math.min(bW - 24, Math.max(96, Math.round(spec.reactionText.length * pillFont * 0.68 + 26)));
+      const pillW = Math.min(maxBW - 24, Math.max(96, Math.round(spec.reactionText.length * pillFont * 0.68 + 26)));
       const metaRowH = pillH + 12;
-      const speechH = Math.max(44, bH - metaRowH - 8);
       const spFit = fitTextToBox({
         text: spec.speechText,
-        boxW: bW - 32,
-        boxH: speechH,
+        boxW: maxBW - 32,
+        boxH: Math.max(54, bodyH - metaRowH - 18),
         baseFontSize: bigSize,
         minFontSize: 14,
         maxLines: 4,
       });
+      const spMaxPx = spFit.lines.reduce(
+        (mx, ln) => Math.max(mx, Math.round(measureVisualUnits(ln) * spFit.fontSize * 0.59)),
+        0
+      );
+      const bW = Math.min(maxBW, Math.max(Math.max(pillW + 130, Math.round(maxBW * 0.52)), spMaxPx + 36));
+      const speechH = Math.max(46, spFit.totalHeight + 20);
+      const bH = speechH + metaRowH + 8;
+      effectiveBodyH = bH + 6;
+      const avY = bY + Math.round(bH * 0.5);
       const subFit = fitTextToBox({
         text: spec.subtitle,
         boxW: Math.max(84, bW - pillW - 36),
@@ -2129,7 +2207,7 @@ export function build2411CardSvg(params: {
   // Optional Hint / Example / Previous Target Recall Strip cleanly placed below body and above progress bar
   let footerContextSvg = '';
   if (hasFooterContext && fittedStrip) {
-    const stripY = bodyTop + bodyH + 6;
+    const stripY = bodyTop + effectiveBodyH + 8;
     const iconKeyForStrip: PresentationIconKey =
       spec.hintKind === 'caution' ? 'alert_triangle' : 'lightbulb';
     const stripIconCx = cardX + padX + 18;
@@ -2152,7 +2230,12 @@ export function build2411CardSvg(params: {
     `;
   }
 
-  const barY = cardY + cardH - 15;
+  const effectiveCardH =
+    spec.variant === 'friends-chat' || spec.variant === 'avatar-speech'
+      ? Math.max(120, (bodyTop - cardY) + effectiveBodyH + (hasFooterContext ? stripH + 16 : 8) + bottomBarReserve)
+      : cardH;
+
+  const barY = cardY + effectiveCardH - 15;
   const barW = innerW;
   const barFillW = Math.max(18, Math.round((spec.progressPct / 100) * barW));
 
@@ -2174,8 +2257,8 @@ export function build2411CardSvg(params: {
   <circle cx="${Math.round(width * 0.84)}" cy="${Math.round(height * 0.76)}" r="${Math.round(Math.min(width, height) * 0.34)}" fill="${modeSecondaryHex}" fill-opacity="0.08"/>
   <g>${dotLines.join('')}</g>
 
-  <rect x="${cardX + 4}" y="${cardY + 10}" width="${cardW}" height="${cardH}" rx="${cardR}" fill="#000000" fill-opacity="${theme.isLight ? '0.07' : '0.36'}"/>
-  <rect x="${cardX}" y="${cardY}" width="${cardW}" height="${cardH}" rx="${cardR}" fill="${theme.cardBgHex}" stroke="${theme.cardBorderHex}" stroke-width="2.5"/>
+  <rect x="${cardX + 4}" y="${cardY + 10}" width="${cardW}" height="${effectiveCardH}" rx="${cardR}" fill="#000000" fill-opacity="${theme.isLight ? '0.07' : '0.36'}"/>
+  <rect x="${cardX}" y="${cardY}" width="${cardW}" height="${effectiveCardH}" rx="${cardR}" fill="${theme.cardBgHex}" stroke="${theme.cardBorderHex}" stroke-width="2.5"/>
   ${spec.variant === 'bs-card-header' ? `<rect x="${cardX}" y="${cardY}" width="${cardW}" height="6" rx="3" fill="url(#accentBar)"/>` : ''}
 
   ${variantBodySvg}

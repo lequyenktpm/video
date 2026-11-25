@@ -56,6 +56,11 @@ import {
   selectCuratedBackgroundsForConfig,
 } from './src/shared/curatedBackgrounds';
 import {
+  parseAnimeDialogueScript,
+  renderAnimeBeatSvgFrame,
+} from './src/shared/animeStoryEngine';
+import {
+  AnimeSceneStyle,
   BgmPreset,
   CuratedBackgroundCategory,
   GroundingSource,
@@ -571,6 +576,33 @@ async function createClockTickTockWav(durationSec: number, outWavPath: string): 
       `aevalsrc=${escapedExpr}:s=24000:d=${safeDur.toFixed(3)}`,
       '-af',
       'highpass=f=380,lowpass=f=6800,volume=1.95',
+      '-ar',
+      '24000',
+      '-ac',
+      '1',
+      '-c:a',
+      'pcm_s16le',
+      outWavPath,
+    ],
+    12000
+  );
+}
+
+async function createDoorSlideFxWav(durationSec: number, outWavPath: string): Promise<void> {
+  const safeDur = Math.max(0.8, Math.min(4.0, durationSec));
+  // Soft woody fusuma door slide + gentle chime cue
+  const rawExpr =
+    'if(between(t,0.18,0.68),0.26*exp(-abs(t-0.42)*8)*sin(2*PI*(190+140*t)*t),0)+if(between(t,0.68,0.86),0.32*exp(-(t-0.68)*26)*sin(2*PI*135*(t-0.68)),0)+if(between(t,0.72,1.25),0.14*exp(-(t-0.72)*6)*sin(2*PI*660*(t-0.72)),0)';
+  const escapedExpr = rawExpr.replace(/,/g, '\\,');
+  await runFfmpeg(
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      `aevalsrc=${escapedExpr}:s=24000:d=${safeDur.toFixed(3)}`,
+      '-af',
+      'lowpass=f=3200,volume=1.35',
       '-ar',
       '24000',
       '-ac',
@@ -2027,6 +2059,8 @@ async function resolveSceneAssets(params: {
   selectedMediaIds: string[];
   customScenes?: ScenePreviewItem[];
   subtitleFontName?: string;
+  animeSceneStyle?: AnimeSceneStyle;
+  animeCharacterVoices?: Record<string, VoiceOptionId>;
   onLog?: (msg: string) => void;
 }): Promise<{ cacheKey: string; assets: ResolvedSceneAsset[] }> {
   const mediaTypeFilter: MediaTypeFilter = params.mediaTypeFilter ?? 'all';
@@ -2122,6 +2156,45 @@ async function resolveSceneAssets(params: {
     params.aspectRatio,
     params.videoQuality ?? '720p'
   );
+
+  if (params.materialSource === 'anime_cartoon') {
+    const story = parseAnimeDialogueScript(params.script, params.animeCharacterVoices);
+    const animeAssets: ResolvedSceneAsset[] = [];
+    for (let bi = 0; bi < story.beats.length; bi++) {
+      assertNotCancelled();
+      const beat = story.beats[bi];
+      const svgPath = path.join(sceneCacheDir, `anime_beat_${bi}.svg`);
+      const pngPath = path.join(sceneCacheDir, `anime_beat_${bi}.png`);
+      if (!fs.existsSync(pngPath)) {
+        const svgContent = renderAnimeBeatSvgFrame({
+          story,
+          beat,
+          timeSec: bi * 2.2 + 0.7,
+          beatProgress: 0.55,
+          width,
+          height,
+          sceneStyle: params.animeSceneStyle ?? 'room_warm',
+          fontName: params.subtitleFontName,
+          isPlayingSpeech: !beat.isStageCue,
+        });
+        fs.writeFileSync(svgPath, svgContent, 'utf-8');
+        await runFfmpeg(['-y', '-i', svgPath, '-frames:v', '1', pngPath], 15000);
+        fs.rmSync(svgPath, { force: true });
+      }
+      animeAssets.push({
+        index: bi,
+        sentence: beat.spokenText || beat.rawText,
+        prompt: `${beat.speakerName}: ${beat.emotion} (${beat.action})`,
+        kind: 'image',
+        localPath: pngPath,
+        previewUrl: `/files/cache/${cacheKey}/anime_beat_${bi}.png`,
+        thumbUrl: `/files/cache/${cacheKey}/anime_beat_${bi}.png`,
+        sourceLabel: `Anime · ${beat.speakerName}`,
+      });
+    }
+    params.onLog?.(`Đã dựng ${animeAssets.length} phân cảnh hoạt hình 2D (${story.characters.length} nhân vật).`);
+    return { cacheKey, assets: animeAssets };
+  }
 
   // Curated Local Background Library (Study / Interview / Everyday Knowledge — Zero AI/Network latency)
   if (params.materialSource === 'curated_preset') {
@@ -3247,6 +3320,421 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       { status: 'running', progressPct: 6, stepLabel: 'Đang tách câu & tạo giọng đọc từng phân cảnh...' },
       'Bắt đầu quy trình dựng video chuẩn MoneyPrinterTurbo.'
     );
+
+    if (config.materialSource === 'anime_cartoon') {
+      const story = parseAnimeDialogueScript(config.script, config.animeCharacterVoices);
+      if (story.beats.length === 0) {
+        throw new Error('Kịch bản hoạt hình đang trống hoặc chưa có dòng hội thoại hợp lệ.');
+      }
+
+      const { width, height } = getCanvasDimensions(
+        config.aspectRatio,
+        config.videoQuality ?? '720p'
+      );
+      const qualityParams = getQualityEncodingParams(config.videoQuality ?? '720p');
+      const animeStyle: AnimeSceneStyle = config.animeSceneStyle ?? 'room_warm';
+
+      updateJob(
+        jobId,
+        {
+          progressPct: 8,
+          stepLabel: `Đang tổng hợp giọng nói cho ${story.characters.length} nhân vật (${story.beats.length} nhịp diễn)...`,
+        },
+        `Hoạt hình 2D: nhận diện ${story.characters.map((c) => c.displayName).join(', ')} (${story.beats.length} phân cảnh).`
+      );
+
+      const audioParts: string[] = [];
+      const beatTimings: Array<{
+        beat: (typeof story.beats)[number];
+        startSec: number;
+        endSec: number;
+        voiceDur: number;
+        dur: number;
+      }> = [];
+      let cursorSec = 0;
+      let loggedRecovery = false;
+
+      for (let bi = 0; bi < story.beats.length; bi++) {
+        assertNotCancelled(jobId);
+        const beat = story.beats[bi];
+        const beatVoiceWav = path.join(workDir, `anime_voice_${bi}.wav`);
+
+        if (beat.isStageCue && !config.animeReadStageDirections) {
+          const cueDur = beat.doorOpen ? 1.7 : 1.4;
+          if (beat.doorOpen) {
+            await createDoorSlideFxWav(cueDur, beatVoiceWav);
+          } else {
+            await createSilenceWav(cueDur, beatVoiceWav);
+          }
+          const actualCueDur = await probeDurationSec(beatVoiceWav);
+          audioParts.push(beatVoiceWav);
+          beatTimings.push({
+            beat,
+            startSec: cursorSec,
+            endSec: cursorSec + actualCueDur,
+            voiceDur: 0,
+            dur: actualCueDur,
+          });
+          cursorSec += actualCueDur;
+        } else {
+          const charProfile = story.characters.find((c) => c.id === beat.speakerId);
+          const resolvedVoiceId =
+            config.animeCharacterVoices?.[beat.speakerId] ??
+            charProfile?.defaultVoiceId ??
+            config.voiceId;
+          const partMp3Path = path.join(workDir, `anime_tts_${bi}.mp3`);
+          const rawNormWav = path.join(workDir, `anime_raw_${bi}.wav`);
+
+          try {
+            const ttsRes = await synthesizeChunkWithFallback({
+              text: beat.spokenText || beat.rawText,
+              voiceId: resolvedVoiceId,
+              ttsProvider: config.ttsProvider,
+              voiceRate: config.voiceRate,
+              outPath: partMp3Path,
+            });
+            if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
+              loggedRecovery = true;
+              updateJob(
+                jobId,
+                {},
+                ttsRes.fallbackNote ??
+                  'Edge-TTS tạm thời gián đoạn -> tự động dùng Google TTS Miễn phí.'
+              );
+            }
+            await normalizeSpeechAudioToWav(partMp3Path, rawNormWav);
+
+            const targetPitch = charProfile?.pitchRatio ?? 1.0;
+            const isGooglePitchedMale =
+              ttsRes.engineUsed.includes('Google') &&
+              (resolvedVoiceId.includes('Keita') ||
+                resolvedVoiceId.includes('NamMinh') ||
+                resolvedVoiceId.includes('Guy'));
+            const relFactor = Math.max(
+              0.84,
+              Math.min(1.28, isGooglePitchedMale ? targetPitch / 0.90 : targetPitch)
+            );
+            if (Math.abs(relFactor - 1.0) > 0.03) {
+              await runFfmpeg(
+                [
+                  '-y',
+                  '-i',
+                  rawNormWav,
+                  '-af',
+                  `asetrate=24000*${relFactor.toFixed(3)},aresample=24000,atempo=${(1 / relFactor).toFixed(4)}`,
+                  '-ar',
+                  '24000',
+                  '-ac',
+                  '1',
+                  '-c:a',
+                  'pcm_s16le',
+                  beatVoiceWav,
+                ],
+                15000
+              );
+              fs.rmSync(rawNormWav, { force: true });
+            } else {
+              fs.renameSync(rawNormWav, beatVoiceWav);
+            }
+          } catch {
+            const safeEstDur = Math.max(1.4, Math.min(7.5, beat.estDurationSec));
+            await createSilenceWav(safeEstDur, beatVoiceWav);
+          }
+
+          const voiceDur = await probeDurationSec(beatVoiceWav);
+          const gapWav = path.join(workDir, `anime_gap_${bi}.wav`);
+          await createSilenceWav(0.26, gapWav);
+          const gapDur = await probeDurationSec(gapWav);
+          audioParts.push(beatVoiceWav, gapWav);
+
+          const totalBeatDur = Math.max(1.1, voiceDur + gapDur);
+          beatTimings.push({
+            beat,
+            startSec: cursorSec,
+            endSec: cursorSec + totalBeatDur,
+            voiceDur,
+            dur: totalBeatDur,
+          });
+          cursorSec += totalBeatDur;
+        }
+
+        const pct = 8 + Math.round(((bi + 1) / story.beats.length) * 28);
+        updateJob(jobId, {
+          progressPct: pct,
+          stepLabel: `Đang tạo thoại nhân vật ${bi + 1}/${story.beats.length} (${beat.speakerName})...`,
+        });
+      }
+
+      const voiceListPath = path.join(workDir, 'anime_voice_concat.txt');
+      fs.writeFileSync(
+        voiceListPath,
+        audioParts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'),
+        'utf-8'
+      );
+      const voiceAllPath = path.join(workDir, 'voice_all.wav');
+      await runFfmpeg(
+        [
+          '-y',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          voiceListPath,
+          '-ar',
+          '24000',
+          '-ac',
+          '1',
+          '-c:a',
+          'pcm_s16le',
+          voiceAllPath,
+        ],
+        Math.max(60000, audioParts.length * 1500)
+      );
+      const totalVoiceSec = Math.max(2, await probeDurationSec(voiceAllPath));
+
+      updateJob(
+        jobId,
+        {
+          progressPct: 38,
+          stepLabel: `Đang vẽ hoạt hình 24fps (${story.beats.length} phân cảnh đồng bộ khẩu hình)...`,
+        },
+        `Đã hoàn tất âm thanh đa nhân vật (${totalVoiceSec.toFixed(1)}s). Bắt đầu kết xuất hoạt hình 24fps.`
+      );
+
+      const fps = 24;
+      const animeClips: string[] = [];
+      for (let bi = 0; bi < beatTimings.length; bi++) {
+        assertNotCancelled(jobId);
+        const timing = beatTimings[bi];
+        const framesDir = path.join(workDir, `anime_frames_${bi}`);
+        fs.mkdirSync(framesDir, { recursive: true });
+        const totalFrames = Math.max(18, Math.round(timing.dur * fps));
+
+        for (let f = 0; f < totalFrames; f++) {
+          const localSec = f / fps;
+          const beatProgress = f / Math.max(1, totalFrames - 1);
+          const isPlayingSpeech =
+            !timing.beat.isStageCue && localSec < Math.max(0.08, timing.voiceDur - 0.04);
+          const svgFrame = renderAnimeBeatSvgFrame({
+            story,
+            beat: timing.beat,
+            timeSec: timing.startSec + localSec,
+            beatProgress,
+            width,
+            height,
+            sceneStyle: animeStyle,
+            fontName: config.subtitle.fontName,
+            isPlayingSpeech,
+          });
+          fs.writeFileSync(
+            path.join(framesDir, `f_${String(f).padStart(4, '0')}.svg`),
+            svgFrame,
+            'utf-8'
+          );
+        }
+
+        const beatClipPath = path.join(workDir, `anime_clip_${bi}.mp4`);
+        await runFfmpeg(
+          [
+            '-y',
+            '-framerate',
+            String(fps),
+            '-i',
+            path.join(framesDir, 'f_%04d.svg'),
+            '-t',
+            timing.dur.toFixed(3),
+            '-c:v',
+            'libx264',
+            '-preset',
+            'ultrafast',
+            '-pix_fmt',
+            'yuv420p',
+            beatClipPath,
+          ],
+          Math.max(45000, totalFrames * 350)
+        );
+        fs.rmSync(framesDir, { recursive: true, force: true });
+        animeClips.push(beatClipPath);
+
+        const pct = 38 + Math.round(((bi + 1) / beatTimings.length) * 44);
+        updateJob(jobId, {
+          progressPct: pct,
+          stepLabel: `Đang kết xuất phân cảnh hoạt hình ${bi + 1}/${beatTimings.length}...`,
+        });
+      }
+
+      const clipListPath = path.join(workDir, 'anime_clips_concat.txt');
+      fs.writeFileSync(
+        clipListPath,
+        animeClips.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'),
+        'utf-8'
+      );
+      const visualTrackPath = path.join(workDir, 'visual_merged.mp4');
+      await runFfmpeg(
+        [
+          '-y',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          clipListPath,
+          '-t',
+          totalVoiceSec.toFixed(3),
+          '-c',
+          'copy',
+          visualTrackPath,
+        ],
+        Math.max(90000, animeClips.length * 2500)
+      );
+
+      updateJob(jobId, {
+        progressPct: 86,
+        stepLabel: 'Đang ghép âm thanh nhân vật, nhạc nền & xuất MP4 hoàn chỉnh...',
+      });
+
+      const { relDir: targetRelDir, absDir: targetAbsDir } = resolveProjectOutputDir(config.outputDir);
+      const customName = config.outputFilename?.trim();
+      const rawBaseName = slugifyOutputFilename(
+        customName || story.title || config.subject,
+        `🎬 ${jobId.replace(/_/g, ' ')}`,
+        {
+          script: config.script,
+          scriptStyle: config.scriptStyle,
+          language: config.language,
+          includeEmoji: !customName,
+        }
+      );
+      const uniqueBaseName = allocateUniqueBaseName(targetAbsDir, rawBaseName);
+
+      const srtCues: SubtitleCue[] = beatTimings.map((t, idx) => ({
+        index: idx + 1,
+        startSec: t.startSec,
+        endSec: t.endSec,
+        text: t.beat.isStageCue
+          ? t.beat.sceneTitle || t.beat.rawText
+          : `${t.beat.speakerName}: ${t.beat.spokenText}`,
+      }));
+      const srtContent = buildSrtFromCues(srtCues);
+      const srtFilename = `${uniqueBaseName}.srt`;
+      fs.writeFileSync(path.join(targetAbsDir, srtFilename), srtContent, 'utf-8');
+
+      let bgmPath: string | null = null;
+      if (config.bgmPreset === 'lofi_chill') bgmPath = path.join(BGM_DIR, 'lofi_chill.mp3');
+      else if (config.bgmPreset === 'soft_piano') bgmPath = path.join(BGM_DIR, 'soft_piano.mp3');
+      else if (config.bgmPreset === 'tech_upbeat') bgmPath = path.join(BGM_DIR, 'tech_upbeat.mp3');
+      else if (config.bgmPreset === 'cinema_ambient') bgmPath = path.join(BGM_DIR, 'cinema_ambient.mp3');
+      else if (config.bgmPreset === 'custom' && config.customBgmFilename) {
+        const candidate = path.join(UPLOADS_DIR, sanitizeName(config.customBgmFilename));
+        if (fs.existsSync(candidate)) bgmPath = candidate;
+      }
+      if (bgmPath && !fs.existsSync(bgmPath)) {
+        bgmPath = null;
+      }
+
+      const mp4Filename = `${uniqueBaseName}.mp4`;
+      const mp4OutPath = path.join(targetAbsDir, mp4Filename);
+      const voiceVol = Math.max(0.1, Math.min(2.0, config.voiceVolume));
+      const bgmVol = Math.max(0.0, Math.min(1.0, config.bgmVolume));
+      const finalArgs: string[] = ['-y', '-i', visualTrackPath, '-i', voiceAllPath];
+
+      let assFilterExpr: string | null = null;
+      if (config.subtitle.enabled) {
+        const assPath = path.join(workDir, 'anime_subtitles.ass');
+        const assContent = buildAssFromCues(srtCues, config.subtitle, width, height, {
+          isLightBackground: true,
+        });
+        fs.writeFileSync(assPath, assContent, 'utf-8');
+        const escapedAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+        const escapedFontsDir = FONTS_DIR.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+        assFilterExpr = `ass='${escapedAss}':fontsdir='${escapedFontsDir}'`;
+      }
+
+      if (bgmPath) {
+        finalArgs.push('-stream_loop', '-1', '-i', bgmPath);
+        const filters: string[] = [];
+        if (assFilterExpr) {
+          filters.push(`[0:v]${assFilterExpr}[vout]`);
+        }
+        filters.push(
+          `[1:a]volume=${voiceVol.toFixed(2)}[va]`,
+          `[2:a]volume=${bgmVol.toFixed(2)}[ba]`,
+          `[va][ba]amix=inputs=2:duration=first:dropout_transition=2[aout]`
+        );
+        finalArgs.push(
+          '-filter_complex',
+          filters.join(';'),
+          '-map',
+          assFilterExpr ? '[vout]' : '0:v',
+          '-map',
+          '[aout]'
+        );
+      } else {
+        if (assFilterExpr) {
+          finalArgs.push('-vf', assFilterExpr);
+        }
+        finalArgs.push('-af', `volume=${voiceVol.toFixed(2)}`, '-map', '0:v', '-map', '1:a');
+      }
+
+      finalArgs.push(
+        '-t',
+        totalVoiceSec.toFixed(3),
+        '-c:v',
+        'libx264',
+        '-preset',
+        totalVoiceSec > 75 || width >= 1080 ? 'veryfast' : 'fast',
+        '-profile:v',
+        'main',
+        '-level',
+        '4.0',
+        '-crf',
+        qualityParams.crf,
+        '-maxrate',
+        qualityParams.maxrate,
+        '-bufsize',
+        qualityParams.bufsize,
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-b:a',
+        qualityParams.audioBitrate,
+        '-movflags',
+        '+faststart',
+        mp4OutPath
+      );
+
+      await runFfmpeg(finalArgs, Math.max(300000, Math.round(totalVoiceSec * 5000) + 90000));
+
+      const stat = fs.statSync(mp4OutPath);
+      const finalDur = await probeDurationSec(mp4OutPath);
+      const relSubPath = path.relative(PROJECT_OUTPUT_ROOT, targetAbsDir).replace(/\\/g, '/');
+      const urlPrefix = relSubPath
+        ? `/files/output/${relSubPath.split('/').map(encodeURIComponent).join('/')}`
+        : '/files/output';
+      const savedOutputPath = `${targetRelDir}/${mp4Filename}`;
+      const savedSrtPath = `${targetRelDir}/${srtFilename}`;
+
+      updateJob(
+        jobId,
+        {
+          status: 'done',
+          progressPct: 100,
+          stepLabel: 'Hoàn tất xuất video Hoạt hình 24fps MP4!',
+          scenes: [],
+          videoUrl: `${urlPrefix}/${encodeURIComponent(mp4Filename)}`,
+          srtUrl: `${urlPrefix}/${encodeURIComponent(srtFilename)}`,
+          savedOutputPath,
+          savedSrtPath,
+          outputFilename: mp4Filename,
+          durationSec: finalDur,
+          fileSizeBytes: stat.size,
+        },
+        `Xuất thành công ${savedOutputPath} (${(stat.size / 1024).toFixed(0)} KB, ${finalDur.toFixed(1)}s, 24fps hoạt hình).`
+      );
+      return;
+    }
 
     const segments = planNarrationSegments(config);
     if (segments.length === 0) {
@@ -4841,6 +5329,11 @@ async function startServer() {
       : [];
     const subtitleFontName =
       typeof req.body?.subtitleFontName === 'string' ? req.body.subtitleFontName : undefined;
+    const animeSceneStyle = req.body?.animeSceneStyle as AnimeSceneStyle | undefined;
+    const animeCharacterVoices =
+      req.body?.animeCharacterVoices && typeof req.body.animeCharacterVoices === 'object'
+        ? (req.body.animeCharacterVoices as Record<string, VoiceOptionId>)
+        : undefined;
 
     if (!script && !subject) {
       res.status(400).json({ error: 'Vui lòng nhập chủ đề hoặc lời thoại để tìm cảnh quay.' });
@@ -4869,6 +5362,8 @@ async function startServer() {
         videoQuality,
         selectedMediaIds,
         subtitleFontName,
+        animeSceneStyle,
+        animeCharacterVoices,
       });
 
       const scenes: ScenePreviewItem[] = assets.map((a) => ({

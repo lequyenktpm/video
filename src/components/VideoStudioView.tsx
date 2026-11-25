@@ -102,10 +102,16 @@ import {
   CURATED_CATEGORY_LABELS,
   selectCuratedBackgroundsForConfig,
 } from '../shared/curatedBackgrounds';
+import {
+  ANIME_STORY_PRESETS,
+  parseAnimeDialogueScript,
+} from '../shared/animeStoryEngine';
+import { AnimeSceneStyle } from '../shared/types';
 import { TopicDiscoveryBar } from './TopicDiscoveryBar';
 import { SubtitlePreviewCaption } from './SubtitlePreviewCaption';
 import { PresentationIcon } from './PresentationIcon';
 import { Studio2411StageCard } from './Studio2411StageCard';
+import { AnimeStoryStage } from './AnimeStoryStage';
 
 const BREAKDOWN_TONE_CLASSES: Record<PresentationRoleTone, string> = {
   indigo: 'text-indigo-700 bg-indigo-50 border-indigo-200',
@@ -370,20 +376,29 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     }
   };
 
-  const speakPreviewSlideText = (slideText: string, isSecondary: boolean) => {
+  const speakPreviewSlideText = (
+    slideText: string,
+    isSecondary: boolean,
+    customVoice?: VoiceOptionId,
+    pitchRatio?: number
+  ) => {
     try {
       if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
       window.speechSynthesis.cancel();
       const clean = stripNarrationTags(slideText);
       if (!clean) return;
       const utter = new SpeechSynthesisUtterance(clean);
-      const voiceRef = isSecondary ? config.secondaryVoiceId || config.voiceId : config.voiceId;
+      const voiceRef =
+        customVoice ?? (isSecondary ? config.secondaryVoiceId || config.voiceId : config.voiceId);
       if (hasCjkChars(clean) || voiceRef?.startsWith('ja')) {
         utter.lang = 'ja-JP';
       } else if (hasVietnameseDiacritics(clean) || voiceRef?.startsWith('vi')) {
         utter.lang = 'vi-VN';
       } else {
         utter.lang = 'en-US';
+      }
+      if (pitchRatio && Number.isFinite(pitchRatio)) {
+        utter.pitch = Math.max(0.75, Math.min(1.35, pitchRatio));
       }
       utter.rate = Math.max(0.85, Math.min(1.4, config.voiceRate || 1.0));
       utter.volume = Math.max(0.2, Math.min(1.0, config.voiceVolume || 1.0));
@@ -474,14 +489,24 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     .map((l) => l.trim())
     .filter(Boolean);
 
+  const isAnimeMode =
+    studioTab === 'anime_story' || config.materialSource === 'anime_cartoon';
+  const parsedAnimeStory = parseAnimeDialogueScript(
+    config.script,
+    config.animeCharacterVoices
+  );
+
   const previewLines = splitScriptSentences(config.script, 140)
     .map((l) => stripNarrationTags(l))
     .filter(Boolean);
-  const totalPreviewItems =
-    previewScenes.length > 0 ? previewScenes.length : previewLines.length;
+  const totalPreviewItems = isAnimeMode
+    ? parsedAnimeStory.beats.length
+    : previewScenes.length > 0
+    ? previewScenes.length
+    : previewLines.length;
   const safeActiveIdx =
     totalPreviewItems > 0 ? Math.min(activeSceneIdx, totalPreviewItems - 1) : 0;
-  const activeScene = previewScenes[safeActiveIdx] ?? null;
+  const activeScene = !isAnimeMode ? previewScenes[safeActiveIdx] ?? null : null;
 
   useEffect(() => {
     if (activeScene) {
@@ -716,6 +741,36 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     previewPlayingRef.current = true;
     setIsPlayingPreview(true);
     const startIdx = safeActiveIdx >= count - 1 ? 0 : safeActiveIdx;
+
+    if (isAnimeMode) {
+      const beats = parsedAnimeStory.beats;
+      const runAnimeBeat = (idx: number) => {
+        if (!previewPlayingRef.current) return;
+        if (idx >= beats.length) {
+          stopPreviewPlayback();
+          return;
+        }
+        const beat = beats[idx];
+        setActiveSceneIdx(idx);
+        setCaptionReplayNonce((n) => n + 1);
+        const charProfile = parsedAnimeStory.characters.find((c) => c.id === beat.speakerId);
+        if (!beat.isStageCue || config.animeReadStageDirections) {
+          speakPreviewSlideText(
+            beat.spokenText,
+            charProfile?.gender === 'female',
+            charProfile?.defaultVoiceId,
+            charProfile?.pitchRatio
+          );
+        }
+        const delayMs = Math.max(1700, Math.round(beat.estDurationSec * 1000));
+        previewPlayTimerRef.current = window.setTimeout(() => {
+          if (!previewPlayingRef.current) return;
+          runAnimeBeat(idx + 1);
+        }, delayMs);
+      };
+      runAnimeBeat(startIdx);
+      return;
+    }
 
     const runStep = (idx: number) => {
       if (!previewPlayingRef.current) return;
@@ -1222,7 +1277,20 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     setIsPreviewingTts(true);
     setTtsPreviewNote(null);
     try {
+      const animeSampleBeat = isAnimeMode
+        ? parsedAnimeStory.beats.find((b, idx) => idx >= safeActiveIdx && !b.isStageCue) ??
+          parsedAnimeStory.beats.find((b) => !b.isStageCue)
+        : undefined;
+      const animeSampleChar = animeSampleBeat
+        ? parsedAnimeStory.characters.find((c) => c.id === animeSampleBeat.speakerId)
+        : undefined;
+      const effectiveVoiceId = animeSampleBeat
+        ? config.animeCharacterVoices?.[animeSampleBeat.speakerId] ??
+          animeSampleChar?.defaultVoiceId ??
+          config.voiceId
+        : config.voiceId;
       const sampleText =
+        animeSampleBeat?.spokenText ||
         previewLines[0] ||
         `Xin chào, đây là giọng đọc thử của chủ đề ${config.subject || 'MoneyPrinterTurbo Việt Nam'}.`;
       const res = await fetch('/api/tts-preview', {
@@ -1234,17 +1302,18 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           script: config.script,
           language: config.language,
           scriptStyle: config.scriptStyle,
-          voiceId: config.voiceId,
+          voiceId: effectiveVoiceId,
           dualVoiceEnabled:
-            Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language),
+            !isAnimeMode &&
+            (Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language)),
           secondaryVoiceId:
             config.secondaryVoiceId ?? getDefaultSecondaryVoiceForLanguage(config.language),
-          pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 0,
-          clockTickEnabled: config.clockTickEnabled !== false,
-          targetRepeatCount: config.targetRepeatCount ?? 0,
+          pauseBetweenLinesSec: isAnimeMode ? 0 : config.pauseBetweenLinesSec ?? 0,
+          clockTickEnabled: !isAnimeMode && config.clockTickEnabled !== false,
+          targetRepeatCount: isAnimeMode ? 0 : config.targetRepeatCount ?? 0,
           targetRepeatPauseSec: config.targetRepeatPauseSec ?? 2,
-          fullAnswerRecapMode: config.fullAnswerRecapMode ?? 'off',
-          summarizeAtEnd: Boolean(config.summarizeAtEnd),
+          fullAnswerRecapMode: isAnimeMode ? 'off' : config.fullAnswerRecapMode ?? 'off',
+          summarizeAtEnd: !isAnimeMode && Boolean(config.summarizeAtEnd),
           ttsProvider: config.ttsProvider,
           voiceRate: config.voiceRate,
         }),
@@ -1324,25 +1393,29 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         data-testid="studio-left-pane"
         className="lg:col-span-7 space-y-5 lg:h-full lg:overflow-y-auto overscroll-contain lg:pr-2 pb-6"
       >
-        {/* 1. Real HD Video B-Roll & Framing Settings */}
+        {/* 1. Real HD Video B-Roll OR 2D Anime Scene & Cast */}
         <section id="sec-visuals" className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
             <h2 className="text-base font-semibold text-slate-900">
-              1. Nguồn cảnh quay HD &amp; Nhịp chuyển cảnh
+              {isAnimeMode
+                ? '1. Bối cảnh Hoạt hình 2D & Phân vai Nhân vật'
+                : '1. Nguồn cảnh quay HD & Nhịp chuyển cảnh'}
             </h2>
-            <button
-              type="button"
-              disabled={isLoadingScenes || !config.script.trim()}
-              onClick={() => void handlePreviewScenes()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 disabled:opacity-50 whitespace-nowrap shrink-0"
-            >
-              {isLoadingScenes ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <ImageIcon className="w-3.5 h-3.5" aria-hidden="true" />
-              )}
-              <span>{isLoadingScenes ? 'Đang nạp B-roll...' : 'Tìm & xem trước cảnh quay'}</span>
-            </button>
+            {!isAnimeMode && (
+              <button
+                type="button"
+                disabled={isLoadingScenes || !config.script.trim()}
+                onClick={() => void handlePreviewScenes()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 disabled:opacity-50 whitespace-nowrap shrink-0"
+              >
+                {isLoadingScenes ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <ImageIcon className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>{isLoadingScenes ? 'Đang nạp B-roll...' : 'Tìm & xem trước cảnh quay'}</span>
+              </button>
+            )}
           </div>
 
           {scenesError && (
@@ -1351,41 +1424,167 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="mpt-material-source" className="block text-xs font-medium text-slate-700 mb-1">
-                Nguồn video B-roll
-              </label>
-              <select
-                id="mpt-material-source"
-                value={config.materialSource}
-                onChange={(e) => {
-                  setPreviewScenes([]);
-                  onChangeConfig({
-                    materialSource: e.target.value as MaterialSource,
-                    customScenes: undefined,
-                  });
-                }}
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+          {isAnimeMode && (
+            <div data-testid="anime-scene-config-panel" className="space-y-4">
+              <div className="space-y-2">
+                <span className="block text-xs font-medium text-slate-700">
+                  Phong cách bối cảnh hoạt hình
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {(
+                    [
+                      {
+                        id: 'room_warm',
+                        label: 'Phòng khách Ấm áp',
+                        hint: 'Ánh nắng shoji, chiếu tatami & bàn trà',
+                        swatch: 'from-amber-100 to-amber-300',
+                      },
+                      {
+                        id: 'dramatic_anime',
+                        label: 'Anime Kịch tính',
+                        hint: 'Tương phản cao · đường tốc độ cảm xúc',
+                        swatch: 'from-amber-200 to-rose-300',
+                      },
+                      {
+                        id: 'pastel_slice',
+                        label: 'Pastel Đời thường',
+                        hint: 'Nhẹ nhàng kiểu Slice-of-Life',
+                        swatch: 'from-indigo-100 to-sky-200',
+                      },
+                    ] as Array<{ id: AnimeSceneStyle; label: string; hint: string; swatch: string }>
+                  ).map((st) => {
+                    const selected = (config.animeSceneStyle ?? 'room_warm') === st.id;
+                    return (
+                      <button
+                        key={st.id}
+                        type="button"
+                        data-testid={`anime-style-${st.id}`}
+                        onClick={() => onChangeConfig({ animeSceneStyle: st.id })}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                          selected
+                            ? 'border-indigo-600 ring-2 ring-indigo-200 bg-indigo-50/40'
+                            : 'border-slate-200 bg-white hover:border-slate-400'
+                        }`}
+                      >
+                        <div className={`w-full h-5 rounded bg-gradient-to-r ${st.swatch} mb-1.5 border border-black/10`} />
+                        <div className="text-xs font-semibold text-slate-900">{st.label}</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5 leading-snug">{st.hint}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div
+                data-testid="anime-cast-panel"
+                className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2.5"
               >
-                <option value="studio_2411">
-                  Thẻ học tập Component 2411 (14 layout: Hội thoại, Flashcard, Roadmap, Gauge, 3D...)
-                </option>
-                <option value="mixkit_video">Video B-roll HD chuyển động mượt (Mixkit Free)</option>
-                <option value="curated_preset">
-                  Kho nền có sẵn (Học tập · Phỏng vấn · Đời sống — Không cần AI)
-                </option>
-                <option value="hybrid_real">B-roll HD + Cảnh minh họa chọn lọc</option>
-                <option value="neutral_css_bg">Nền Trung Tính Studio (CSS Tối giản — Chữ siêu nét)</option>
-                <option value="stock_free">Kho Video &amp; Ảnh Archive / Wikimedia</option>
-                <option value="local_upload">
-                  Video/Ảnh tải lên từ máy ({uploadedVisuals.length} tệp)
-                </option>
-              </select>
-              <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                Mặc định dùng <strong>Component 2411</strong> với 14 mẫu thẻ thông minh (nhân vật hội thoại, ví dụ, gợi nhớ). Có thể đổi sang <strong>Kho nền có sẵn</strong> hoặc <strong>Mixkit / B-roll</strong> bất cứ lúc nào.
-              </p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-800">
+                    Dàn nhân vật tự động nhận diện ({parsedAnimeStory.characters.length} vai)
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Miệng, ánh mắt &amp; tay chân đồng bộ đúng người nói
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {parsedAnimeStory.characters.map((ch) => (
+                    <div
+                      key={ch.id}
+                      data-testid={`anime-cast-${ch.id}`}
+                      className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                          <span
+                            className="w-3 h-3 rounded-full shrink-0"
+                            style={{ backgroundColor: ch.nameBadgeHex }}
+                          />
+                          <span>{ch.displayName}</span>
+                        </span>
+                        <span className="text-[10px] font-mono text-slate-500">
+                          {ch.gender === 'female' ? 'Nữ' : 'Nam'} · {ch.pitchRatio.toFixed(2)}x
+                        </span>
+                      </div>
+                      <select
+                        aria-label={`Giọng đọc cho ${ch.displayName}`}
+                        value={config.animeCharacterVoices?.[ch.id] ?? ch.defaultVoiceId}
+                        onChange={(e) =>
+                          onChangeConfig({
+                            animeCharacterVoices: {
+                              ...(config.animeCharacterVoices ?? {}),
+                              [ch.id]: e.target.value as VoiceOptionId,
+                            },
+                          })
+                        }
+                        className="w-full px-2 py-1 text-[11px] border border-slate-200 rounded bg-white text-slate-900"
+                      >
+                        <option value="ja-JP-KeitaNeural">Nam Nhật (Keita)</option>
+                        <option value="ja-JP-NanamiNeural">Nữ Nhật (Nanami)</option>
+                        <option value="vi-VN-HoaiMyNeural">Nữ Việt (Hoài My)</option>
+                        <option value="vi-VN-NamMinhNeural">Nam Việt (Nam Minh)</option>
+                        <option value="en-US-JennyNeural">Nữ Anh (Jenny)</option>
+                        <option value="en-US-GuyNeural">Nam Anh (Guy)</option>
+                      </select>
+                    </div>
+                  ))}
+                </div>
+                <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer pt-1">
+                  <input
+                    id="mpt-anime-read-cues"
+                    type="checkbox"
+                    checked={Boolean(config.animeReadStageDirections)}
+                    onChange={(e) => onChangeConfig({ animeReadStageDirections: e.target.checked })}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                  />
+                  <span>
+                    Đọc thành tiếng lời dẫn cảnh trong ngoặc （...）(Tắt để chỉ diễn cảnh tự nhiên bằng hoạt hình)
+                  </span>
+                </label>
+              </div>
             </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {!isAnimeMode && (
+              <div>
+                <label htmlFor="mpt-material-source" className="block text-xs font-medium text-slate-700 mb-1">
+                  Nguồn video B-roll
+                </label>
+                <select
+                  id="mpt-material-source"
+                  value={config.materialSource}
+                  onChange={(e) => {
+                    setPreviewScenes([]);
+                    onChangeConfig({
+                      materialSource: e.target.value as MaterialSource,
+                      customScenes: undefined,
+                    });
+                  }}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                >
+                  <option value="studio_2411">
+                    Thẻ học tập Component 2411 (14 layout: Hội thoại, Flashcard, Roadmap, Gauge, 3D...)
+                  </option>
+                  <option value="anime_cartoon">
+                    Hoạt hình 2D Hội thoại nhiều nhân vật (Mở khóa cử động &amp; cảm xúc)
+                  </option>
+                  <option value="mixkit_video">Video B-roll HD chuyển động mượt (Mixkit Free)</option>
+                  <option value="curated_preset">
+                    Kho nền có sẵn (Học tập · Phỏng vấn · Đời sống — Không cần AI)
+                  </option>
+                  <option value="hybrid_real">B-roll HD + Cảnh minh họa chọn lọc</option>
+                  <option value="neutral_css_bg">Nền Trung Tính Studio (CSS Tối giản — Chữ siêu nét)</option>
+                  <option value="stock_free">Kho Video &amp; Ảnh Archive / Wikimedia</option>
+                  <option value="local_upload">
+                    Video/Ảnh tải lên từ máy ({uploadedVisuals.length} tệp)
+                  </option>
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1 leading-snug">
+                  Mặc định dùng <strong>Component 2411</strong> với 14 mẫu thẻ thông minh (nhân vật hội thoại, ví dụ, gợi nhớ). Có thể đổi sang <strong>Kho nền có sẵn</strong> hoặc <strong>Mixkit / B-roll</strong> bất cứ lúc nào.
+                </p>
+              </div>
+            )}
 
             {config.materialSource === 'curated_preset' && (
               <div
@@ -1819,52 +2018,56 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               </div>
             )}
 
-            <div>
-              <label htmlFor="mpt-media-filter" className="block text-xs font-medium text-slate-700 mb-1">
-                Loại tư liệu nền (Chỉ Ảnh / Chỉ Video)
-              </label>
-              <select
-                id="mpt-media-filter"
-                value={config.mediaTypeFilter ?? 'all'}
-                onChange={(e) => {
-                  setPreviewScenes([]);
-                  onChangeConfig({
-                    mediaTypeFilter: e.target.value as MediaTypeFilter,
-                    customScenes: undefined,
-                  });
-                }}
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-              >
-                <option value="all">Video + Ảnh kết hợp (Mặc định)</option>
-                <option value="video_only">Chỉ tìm Video chuyển động (MP4)</option>
-                <option value="image_only">Chỉ tìm Ảnh tĩnh / Minh họa (JPG/PNG)</option>
-              </select>
-            </div>
+            {!isAnimeMode && (
+              <>
+                <div>
+                  <label htmlFor="mpt-media-filter" className="block text-xs font-medium text-slate-700 mb-1">
+                    Loại tư liệu nền (Chỉ Ảnh / Chỉ Video)
+                  </label>
+                  <select
+                    id="mpt-media-filter"
+                    value={config.mediaTypeFilter ?? 'all'}
+                    onChange={(e) => {
+                      setPreviewScenes([]);
+                      onChangeConfig({
+                        mediaTypeFilter: e.target.value as MediaTypeFilter,
+                        customScenes: undefined,
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                  >
+                    <option value="all">Video + Ảnh kết hợp (Mặc định)</option>
+                    <option value="video_only">Chỉ tìm Video chuyển động (MP4)</option>
+                    <option value="image_only">Chỉ tìm Ảnh tĩnh / Minh họa (JPG/PNG)</option>
+                  </select>
+                </div>
 
-            <div>
-              <label htmlFor="mpt-visual-mood" className="block text-xs font-medium text-slate-700 mb-1">
-                Phong cách hình ảnh &amp; Màu sắc (Mood)
-              </label>
-              <select
-                id="mpt-visual-mood"
-                value={config.visualMood ?? 'auto'}
-                onChange={(e) => {
-                  setPreviewScenes([]);
-                  onChangeConfig({
-                    visualMood: e.target.value as VisualMood,
-                    customScenes: undefined,
-                  });
-                }}
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-              >
-                <option value="auto">Tự động khớp ngữ cảnh nội dung</option>
-                <option value="bright">Tươi sáng · Rạng rỡ (Bright Daylight)</option>
-                <option value="moody">U tối · Sâu lắng · Kịch tính (Moody)</option>
-                <option value="vibrant">Sinh động · Giàu năng lượng (Vibrant)</option>
-                <option value="minimal">Tối giản · Hiện đại · Gọn gàng (Minimal)</option>
-                <option value="cinematic">Điện ảnh · Chiều sâu 35mm (Cinematic)</option>
-              </select>
-            </div>
+                <div>
+                  <label htmlFor="mpt-visual-mood" className="block text-xs font-medium text-slate-700 mb-1">
+                    Phong cách hình ảnh &amp; Màu sắc (Mood)
+                  </label>
+                  <select
+                    id="mpt-visual-mood"
+                    value={config.visualMood ?? 'auto'}
+                    onChange={(e) => {
+                      setPreviewScenes([]);
+                      onChangeConfig({
+                        visualMood: e.target.value as VisualMood,
+                        customScenes: undefined,
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                  >
+                    <option value="auto">Tự động khớp ngữ cảnh nội dung</option>
+                    <option value="bright">Tươi sáng · Rạng rỡ (Bright Daylight)</option>
+                    <option value="moody">U tối · Sâu lắng · Kịch tính (Moody)</option>
+                    <option value="vibrant">Sinh động · Giàu năng lượng (Vibrant)</option>
+                    <option value="minimal">Tối giản · Hiện đại · Gọn gàng (Minimal)</option>
+                    <option value="cinematic">Điện ảnh · Chiều sâu 35mm (Cinematic)</option>
+                  </select>
+                </div>
+              </>
+            )}
 
             <div>
               <label htmlFor="mpt-video-quality" className="block text-xs font-medium text-slate-700 mb-1">
@@ -1912,54 +2115,58 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               </div>
             </div>
 
-            <div>
-              <label htmlFor="mpt-concat" className="block text-xs font-medium text-slate-700 mb-1">
-                Nhịp cắt cảnh (Pacing)
-              </label>
-              <select
-                id="mpt-concat"
-                value={config.concatMode}
-                onChange={(e) =>
-                  onChangeConfig({ concatMode: e.target.value as VideoConcatMode })
-                }
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-              >
-                <option value="sequential">Tự động cắt nhịp ~3s khớp từng câu thoại</option>
-                <option value="random">Cắt đảo ngẫu nhiên theo thời lượng cố định</option>
-              </select>
-              <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                Pacing là tốc độ &amp; cách đổi cảnh: <strong>Khớp từng câu</strong> tự động đổi cảnh theo nhịp đọc; <strong>Đảo ngẫu nhiên</strong> cắt đều theo số giây cố định.
-              </p>
-            </div>
+            {!isAnimeMode && (
+              <>
+                <div>
+                  <label htmlFor="mpt-concat" className="block text-xs font-medium text-slate-700 mb-1">
+                    Nhịp cắt cảnh (Pacing)
+                  </label>
+                  <select
+                    id="mpt-concat"
+                    value={config.concatMode}
+                    onChange={(e) =>
+                      onChangeConfig({ concatMode: e.target.value as VideoConcatMode })
+                    }
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                  >
+                    <option value="sequential">Tự động cắt nhịp ~3s khớp từng câu thoại</option>
+                    <option value="random">Cắt đảo ngẫu nhiên theo thời lượng cố định</option>
+                  </select>
+                  <p className="text-[11px] text-slate-500 mt-1 leading-snug">
+                    Pacing là tốc độ &amp; cách đổi cảnh: <strong>Khớp từng câu</strong> tự động đổi cảnh theo nhịp đọc; <strong>Đảo ngẫu nhiên</strong> cắt đều theo số giây cố định.
+                  </p>
+                </div>
 
-            <div className="sm:col-span-2">
-              <label htmlFor="mpt-transition" className="block text-xs font-medium text-slate-700 mb-1">
-                Hiệu ứng chuyển cảnh
-              </label>
-              <select
-                id="mpt-transition"
-                value={config.transitionMode}
-                onChange={(e) =>
-                  onChangeConfig({ transitionMode: e.target.value as VideoTransitionMode })
-                }
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-              >
-                <option value="random">Ngẫu nhiên đa dạng nhiều hiệu ứng (Mặc định)</option>
-                <option value="fade">Chuyển mượt (Crossfade 0.3s)</option>
-                <option value="dissolve">Tan biến mềm mại (Dissolve)</option>
-                <option value="slide">Trượt ngang (Slide)</option>
-                <option value="smoothleft">Trượt êm điện ảnh (Smooth Slide)</option>
-                <option value="wipeleft">Quét ngang chuyển cảnh (Wipe)</option>
-                <option value="circleopen">Mở vòng tròn (Circle Open)</option>
-                <option value="radial">Xoay tia tròn (Radial)</option>
-                <option value="pixelize">Chuyển cảnh điểm ảnh (Pixelize)</option>
-                <option value="fadeblack">Chuyển qua tối điện ảnh (Fade Black)</option>
-                <option value="none">Cắt thẳng (Jump Cut nhanh)</option>
-              </select>
-            </div>
+                <div className="sm:col-span-2">
+                  <label htmlFor="mpt-transition" className="block text-xs font-medium text-slate-700 mb-1">
+                    Hiệu ứng chuyển cảnh
+                  </label>
+                  <select
+                    id="mpt-transition"
+                    value={config.transitionMode}
+                    onChange={(e) =>
+                      onChangeConfig({ transitionMode: e.target.value as VideoTransitionMode })
+                    }
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                  >
+                    <option value="random">Ngẫu nhiên đa dạng nhiều hiệu ứng (Mặc định)</option>
+                    <option value="fade">Chuyển mượt (Crossfade 0.3s)</option>
+                    <option value="dissolve">Tan biến mềm mại (Dissolve)</option>
+                    <option value="slide">Trượt ngang (Slide)</option>
+                    <option value="smoothleft">Trượt êm điện ảnh (Smooth Slide)</option>
+                    <option value="wipeleft">Quét ngang chuyển cảnh (Wipe)</option>
+                    <option value="circleopen">Mở vòng tròn (Circle Open)</option>
+                    <option value="radial">Xoay tia tròn (Radial)</option>
+                    <option value="pixelize">Chuyển cảnh điểm ảnh (Pixelize)</option>
+                    <option value="fadeblack">Chuyển qua tối điện ảnh (Fade Black)</option>
+                    <option value="none">Cắt thẳng (Jump Cut nhanh)</option>
+                  </select>
+                </div>
+              </>
+            )}
           </div>
 
-          {config.concatMode === 'random' && (
+          {!isAnimeMode && config.concatMode === 'random' && (
             <div>
               <div className="flex items-center justify-between text-xs mb-1">
                 <label htmlFor="mpt-clip-dur" className="font-medium text-slate-700">
@@ -2051,24 +2258,26 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="mpt-voice-id" className="block text-xs font-medium text-slate-700 mb-1">
-                Giọng đọc 1 (Chính / Câu hỏi)
-              </label>
-              <select
-                id="mpt-voice-id"
-                value={config.voiceId}
-                onChange={(e) => onChangeConfig({ voiceId: e.target.value as VoiceOptionId })}
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-              >
-                <option value="vi-VN-HoaiMyNeural">Nữ Tiếng Việt (Hoài My · Tự nhiên)</option>
-                <option value="vi-VN-NamMinhNeural">Nam Tiếng Việt (Nam Minh · Trầm ấm)</option>
-                <option value="en-US-JennyNeural">Nữ Tiếng Anh (Jenny · US)</option>
-                <option value="en-US-GuyNeural">Nam Tiếng Anh (Guy · US)</option>
-                <option value="ja-JP-NanamiNeural">Nữ Tiếng Nhật (Nanami · 日本語)</option>
-                <option value="ja-JP-KeitaNeural">Nam Tiếng Nhật (Keita · 日本語)</option>
-              </select>
-            </div>
+            {!isAnimeMode && (
+              <div>
+                <label htmlFor="mpt-voice-id" className="block text-xs font-medium text-slate-700 mb-1">
+                  Giọng đọc 1 (Chính / Câu hỏi)
+                </label>
+                <select
+                  id="mpt-voice-id"
+                  value={config.voiceId}
+                  onChange={(e) => onChangeConfig({ voiceId: e.target.value as VoiceOptionId })}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                >
+                  <option value="vi-VN-HoaiMyNeural">Nữ Tiếng Việt (Hoài My · Tự nhiên)</option>
+                  <option value="vi-VN-NamMinhNeural">Nam Tiếng Việt (Nam Minh · Trầm ấm)</option>
+                  <option value="en-US-JennyNeural">Nữ Tiếng Anh (Jenny · US)</option>
+                  <option value="en-US-GuyNeural">Nam Tiếng Anh (Guy · US)</option>
+                  <option value="ja-JP-NanamiNeural">Nữ Tiếng Nhật (Nanami · 日本語)</option>
+                  <option value="ja-JP-KeitaNeural">Nam Tiếng Nhật (Keita · 日本語)</option>
+                </select>
+              </div>
+            )}
 
             <div>
               <label htmlFor="mpt-tts-provider" className="block text-xs font-medium text-slate-700 mb-1">
@@ -2086,222 +2295,226 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               </select>
             </div>
 
-            <div className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
-                  <input
-                    id="mpt-dual-voice"
-                    type="checkbox"
-                    checked={
-                      Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language)
-                    }
-                    onChange={(e) => {
-                      const nextDual = e.target.checked || isBilingualLanguage(config.language);
-                      const nextComponents = buildContextualSceneComponentsForScript({
-                        script: config.script,
-                        scriptStyle: config.scriptStyle,
-                        dualVoiceEnabled: nextDual,
-                        pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
-                      });
-                      setPreviewScenes([]);
-                      setCaptionReplayNonce((n) => n + 1);
-                      onChangeConfig({
-                        dualVoiceEnabled: e.target.checked,
-                        secondaryVoiceId:
-                          config.secondaryVoiceId ??
-                          getDefaultSecondaryVoiceForLanguage(config.language),
-                        sceneComponents: nextComponents,
-                        customScenes: undefined,
-                      });
-                    }}
-                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
-                  />
-                  <span>
-                    Chế độ 2 giọng đọc (Tự tách theo ngôn ngữ Việt / Anh / Nhật hoặc thẻ [VI] [EN] [JA] [V1] [V2])
-                  </span>
-                </label>
-              </div>
-              <p className="text-[11px] text-slate-500">
-                Mỗi dòng tự động nhận diện ngôn ngữ để đọc đúng giọng bản xứ. Thêm{' '}
-                <code className="px-1 py-0.5 rounded bg-white border border-slate-200 text-slate-800 font-mono">
-                  [PAUSE]
-                </code>{' '}
-                vào cuối câu hỏi để chèn khoảng chờ đếm ngược 5s kèm tiếng đồng hồ tick-tock trước đáp án.
-              </p>
-
-              {(Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language) || studioTab === 'learning') && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                  <div>
-                    <label
-                      htmlFor="mpt-voice-id-2"
-                      className="block text-xs font-medium text-slate-700 mb-1"
-                    >
-                      Giọng đọc 2 (Ngoại ngữ / Đáp án)
-                    </label>
-                    <select
-                      id="mpt-voice-id-2"
-                      value={
-                        config.secondaryVoiceId ??
-                        getDefaultSecondaryVoiceForLanguage(config.language)
-                      }
-                      onChange={(e) =>
-                        onChangeConfig({ secondaryVoiceId: e.target.value as VoiceOptionId })
-                      }
-                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-                    >
-                      <option value="en-US-JennyNeural">Nữ Tiếng Anh (Jenny · US)</option>
-                      <option value="en-US-GuyNeural">Nam Tiếng Anh (Guy · US)</option>
-                      <option value="ja-JP-NanamiNeural">Nữ Tiếng Nhật (Nanami · 日本語)</option>
-                      <option value="ja-JP-KeitaNeural">Nam Tiếng Nhật (Keita · 日本語)</option>
-                      <option value="vi-VN-HoaiMyNeural">Nữ Tiếng Việt (Hoài My · Tự nhiên)</option>
-                      <option value="vi-VN-NamMinhNeural">Nam Tiếng Việt (Nam Minh · Trầm ấm)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <label htmlFor="mpt-pause-sec" className="font-medium text-slate-700">
-                        Thời gian chờ suy nghĩ
-                      </label>
-                      <span className="font-mono tabular-nums text-slate-900">
-                        {Number.isInteger(config.pauseBetweenLinesSec ?? 0)
-                          ? `${config.pauseBetweenLinesSec ?? 0}s`
-                          : `${(config.pauseBetweenLinesSec ?? 0).toFixed(1)}s`}
-                      </span>
-                    </div>
-                    <input
-                      id="mpt-pause-sec"
-                      type="range"
-                      min={0}
-                      max={10}
-                      step={0.5}
-                      value={config.pauseBetweenLinesSec ?? 0}
-                      onChange={(e) =>
-                        onChangeConfig({ pauseBetweenLinesSec: Number(e.target.value) })
-                      }
-                      className="w-full accent-slate-900"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2 pt-0.5">
-                    <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+            {!isAnimeMode && (
+              <>
+                <div className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
                       <input
-                        id="mpt-clock-tick"
+                        id="mpt-dual-voice"
                         type="checkbox"
-                        checked={config.clockTickEnabled !== false}
-                        onChange={(e) => onChangeConfig({ clockTickEnabled: e.target.checked })}
-                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
-                      />
-                      <span>
-                        Phát tiếng đồng hồ Tick-Tock &amp; Hiện từng số đếm ngược (5 → 1) trong lúc chờ
-                      </span>
-                    </label>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="mpt-target-repeat-count"
-                      className="block text-xs font-medium text-slate-700 mb-1"
-                    >
-                      Lặp lại khi đọc sang ngôn ngữ đích
-                    </label>
-                    <select
-                      id="mpt-target-repeat-count"
-                      value={config.targetRepeatCount ?? 0}
-                      onChange={(e) =>
-                        onChangeConfig({ targetRepeatCount: Number(e.target.value) })
-                      }
-                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-                    >
-                      <option value={0}>Đọc 1 lần (Không lặp)</option>
-                      <option value={1}>Đọc 2 lần (Lặp thêm 1 lần · Khuyên dùng)</option>
-                      <option value={2}>Đọc 3 lần (Lặp thêm 2 lần)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <label htmlFor="mpt-target-repeat-pause" className="font-medium text-slate-700">
-                        Nghỉ giữa các lần lặp câu dịch
-                      </label>
-                      <span className="font-mono tabular-nums text-slate-900">
-                        {(config.targetRepeatPauseSec ?? 2).toFixed(1).replace(/\.0$/, '')}s
-                      </span>
-                    </div>
-                    <input
-                      id="mpt-target-repeat-pause"
-                      type="range"
-                      min={0.5}
-                      max={5}
-                      step={0.5}
-                      value={config.targetRepeatPauseSec ?? 2}
-                      onChange={(e) =>
-                        onChangeConfig({ targetRepeatPauseSec: Number(e.target.value) })
-                      }
-                      className="w-full accent-slate-900"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <label
-                      htmlFor="mpt-full-answer-recap"
-                      className="block text-xs font-medium text-slate-700 mb-1"
-                    >
-                      Đọc lại cả đoạn câu trả lời (khi câu trả lời gồm nhiều câu ghép lại)
-                    </label>
-                    <select
-                      id="mpt-full-answer-recap"
-                      value={config.fullAnswerRecapMode ?? 'off'}
-                      onChange={(e) =>
-                        onChangeConfig({
-                          fullAnswerRecapMode: e.target.value as FullAnswerRecapMode,
-                        })
-                      }
-                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-                    >
-                      <option value="off">Chỉ đọc từng câu (Không ghép lại cả đoạn)</option>
-                      <option value="target_full">
-                        Đọc liền mạch cả đoạn câu trả lời bằng ngôn ngữ đích (Phỏng vấn / Hội thoại)
-                      </option>
-                      <option value="both_full">
-                        Đọc liền mạch cả đoạn ngôn ngữ gốc + ngôn ngữ đích
-                      </option>
-                    </select>
-                  </div>
-                  <div className="sm:col-span-2 pt-0.5">
-                    <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
-                      <input
-                        id="mpt-sticky-dual-sub"
-                        type="checkbox"
-                        checked={config.stickyDualSubtitle !== false}
-                        onChange={(e) =>
-                          onChangeConfig({ stickyDualSubtitle: e.target.checked })
+                        checked={
+                          Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language)
                         }
+                        onChange={(e) => {
+                          const nextDual = e.target.checked || isBilingualLanguage(config.language);
+                          const nextComponents = buildContextualSceneComponentsForScript({
+                            script: config.script,
+                            scriptStyle: config.scriptStyle,
+                            dualVoiceEnabled: nextDual,
+                            pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 5,
+                          });
+                          setPreviewScenes([]);
+                          setCaptionReplayNonce((n) => n + 1);
+                          onChangeConfig({
+                            dualVoiceEnabled: e.target.checked,
+                            secondaryVoiceId:
+                              config.secondaryVoiceId ??
+                              getDefaultSecondaryVoiceForLanguage(config.language),
+                            sceneComponents: nextComponents,
+                            customScenes: undefined,
+                          });
+                        }}
                         className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
                       />
                       <span>
-                        Giữ câu ngôn ngữ gốc ở dưới khi câu đích đọc (Câu đích ở trên · Ẩn gốc cũ khi sang câu gốc mới)
+                        Chế độ 2 giọng đọc (Tự tách theo ngôn ngữ Việt / Anh / Nhật hoặc thẻ [VI] [EN] [JA] [V1] [V2])
                       </span>
                     </label>
                   </div>
-                </div>
-              )}
-            </div>
+                  <p className="text-[11px] text-slate-500">
+                    Mỗi dòng tự động nhận diện ngôn ngữ để đọc đúng giọng bản xứ. Thêm{' '}
+                    <code className="px-1 py-0.5 rounded bg-white border border-slate-200 text-slate-800 font-mono">
+                      [PAUSE]
+                    </code>{' '}
+                    vào cuối câu hỏi để chèn khoảng chờ đếm ngược 5s kèm tiếng đồng hồ tick-tock trước đáp án.
+                  </p>
 
-            <div className="sm:col-span-2 px-3 py-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200">
-              <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-900 cursor-pointer">
-                <input
-                  id="mpt-summarize-end"
-                  type="checkbox"
-                  checked={Boolean(config.summarizeAtEnd)}
-                  onChange={(e) => onChangeConfig({ summarizeAtEnd: e.target.checked })}
-                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
-                />
-                <span>
-                  Tóm tắt nội dung đã học trước khi kết thúc video (tóm tắt câu hỏi phỏng vấn / kiến thức chính)
-                </span>
-              </label>
-            </div>
+                  {(Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language) || studioTab === 'learning') && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label
+                          htmlFor="mpt-voice-id-2"
+                          className="block text-xs font-medium text-slate-700 mb-1"
+                        >
+                          Giọng đọc 2 (Ngoại ngữ / Đáp án)
+                        </label>
+                        <select
+                          id="mpt-voice-id-2"
+                          value={
+                            config.secondaryVoiceId ??
+                            getDefaultSecondaryVoiceForLanguage(config.language)
+                          }
+                          onChange={(e) =>
+                            onChangeConfig({ secondaryVoiceId: e.target.value as VoiceOptionId })
+                          }
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                        >
+                          <option value="en-US-JennyNeural">Nữ Tiếng Anh (Jenny · US)</option>
+                          <option value="en-US-GuyNeural">Nam Tiếng Anh (Guy · US)</option>
+                          <option value="ja-JP-NanamiNeural">Nữ Tiếng Nhật (Nanami · 日本語)</option>
+                          <option value="ja-JP-KeitaNeural">Nam Tiếng Nhật (Keita · 日本語)</option>
+                          <option value="vi-VN-HoaiMyNeural">Nữ Tiếng Việt (Hoài My · Tự nhiên)</option>
+                          <option value="vi-VN-NamMinhNeural">Nam Tiếng Việt (Nam Minh · Trầm ấm)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <label htmlFor="mpt-pause-sec" className="font-medium text-slate-700">
+                            Thời gian chờ suy nghĩ
+                          </label>
+                          <span className="font-mono tabular-nums text-slate-900">
+                            {Number.isInteger(config.pauseBetweenLinesSec ?? 0)
+                              ? `${config.pauseBetweenLinesSec ?? 0}s`
+                              : `${(config.pauseBetweenLinesSec ?? 0).toFixed(1)}s`}
+                          </span>
+                        </div>
+                        <input
+                          id="mpt-pause-sec"
+                          type="range"
+                          min={0}
+                          max={10}
+                          step={0.5}
+                          value={config.pauseBetweenLinesSec ?? 0}
+                          onChange={(e) =>
+                            onChangeConfig({ pauseBetweenLinesSec: Number(e.target.value) })
+                          }
+                          className="w-full accent-slate-900"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2 pt-0.5">
+                        <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+                          <input
+                            id="mpt-clock-tick"
+                            type="checkbox"
+                            checked={config.clockTickEnabled !== false}
+                            onChange={(e) => onChangeConfig({ clockTickEnabled: e.target.checked })}
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                          />
+                          <span>
+                            Phát tiếng đồng hồ Tick-Tock &amp; Hiện từng số đếm ngược (5 → 1) trong lúc chờ
+                          </span>
+                        </label>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="mpt-target-repeat-count"
+                          className="block text-xs font-medium text-slate-700 mb-1"
+                        >
+                          Lặp lại khi đọc sang ngôn ngữ đích
+                        </label>
+                        <select
+                          id="mpt-target-repeat-count"
+                          value={config.targetRepeatCount ?? 0}
+                          onChange={(e) =>
+                            onChangeConfig({ targetRepeatCount: Number(e.target.value) })
+                          }
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                        >
+                          <option value={0}>Đọc 1 lần (Không lặp)</option>
+                          <option value={1}>Đọc 2 lần (Lặp thêm 1 lần · Khuyên dùng)</option>
+                          <option value={2}>Đọc 3 lần (Lặp thêm 2 lần)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <label htmlFor="mpt-target-repeat-pause" className="font-medium text-slate-700">
+                            Nghỉ giữa các lần lặp câu dịch
+                          </label>
+                          <span className="font-mono tabular-nums text-slate-900">
+                            {(config.targetRepeatPauseSec ?? 2).toFixed(1).replace(/\.0$/, '')}s
+                          </span>
+                        </div>
+                        <input
+                          id="mpt-target-repeat-pause"
+                          type="range"
+                          min={0.5}
+                          max={5}
+                          step={0.5}
+                          value={config.targetRepeatPauseSec ?? 2}
+                          onChange={(e) =>
+                            onChangeConfig({ targetRepeatPauseSec: Number(e.target.value) })
+                          }
+                          className="w-full accent-slate-900"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <label
+                          htmlFor="mpt-full-answer-recap"
+                          className="block text-xs font-medium text-slate-700 mb-1"
+                        >
+                          Đọc lại cả đoạn câu trả lời (khi câu trả lời gồm nhiều câu ghép lại)
+                        </label>
+                        <select
+                          id="mpt-full-answer-recap"
+                          value={config.fullAnswerRecapMode ?? 'off'}
+                          onChange={(e) =>
+                            onChangeConfig({
+                              fullAnswerRecapMode: e.target.value as FullAnswerRecapMode,
+                            })
+                          }
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                        >
+                          <option value="off">Chỉ đọc từng câu (Không ghép lại cả đoạn)</option>
+                          <option value="target_full">
+                            Đọc liền mạch cả đoạn câu trả lời bằng ngôn ngữ đích (Phỏng vấn / Hội thoại)
+                          </option>
+                          <option value="both_full">
+                            Đọc liền mạch cả đoạn ngôn ngữ gốc + ngôn ngữ đích
+                          </option>
+                        </select>
+                      </div>
+                      <div className="sm:col-span-2 pt-0.5">
+                        <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+                          <input
+                            id="mpt-sticky-dual-sub"
+                            type="checkbox"
+                            checked={config.stickyDualSubtitle !== false}
+                            onChange={(e) =>
+                              onChangeConfig({ stickyDualSubtitle: e.target.checked })
+                            }
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                          />
+                          <span>
+                            Giữ câu ngôn ngữ gốc ở dưới khi câu đích đọc (Câu đích ở trên · Ẩn gốc cũ khi sang câu gốc mới)
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="sm:col-span-2 px-3 py-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200">
+                  <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-900 cursor-pointer">
+                    <input
+                      id="mpt-summarize-end"
+                      type="checkbox"
+                      checked={Boolean(config.summarizeAtEnd)}
+                      onChange={(e) => onChangeConfig({ summarizeAtEnd: e.target.checked })}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                    />
+                    <span>
+                      Tóm tắt nội dung đã học trước khi kết thúc video (tóm tắt câu hỏi phỏng vấn / kiến thức chính)
+                    </span>
+                  </label>
+                </div>
+              </>
+            )}
 
             <div>
               <div className="flex items-center justify-between text-xs mb-1">
@@ -2711,26 +2924,56 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               placeholder="VD: Khoa học đằng sau tách cà phê Espresso hoàn hảo..."
               className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
             />
-            <div className="flex flex-wrap items-center gap-2 mt-2">
-              <span className="text-xs text-slate-500">Mẫu nhanh:</span>
-              {topicPresets.map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => onChangeConfig({ subject: preset })}
-                  className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors text-left"
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
+            {isAnimeMode ? (
+              <div className="flex flex-wrap items-center gap-2 mt-2">
+                <span className="text-xs text-slate-500">Kịch bản hoạt hình mẫu:</span>
+                {ANIME_STORY_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    data-testid={`anime-preset-${preset.id}`}
+                    onClick={() => {
+                      setActiveSceneIdx(0);
+                      onChangeConfig({
+                        subject: preset.subject,
+                        language: preset.language,
+                        script: preset.script,
+                      });
+                    }}
+                    className={`text-xs px-2.5 py-1 rounded-md border transition-colors text-left ${
+                      config.script.trim() === preset.script.trim()
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-transparent'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 mt-2">
+                <span className="text-xs text-slate-500">Mẫu nhanh:</span>
+                {topicPresets.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => onChangeConfig({ subject: preset })}
+                    className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors text-left"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          <TopicDiscoveryBar
-            currentSubject={config.subject}
-            language={config.language}
-            onSelectTopic={(title) => onChangeConfig({ subject: title })}
-          />
+          {!isAnimeMode && (
+            <TopicDiscoveryBar
+              currentSubject={config.subject}
+              language={config.language}
+              onSelectTopic={(title) => onChangeConfig({ subject: title })}
+            />
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -3118,82 +3361,147 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               className="w-full px-3.5 py-2.5 text-sm leading-relaxed border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
             />
 
-            {rawNonEmptyLines.length > 0 && (
+            {isAnimeMode && parsedAnimeStory.beats.length > 0 ? (
               <div
-                data-testid="script-presentation-breakdown"
+                data-testid="anime-storyboard-beats"
                 className="mt-2.5 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 space-y-1.5"
               >
                 <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-slate-700">
                   <span className="inline-flex items-center gap-1.5">
                     <ListChecks className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
-                    <span>Phân vai &amp; Ngữ cảnh từng câu (bấm để xem trước)</span>
+                    <span>Phân cảnh Hoạt hình ({parsedAnimeStory.beats.length} nhịp · bấm để xem nhân vật diễn)</span>
                   </span>
                   <span className="text-slate-500 font-normal">
-                    {rawNonEmptyLines.length} dòng
+                    {parsedAnimeStory.characters.map((c) => c.displayName).join(' · ')}
                   </span>
                 </div>
-                <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
-                  {rawNonEmptyLines.map((line, lineIdx) => {
-                    const segInfo = previewBaseSegments[lineIdx];
-                    const pres = analyzeScriptLinePresentation(line, {
-                      isSecondarySlot: segInfo?.voiceSlot === 'secondary',
-                      isIntroOrOutro: segInfo?.isIntroOrOutro,
-                      scriptStyle: config.scriptStyle,
-                    });
-                    const isSelectedLine = activeRawLineIdx === lineIdx;
+                <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+                  {parsedAnimeStory.beats.map((beat, bi) => {
+                    const isSelected = safeActiveIdx === bi;
+                    const charObj = parsedAnimeStory.characters.find((c) => c.id === beat.speakerId);
                     return (
                       <button
-                        key={lineIdx}
+                        key={bi}
                         type="button"
+                        data-testid={`anime-beat-${bi}`}
                         onClick={() => {
-                          const cleanTarget = stripNarrationTags(line);
-                          const matchedPreviewIdx = previewLines.findIndex(
-                            (pl) =>
-                              pl === cleanTarget ||
-                              (cleanTarget && (cleanTarget.startsWith(pl) || pl.includes(cleanTarget)))
-                          );
-                          const nextPreviewIdx =
-                            matchedPreviewIdx >= 0
-                              ? matchedPreviewIdx
-                              : Math.min(lineIdx, Math.max(0, totalPreviewItems - 1));
-                          setActiveSceneIdx(nextPreviewIdx);
+                          setActiveSceneIdx(bi);
                           setCaptionReplayNonce((n) => n + 1);
                         }}
-                        aria-current={isSelectedLine ? 'true' : undefined}
+                        aria-current={isSelected ? 'true' : undefined}
                         className={`w-full py-1.5 px-2.5 flex items-center justify-between gap-2 text-left text-xs transition-colors ${
-                          isSelectedLine
+                          isSelected
                             ? 'bg-indigo-50/90 text-slate-900 font-medium'
                             : 'bg-white text-slate-700 hover:bg-slate-50'
                         }`}
                       >
                         <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                          <span
-                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold shrink-0 ${
-                              BREAKDOWN_TONE_CLASSES[pres.roleTone]
-                            }`}
-                          >
-                            <PresentationIcon iconKey={pres.roleIconKey} className="w-3 h-3 shrink-0" />
-                            <span>{pres.roleLabel}</span>
+                          <span className="text-[10px] font-mono text-slate-400 w-5 shrink-0">
+                            #{bi + 1}
                           </span>
-                          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 shrink-0">
-                            <PresentationIcon iconKey={pres.contextIconKey} className="w-3 h-3 text-slate-500 shrink-0" />
-                            <span>{pres.contextLabel}</span>
-                          </span>
-                          <span className="truncate">{pres.cleanText || line}</span>
-                        </div>
-                        {pres.hasPause && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[10px] font-mono font-semibold shrink-0">
-                            <Clock className="w-3 h-3" aria-hidden="true" />
-                            <span>
-                              {pres.pauseSec ?? Math.round(config.pauseBetweenLinesSec || 5)}s
+                          {beat.isStageCue ? (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-semibold shrink-0">
+                              {beat.enteringCharacterId ? `Vào cảnh: ${beat.enteringCharacterId}` : 'Chuyển cảnh'}
                             </span>
+                          ) : (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-white text-[10px] font-bold shrink-0"
+                              style={{ backgroundColor: charObj?.nameBadgeHex ?? '#4F46E5' }}
+                            >
+                              {beat.speakerName}
+                            </span>
+                          )}
+                          <span className="text-[10px] font-mono text-slate-500 shrink-0">
+                            [{beat.emotion}]
                           </span>
-                        )}
+                          <span className="truncate">{beat.rawText}</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                          {beat.estDurationSec.toFixed(1)}s
+                        </span>
                       </button>
                     );
                   })}
                 </div>
               </div>
+            ) : (
+              rawNonEmptyLines.length > 0 && (
+                <div
+                  data-testid="script-presentation-breakdown"
+                  className="mt-2.5 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 space-y-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-slate-700">
+                    <span className="inline-flex items-center gap-1.5">
+                      <ListChecks className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
+                      <span>Phân vai &amp; Ngữ cảnh từng câu (bấm để xem trước)</span>
+                    </span>
+                    <span className="text-slate-500 font-normal">
+                      {rawNonEmptyLines.length} dòng
+                    </span>
+                  </div>
+                  <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+                    {rawNonEmptyLines.map((line, lineIdx) => {
+                      const segInfo = previewBaseSegments[lineIdx];
+                      const pres = analyzeScriptLinePresentation(line, {
+                        isSecondarySlot: segInfo?.voiceSlot === 'secondary',
+                        isIntroOrOutro: segInfo?.isIntroOrOutro,
+                        scriptStyle: config.scriptStyle,
+                      });
+                      const isSelectedLine = activeRawLineIdx === lineIdx;
+                      return (
+                        <button
+                          key={lineIdx}
+                          type="button"
+                          onClick={() => {
+                            const cleanTarget = stripNarrationTags(line);
+                            const matchedPreviewIdx = previewLines.findIndex(
+                              (pl) =>
+                                pl === cleanTarget ||
+                                (cleanTarget && (cleanTarget.startsWith(pl) || pl.includes(cleanTarget)))
+                            );
+                            const nextPreviewIdx =
+                              matchedPreviewIdx >= 0
+                                ? matchedPreviewIdx
+                                : Math.min(lineIdx, Math.max(0, totalPreviewItems - 1));
+                            setActiveSceneIdx(nextPreviewIdx);
+                            setCaptionReplayNonce((n) => n + 1);
+                          }}
+                          aria-current={isSelectedLine ? 'true' : undefined}
+                          className={`w-full py-1.5 px-2.5 flex items-center justify-between gap-2 text-left text-xs transition-colors ${
+                            isSelectedLine
+                              ? 'bg-indigo-50/90 text-slate-900 font-medium'
+                              : 'bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                            <span
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold shrink-0 ${
+                                BREAKDOWN_TONE_CLASSES[pres.roleTone]
+                              }`}
+                            >
+                              <PresentationIcon iconKey={pres.roleIconKey} className="w-3 h-3 shrink-0" />
+                              <span>{pres.roleLabel}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 shrink-0">
+                              <PresentationIcon iconKey={pres.contextIconKey} className="w-3 h-3 text-slate-500 shrink-0" />
+                              <span>{pres.contextLabel}</span>
+                            </span>
+                            <span className="truncate">{pres.cleanText || line}</span>
+                          </div>
+                          {pres.hasPause && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[10px] font-mono font-semibold shrink-0">
+                              <Clock className="w-3 h-3" aria-hidden="true" />
+                              <span>
+                                {pres.pauseSec ?? Math.round(config.pauseBetweenLinesSec || 5)}s
+                              </span>
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )
             )}
           </div>
 
@@ -3421,9 +3729,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 )}
                 <span>{isPlayingPreview ? 'Dừng phát' : 'Phát thử Preview'}</span>
               </button>
-              {(config.materialSource === 'studio_2411' ||
-                studioTab === 'learning' ||
-                (config.pauseBetweenLinesSec ?? 0) >= 1.5) && (
+              {!isAnimeMode &&
+                (config.materialSource === 'studio_2411' ||
+                  studioTab === 'learning' ||
+                  (config.pauseBetweenLinesSec ?? 0) >= 1.5) && (
                 <button
                   type="button"
                   data-testid="preview-countdown-btn"
@@ -3442,7 +3751,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   </span>
                 </button>
               )}
-              {config.subtitle.enabled && (
+              {!isAnimeMode && config.subtitle.enabled && (
                 <button
                   type="button"
                   onClick={() => setCaptionReplayNonce((n) => n + 1)}
@@ -3499,7 +3808,16 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   : 'aspect-video w-full'
               }`}
             >
-              {activeScene ? (
+              {isAnimeMode ? (
+                <AnimeStoryStage
+                  story={parsedAnimeStory}
+                  beatIndex={safeActiveIdx}
+                  aspectRatio={config.aspectRatio}
+                  sceneStyle={config.animeSceneStyle ?? 'room_warm'}
+                  fontName={config.subtitle.fontName}
+                  isPlaying={isPlayingPreview}
+                />
+              ) : activeScene ? (
                 activeScene.kind === 'video' ? (
                   <video
                     key={activeScene.previewUrl}
@@ -3618,32 +3936,32 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </div>
               )}
 
-              <div
-                className={`absolute left-2 right-2 flex items-center justify-between gap-1.5 text-white font-mono drop-shadow pointer-events-none ${
-                  config.aspectRatio === '9:16' ? 'top-2.5 text-[10px]' : 'top-1.5 text-[9px]'
-                }`}
-              >
-                <span className="px-1.5 py-0.5 rounded bg-black/55 whitespace-nowrap shrink-0">
-                  {config.aspectRatio} · {config.videoQuality ?? '720p'}
-                </span>
-                <span className="px-1.5 py-0.5 rounded bg-black/55 truncate max-w-[155px]">
-                  {activeScene
-                    ? activeScene.sourceLabel
-                    : config.materialSource === 'curated_preset'
-                    ? activeCuratedBg.title
-                    : config.materialSource === 'studio_2411'
-                    ? active2411Meta.label
-                    : config.materialSource === 'neutral_css_bg'
-                    ? activeNeutralMeta.label
-                    : config.materialSource === 'mixkit_video'
-                    ? 'Mixkit B-roll HD'
-                    : config.materialSource === 'hybrid_real'
-                    ? 'B-roll + Chọn lọc'
-                    : 'Tư liệu chọn'}
-                </span>
-              </div>
+              {config.materialSource !== 'studio_2411' && !isAnimeMode && (
+                <div
+                  className={`absolute left-2 right-2 flex items-center justify-between gap-1.5 text-white font-mono drop-shadow pointer-events-none ${
+                    config.aspectRatio === '9:16' ? 'top-2.5 text-[10px]' : 'top-1.5 text-[9px]'
+                  }`}
+                >
+                  <span className="px-1.5 py-0.5 rounded bg-black/55 whitespace-nowrap shrink-0">
+                    {config.aspectRatio} · {config.videoQuality ?? '720p'}
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-black/55 truncate max-w-[155px]">
+                    {activeScene
+                      ? activeScene.sourceLabel
+                      : config.materialSource === 'curated_preset'
+                      ? activeCuratedBg.title
+                      : config.materialSource === 'neutral_css_bg'
+                      ? activeNeutralMeta.label
+                      : config.materialSource === 'mixkit_video'
+                      ? 'Mixkit B-roll HD'
+                      : config.materialSource === 'hybrid_real'
+                      ? 'B-roll + Chọn lọc'
+                      : 'Tư liệu chọn'}
+                  </span>
+                </div>
+              )}
 
-              {config.subtitle.enabled && (
+              {config.subtitle.enabled && !isAnimeMode && (
                 <SubtitlePreviewCaption
                   text={activePreviewCaption}
                   subtitle={config.subtitle}
@@ -3664,7 +3982,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             </div>
           </div>
 
-          {(editTargetLineIdx !== null || editSourceLineIdx !== null) && (
+          {!isAnimeMode && (editTargetLineIdx !== null || editSourceLineIdx !== null) && (
             <div
               data-testid="preview-inline-subtitle-editor"
               className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2"

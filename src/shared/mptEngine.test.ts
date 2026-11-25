@@ -1937,4 +1937,61 @@ test('decluttered Studio 2411 cards, synced speaker poses, rawLineIndex anti-spo
   assert.equal(resolveSmooth2411XfadeTransition('fade', 0, 0), 'fade');
 });
 
+test('Studio 2411 filters Lesson Topic labels, preserves unbroken PR tokens, and shrinks short friends-chat bubbles', () => {
+  assert.equal(isGenericSpeakerLabel('Lesson Topic'), true);
+  assert.equal(isGenericSpeakerLabel('Topic'), true);
+  assert.equal(isGenericSpeakerLabel('Host'), true);
+  assert.equal(isGenericSpeakerLabel('先輩'), false);
+  assert.equal(isGenericSpeakerLabel('Alex'), false);
 
+  const wrappedPr = wrapSvgCardLines('面接時、日本語で自己PRする方法', 12, 3);
+  assert.ok(wrappedPr.every((ln) => !ln.endsWith('P') && !ln.startsWith('R')));
+  assert.ok(wrappedPr.join('').includes('PR'));
+
+  const introSpec = build2411CardSpecForLine({
+    rawLine: 'Tiêu đề: 面接時、日本語で自己PRする方法',
+    lineIndex: 0,
+    totalLines: 6,
+    isSecondarySlot: false,
+    isIntroOrOutro: true,
+    scriptStyle: 'language_challenge',
+    dualVoiceEnabled: true,
+    themeId: 'cards_pastel',
+    override: { variant: 'friends-chat', labels: ['Lesson Topic', ''] },
+  });
+  assert.equal(introSpec.labels[0], '');
+
+  const shortSvg = build2411CardSvg({
+    spec: {
+      ...introSpec,
+      speechText: 'こんにちは',
+      reactionText: '',
+      exampleText: '',
+      prevTargetText: '',
+      promptPreviewText: '',
+    },
+    width: 720,
+    height: 1280,
+  });
+  const longSvg = build2411CardSvg({
+    spec: {
+      ...introSpec,
+      speechText: '面接で自分の強みとこれまでの経験を分かりやすく具体的に自己PRする方法を一緒に練習しましょう。',
+      reactionText: '',
+      exampleText: '',
+      prevTargetText: '',
+      promptPreviewText: '',
+    },
+    width: 720,
+    height: 1280,
+  });
+
+  assert.equal(shortSvg.includes('Lesson Topic'), false);
+  assert.equal(shortSvg.includes('Lesson Topi'), false);
+  // Extract bubble rect height from first friends-chat bubble (height="..." ... rx="16")
+  const extractHeights = (svg: string) =>
+    Array.from(svg.matchAll(/<rect[^>]+height="(\d+)"[^>]+rx="16"/g)).map((m) => Number(m[1]));
+  const shortH = Math.max(...extractHeights(shortSvg));
+  const longH = Math.max(...extractHeights(longSvg));
+  assert.ok(shortH > 0 && shortH < longH - 20, `Expected compact short bubble (${shortH}) < long bubble (${longH})`);
+});

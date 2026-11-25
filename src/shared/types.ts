@@ -1,6 +1,6 @@
 export type LanguageCode = 'vi' | 'en' | 'ja' | 'bilingual' | 'vi_ja' | 'ja_en';
 
-export type StudioTab = 'short_video' | 'learning';
+export type StudioTab = 'short_video' | 'learning' | 'anime_story';
 
 export type LlmProvider = 'gemini_search' | 'pollinations' | 'ollama' | 'offline_vi';
 
@@ -27,6 +27,7 @@ export type VoiceOptionId =
 
 export type MaterialSource =
   | 'studio_2411'
+  | 'anime_cartoon'
   | 'curated_preset'
   | 'mixkit_video'
   | 'hybrid_real'
@@ -34,6 +35,8 @@ export type MaterialSource =
   | 'pollinations_scene'
   | 'stock_free'
   | 'local_upload';
+
+export type AnimeSceneStyle = 'room_warm' | 'dramatic_anime' | 'pastel_slice';
 
 export type CuratedBackgroundCategory = 'all' | 'study' | 'interview' | 'life';
 
@@ -212,6 +215,9 @@ export interface RenderJobConfig {
   materialSource: MaterialSource;
   neutralBgTheme?: NeutralBgTheme;
   studio2411Theme?: Studio2411ThemeId;
+  animeSceneStyle?: AnimeSceneStyle;
+  animeCharacterVoices?: Record<string, VoiceOptionId>;
+  animeReadStageDirections?: boolean;
   curatedBgCategory?: CuratedBackgroundCategory;
   curatedBgId?: string;
   mediaTypeFilter?: MediaTypeFilter;
