@@ -27,9 +27,11 @@ import {
   getNeutralBgThemeMeta,
   getQualityEncodingParams,
   getSubtitleWrapBudget,
+  getVoiceCatalogItem,
   hasCjkChars,
   hasVietnameseDiacritics,
   isBilingualLanguage,
+  isElevenLabsVoiceId,
   normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
   planNarrationSegments,
@@ -299,13 +301,14 @@ async function ensureBuiltinBgm(): Promise<void> {
     const outPath = path.join(BGM_DIR, t.file);
     if (fs.existsSync(outPath) && fs.statSync(outPath).size > 2000) continue;
     try {
+      const escapedExpr = t.expr.replace(/,/g, '\\,');
       await runFfmpeg(
         [
           '-y',
           '-f',
           'lavfi',
           '-i',
-          `aevalsrc=${t.expr}:s=24000:d=24`,
+          `aevalsrc=${escapedExpr}:s=24000:d=24`,
           '-af',
           `lowpass=f=${t.lowpass},afade=t=in:st=0:d=1.8,afade=t=out:st=22.2:d=1.8`,
           '-c:a',
@@ -341,9 +344,19 @@ async function synthesizeWithEdgeTts(
   voiceId: VoiceOptionId,
   outPath: string
 ): Promise<boolean> {
+  const catalogItem = getVoiceCatalogItem(voiceId);
+  const edgeVoice =
+    catalogItem?.edgeVoiceName ??
+    (isElevenLabsVoiceId(voiceId)
+      ? catalogItem?.gender === 'male'
+        ? 'vi-VN-NamMinhNeural'
+        : 'vi-VN-HoaiMyNeural'
+      : voiceId);
+  const rawEdgePath = `${outPath}.edge.mp3`;
+
   try {
     const tts = new MsEdgeTTS();
-    await tts.setMetadata(voiceId, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    await tts.setMetadata(edgeVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
     const { audioStream } = tts.toStream(text);
     const chunks: Buffer[] = [];
     const edgeTimeoutMs = Math.max(12000, text.length * 90);
@@ -361,9 +374,32 @@ async function synthesizeWithEdgeTts(
     });
     const combined = Buffer.concat(chunks);
     if (combined.length < 400) return false;
-    fs.writeFileSync(outPath, combined);
+
+    const shift = catalogItem?.pitchShiftFactor;
+    if (shift && Math.abs(shift - 1.0) > 0.025 && edgeVoice !== voiceId) {
+      fs.writeFileSync(rawEdgePath, combined);
+      await runFfmpeg(
+        [
+          '-y',
+          '-i',
+          rawEdgePath,
+          '-af',
+          `asetrate=24000*${shift.toFixed(3)},aresample=24000,atempo=${(1 / shift).toFixed(4)}`,
+          '-c:a',
+          'libmp3lame',
+          '-b:a',
+          '96k',
+          outPath,
+        ],
+        15000
+      );
+      fs.rmSync(rawEdgePath, { force: true });
+    } else {
+      fs.writeFileSync(outPath, combined);
+    }
     return true;
   } catch {
+    fs.rmSync(rawEdgePath, { force: true });
     return false;
   }
 }
@@ -373,9 +409,28 @@ async function synthesizeWithGoogleFreeTts(
   voiceId: VoiceOptionId,
   outPath: string
 ): Promise<boolean> {
-  const lang = voiceId.startsWith('ja-') ? 'ja' : voiceId.startsWith('en-') ? 'en' : 'vi';
-  const isMale =
-    voiceId.includes('NamMinh') || voiceId.includes('Guy') || voiceId.includes('Keita');
+  const catalogItem = getVoiceCatalogItem(voiceId);
+  const lang =
+    catalogItem?.language === 'ja' || voiceId.startsWith('ja-')
+      ? 'ja'
+      : catalogItem?.language === 'en' || voiceId.startsWith('en-')
+      ? 'en'
+      : catalogItem?.language === 'vi' || voiceId.startsWith('vi-')
+      ? 'vi'
+      : hasCjkChars(text)
+      ? 'ja'
+      : hasVietnameseDiacritics(text)
+      ? 'vi'
+      : 'en';
+  const isMale = catalogItem
+    ? catalogItem.gender === 'male'
+    : voiceId.includes('NamMinh') ||
+      voiceId.includes('Guy') ||
+      voiceId.includes('Keita') ||
+      voiceId.includes('Daichi') ||
+      voiceId.includes('Naoki') ||
+      voiceId.includes('Davis') ||
+      voiceId.includes('Ryan');
   const rawPath = `${outPath}.raw.mp3`;
   const tempChunks: string[] = [];
   const concatTxtPath = `${outPath}.chunks.txt`;
@@ -416,14 +471,18 @@ async function synthesizeWithGoogleFreeTts(
       );
     }
 
-    if (isMale) {
+    const basePitch = isMale ? 0.9 : 1.0;
+    const fineShift = catalogItem?.pitchShiftFactor ?? 1.0;
+    const pitchFactor = Math.max(0.84, Math.min(1.16, basePitch * fineShift));
+
+    if (Math.abs(pitchFactor - 1.0) > 0.025) {
       await runFfmpeg(
         [
           '-y',
           '-i',
           rawPath,
           '-af',
-          'asetrate=24000*0.90,aresample=24000,atempo=1.11',
+          `asetrate=24000*${pitchFactor.toFixed(3)},aresample=24000,atempo=${(1 / pitchFactor).toFixed(4)}`,
           '-c:a',
           'libmp3lame',
           '-b:a',
@@ -449,15 +508,10 @@ async function synthesizeWithGoogleFreeTts(
 }
 
 function getElevenLabsVoiceId(voiceId: VoiceOptionId): string {
-  const voiceMap: Record<VoiceOptionId, string> = {
-    'vi-VN-HoaiMyNeural': '21m00Tcm4TlvDq8ikWAM', // Rachel
-    'vi-VN-NamMinhNeural': 'pNInz6obpgDQGcFmaJgB', // Adam
-    'en-US-JennyNeural': 'EXAVITQu4vr4xnSDxMaL', // Sarah
-    'en-US-GuyNeural': 'ErXwobaYiN019PkySvjV', // Antoni
-    'ja-JP-NanamiNeural': 'MF3mGyEYCl7XYWbV9V6O', // Elli
-    'ja-JP-KeitaNeural': 'TxGEqnHWrfWFTfGW9XjX', // Josh
-  };
-  return voiceMap[voiceId] ?? '21m00Tcm4TlvDq8ikWAM';
+  if (voiceId.startsWith('el-custom:')) {
+    return voiceId.slice('el-custom:'.length).trim() || '21m00Tcm4TlvDq8ikWAM';
+  }
+  return getVoiceCatalogItem(voiceId)?.elevenLabsVoiceId ?? '21m00Tcm4TlvDq8ikWAM';
 }
 
 async function createSilenceMp3(durationSec: number, outPath: string): Promise<void> {
@@ -615,17 +669,29 @@ async function createDoorSlideFxWav(durationSec: number, outWavPath: string): Pr
   );
 }
 
+function normalizeElevenLabsApiKey(raw?: string): string {
+  if (typeof raw !== 'string') return '';
+  return raw
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["']|["']$/g, '')
+    .trim();
+}
+
 async function synthesizeWithElevenLabs(
   text: string,
   voiceId: VoiceOptionId,
-  outPath: string
+  outPath: string,
+  apiKeyOverride?: string
 ): Promise<{ ok: boolean; reason?: 'missing_key' | 'api_error'; detail?: string }> {
-  const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
+  const apiKey =
+    normalizeElevenLabsApiKey(apiKeyOverride) ||
+    normalizeElevenLabsApiKey(process.env.ELEVENLABS_API_KEY);
   if (!apiKey) {
     return {
       ok: false,
       reason: 'missing_key',
-      detail: 'Chưa cấu hình ELEVENLABS_API_KEY trong Secrets trên server.',
+      detail: 'Chưa nhập ELEVENLABS_API_KEY trên app hoặc biến môi trường server.',
     };
   }
 
@@ -649,14 +715,37 @@ async function synthesizeWithElevenLabs(
           },
         }),
       },
-      12000
+      20000
     );
 
     if (!res.ok) {
+      let apiMsg = '';
+      try {
+        const rawBody = await res.text();
+        try {
+          const parsed = JSON.parse(rawBody) as {
+            detail?: { message?: string; status?: string } | string;
+            message?: string;
+          };
+          if (typeof parsed.detail === 'string') {
+            apiMsg = parsed.detail;
+          } else if (parsed.detail && typeof parsed.detail === 'object') {
+            apiMsg = parsed.detail.message || parsed.detail.status || '';
+          } else if (parsed.message) {
+            apiMsg = parsed.message;
+          }
+        } catch {
+          apiMsg = rawBody.slice(0, 140).trim();
+        }
+      } catch {
+        // Ignore body parse failure
+      }
       return {
         ok: false,
         reason: 'api_error',
-        detail: `ElevenLabs trả về HTTP ${res.status}`,
+        detail: apiMsg
+          ? `ElevenLabs lỗi HTTP ${res.status}: ${apiMsg}`
+          : `ElevenLabs trả về HTTP ${res.status}`,
       };
     }
 
@@ -681,6 +770,7 @@ async function synthesizeChunkWithFallback(params: {
   ttsProvider: TtsProvider;
   voiceRate: number;
   outPath: string;
+  elevenLabsApiKey?: string;
 }): Promise<{
   engineUsed: string;
   recoveredFromEdgeError: boolean;
@@ -692,8 +782,16 @@ async function synthesizeChunkWithFallback(params: {
   let fallbackNote: string | undefined;
   let ok = false;
 
-  if (params.ttsProvider === 'elevenlabs') {
-    const elRes = await synthesizeWithElevenLabs(params.text, params.voiceId, tempPath);
+  const preferElevenLabs =
+    params.ttsProvider === 'elevenlabs' || isElevenLabsVoiceId(params.voiceId);
+
+  if (preferElevenLabs) {
+    const elRes = await synthesizeWithElevenLabs(
+      params.text,
+      params.voiceId,
+      tempPath,
+      params.elevenLabsApiKey
+    );
     if (elRes.ok) {
       ok = true;
       engineUsed = 'ElevenLabs Multilingual v2';
@@ -3322,7 +3420,9 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     );
 
     if (config.materialSource === 'anime_cartoon') {
-      const story = parseAnimeDialogueScript(config.script, config.animeCharacterVoices);
+      const story = parseAnimeDialogueScript(config.script, config.animeCharacterVoices, {
+        roomOverride: config.animeRoomOverride,
+      });
       if (story.beats.length === 0) {
         throw new Error('Kịch bản hoạt hình đang trống hoặc chưa có dòng hội thoại hợp lệ.');
       }
@@ -3353,6 +3453,15 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       }> = [];
       let cursorSec = 0;
       let loggedRecovery = false;
+      let loggedEngine = false;
+
+      const resolvedCastVoiceMap = new Map<string, VoiceOptionId>();
+      for (const ch of story.characters) {
+        resolvedCastVoiceMap.set(
+          ch.id,
+          config.animeCharacterVoices?.[ch.id] ?? ch.defaultVoiceId ?? config.voiceId
+        );
+      }
 
       for (let bi = 0; bi < story.beats.length; bi++) {
         assertNotCancelled(jobId);
@@ -3392,6 +3501,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
               ttsProvider: config.ttsProvider,
               voiceRate: config.voiceRate,
               outPath: partMp3Path,
+              elevenLabsApiKey: config.elevenLabsApiKey,
             });
             if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
               loggedRecovery = true;
@@ -3401,19 +3511,31 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
                 ttsRes.fallbackNote ??
                   'Edge-TTS tạm thời gián đoạn -> tự động dùng Google TTS Miễn phí.'
               );
+            } else if (!ttsRes.fallbackNote && !loggedEngine) {
+              loggedEngine = true;
+              updateJob(jobId, {}, `Đang tổng hợp giọng nhân vật bằng ${ttsRes.engineUsed}.`);
             }
             await normalizeSpeechAudioToWav(partMp3Path, rawNormWav);
 
             const targetPitch = charProfile?.pitchRatio ?? 1.0;
+            const voiceMeta = getVoiceCatalogItem(resolvedVoiceId);
+            const voiceShareCount = Array.from(resolvedCastVoiceMap.values()).filter(
+              (v) => v === resolvedVoiceId
+            ).length;
+            const keepPureElevenLabs =
+              ttsRes.engineUsed.includes('ElevenLabs') && voiceShareCount <= 1;
             const isGooglePitchedMale =
               ttsRes.engineUsed.includes('Google') &&
-              (resolvedVoiceId.includes('Keita') ||
+              (voiceMeta?.gender === 'male' ||
+                resolvedVoiceId.includes('Keita') ||
                 resolvedVoiceId.includes('NamMinh') ||
                 resolvedVoiceId.includes('Guy'));
-            const relFactor = Math.max(
-              0.84,
-              Math.min(1.28, isGooglePitchedMale ? targetPitch / 0.90 : targetPitch)
-            );
+            const relFactor = keepPureElevenLabs
+              ? 1.0
+              : Math.max(
+                  0.84,
+                  Math.min(1.28, isGooglePitchedMale ? targetPitch / 0.9 : targetPitch)
+                );
             if (Math.abs(relFactor - 1.0) > 0.03) {
               await runFfmpeg(
                 [
@@ -3526,6 +3648,8 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
             sceneStyle: animeStyle,
             fontName: config.subtitle.fontName,
             isPlayingSpeech,
+            subtitleEffect: config.subtitle.effect,
+            highlightColor: config.subtitle.highlightColor,
           });
           fs.writeFileSync(
             path.join(framesDir, `f_${String(f).padStart(4, '0')}.svg`),
@@ -3612,6 +3736,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         index: idx + 1,
         startSec: t.startSec,
         endSec: t.endSec,
+        animDurationSec: t.voiceDur > 0 ? t.voiceDur : t.dur,
         text: t.beat.isStageCue
           ? t.beat.sceneTitle || t.beat.rawText
           : `${t.beat.speakerName}: ${t.beat.spokenText}`,
@@ -3756,6 +3881,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     const audioParts: string[] = [];
     let cursorSec = 0;
     let loggedRecovery = false;
+    let loggedEngine = false;
 
     for (let i = 0; i < segments.length; i++) {
       assertNotCancelled(jobId);
@@ -3769,6 +3895,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           ttsProvider: config.ttsProvider,
           voiceRate: config.voiceRate,
           outPath: partMp3Path,
+          elevenLabsApiKey: config.elevenLabsApiKey,
         });
 
         if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
@@ -3779,6 +3906,9 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
             ttsRes.fallbackNote ??
               'Đã phát hiện lỗi Edge-TTS (Microsoft 403) -> tự chuyển sang Google TTS Miễn phí.'
           );
+        } else if (!ttsRes.fallbackNote && !loggedEngine) {
+          loggedEngine = true;
+          updateJob(jobId, {}, `Đang tạo giọng đọc bằng ${ttsRes.engineUsed}.`);
         }
 
         await normalizeSpeechAudioToWav(partMp3Path, partWavPath);
@@ -5520,6 +5650,54 @@ async function startServer() {
     });
   });
 
+  // 4a. Verify ElevenLabs API Key & List Account Voices (Proxy)
+  app.post('/api/elevenlabs/voices', async (req, res) => {
+    const apiKey =
+      normalizeElevenLabsApiKey(req.body?.apiKey) ||
+      normalizeElevenLabsApiKey(process.env.ELEVENLABS_API_KEY);
+    if (!apiKey) {
+      res.status(400).json({ error: 'Vui lòng nhập ELEVENLABS_API_KEY để kiểm tra và tải giọng.' });
+      return;
+    }
+    try {
+      const elRes = await fetchWithTimeout(
+        'https://api.elevenlabs.io/v1/voices',
+        {
+          method: 'GET',
+          headers: {
+            'xi-api-key': apiKey,
+            Accept: 'application/json',
+          },
+        },
+        10000
+      );
+      if (!elRes.ok) {
+        const msg =
+          elRes.status === 401 || elRes.status === 403
+            ? 'ELEVENLABS_API_KEY không hợp lệ hoặc đã hết hạn.'
+            : `ElevenLabs trả về HTTP ${elRes.status}.`;
+        res.status(elRes.status).json({ error: msg });
+        return;
+      }
+      const data = (await elRes.json()) as {
+        voices?: Array<{ voice_id?: string; name?: string; category?: string }>;
+      };
+      const voices = (data.voices ?? [])
+        .filter((v) => v.voice_id && v.name)
+        .slice(0, 40)
+        .map((v) => ({
+          id: `el-custom:${v.voice_id}` as VoiceOptionId,
+          name: String(v.name),
+          category: v.category ? String(v.category) : undefined,
+        }));
+      res.json({ ok: true, voices });
+    } catch (err) {
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Không thể kết nối máy chủ ElevenLabs.',
+      });
+    }
+  });
+
   // 4. TTS Preview endpoint (supports both single-voice and dual-voice bilingual sample!)
   app.post('/api/tts-preview', async (req, res) => {
     const rawText =
@@ -5528,14 +5706,15 @@ async function startServer() {
     const rawScript = String(req.body?.script ?? '').trim();
     const language = (req.body?.language ?? 'vi') as LanguageCode;
     const scriptStyle = (req.body?.scriptStyle ?? 'curious_facts') as ScriptStyle;
-    const voiceId = (req.body?.voiceId ?? 'vi-VN-HoaiMyNeural') as VoiceOptionId;
+    const voiceId = (req.body?.voiceId ?? 'el-rachel') as VoiceOptionId;
     const secondaryVoiceId = (req.body?.secondaryVoiceId ??
       getDefaultSecondaryVoiceForLanguage(language)) as VoiceOptionId;
     const dualVoiceEnabled = Boolean(req.body?.dualVoiceEnabled) || isBilingualLanguage(language);
     const pauseBetweenLinesSec = Number(req.body?.pauseBetweenLinesSec ?? 0);
     const clockTickEnabled = req.body?.clockTickEnabled !== false;
-    const ttsProvider = (req.body?.ttsProvider ?? 'google_free') as TtsProvider;
+    const ttsProvider = (req.body?.ttsProvider ?? 'elevenlabs') as TtsProvider;
     const voiceRate = Number(req.body?.voiceRate ?? 1.0);
+    const elevenLabsApiKey = normalizeElevenLabsApiKey(req.body?.elevenLabsApiKey);
 
     const targetRepeatCount = Number(req.body?.targetRepeatCount ?? 0);
     const targetRepeatPauseSec = Number(req.body?.targetRepeatPauseSec ?? 2.0);
@@ -5578,25 +5757,28 @@ async function startServer() {
           const previewWorkDir = path.join(CACHE_DIR, `preview_mix_${Date.now()}`);
           fs.mkdirSync(previewWorkDir, { recursive: true });
           const parts: string[] = [];
-          let lastResult: {
-            engineUsed: string;
-            recoveredFromEdgeError: boolean;
-            fallbackNote?: string;
-          } = {
-            engineUsed: 'Google TTS Miễn phí',
-            recoveredFromEdgeError: false,
-          };
+          const enginesUsed: string[] = [];
+          const fallbackNotes: string[] = [];
+          let anyRecoveredFromEdge = false;
 
           for (let i = 0; i < sampleSegs.length; i++) {
             const seg = sampleSegs[i];
             const segPath = path.join(previewWorkDir, `p_${i}.mp3`);
-            lastResult = await synthesizeChunkWithFallback({
+            const segResult = await synthesizeChunkWithFallback({
               text: seg.text,
               voiceId: seg.voiceId,
               ttsProvider,
               voiceRate,
               outPath: segPath,
+              elevenLabsApiKey,
             });
+            enginesUsed.push(segResult.engineUsed);
+            if (segResult.fallbackNote && !fallbackNotes.includes(segResult.fallbackNote)) {
+              fallbackNotes.push(segResult.fallbackNote);
+            }
+            if (segResult.recoveredFromEdgeError) {
+              anyRecoveredFromEdge = true;
+            }
             parts.push(segPath);
             if (i < sampleSegs.length - 1 && seg.pauseAfterSec > 0) {
               const pGap = path.join(previewWorkDir, `gap_${i}.mp3`);
@@ -5640,11 +5822,12 @@ async function startServer() {
 
           const durationSec = await probeDurationSec(outPath);
           const voicesUsed = Array.from(new Set(sampleSegs.map((s) => s.voiceId)));
+          const uniqueEngines = Array.from(new Set(enginesUsed));
           res.json({
             audioUrl: `/files/outputs/${filename}`,
-            engineUsed: `${lastResult.engineUsed} (${voicesUsed.join(' + ')})`,
-            recoveredFromEdgeError: lastResult.recoveredFromEdgeError,
-            fallbackNote: lastResult.fallbackNote,
+            engineUsed: `${uniqueEngines.join(' / ') || 'Google TTS Miễn phí'} (${voicesUsed.join(' + ')})`,
+            recoveredFromEdgeError: anyRecoveredFromEdge,
+            fallbackNote: fallbackNotes[0],
             voicesUsed,
             durationSec,
           });
@@ -5660,6 +5843,7 @@ async function startServer() {
         ttsProvider,
         voiceRate,
         outPath,
+        elevenLabsApiKey,
       });
       const durationSec = await probeDurationSec(outPath);
       res.json({

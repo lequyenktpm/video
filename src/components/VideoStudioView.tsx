@@ -9,14 +9,18 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Eye,
+  EyeOff,
   Film,
   Folder,
   FolderPlus,
   Image as ImageIcon,
+  KeyRound,
   Layers,
   LayoutGrid,
   ListChecks,
   Loader2,
+  MapPin,
   Palette,
   Play,
   RefreshCw,
@@ -30,6 +34,8 @@ import {
   X,
 } from 'lucide-react';
 import {
+  AnimeRoomKind,
+  AnimeSceneStyle,
   BgmPreset,
   CompletedVideoRecord,
   CuratedBackgroundCategory,
@@ -68,6 +74,7 @@ import {
   buildScenePromptsFromScript,
   doesVoiceMatchLanguage,
   extractEnglishSearchTerms,
+  formatVoiceOptionLabel,
   generateOfflineVietnameseScript,
   getDefaultSecondaryVoiceForLanguage,
   getDefaultVoiceForLanguage,
@@ -77,6 +84,7 @@ import {
   hasCjkChars,
   hasVietnameseDiacritics,
   isBilingualLanguage,
+  isElevenLabsVoiceId,
   isKnownPresetSubject,
   NEUTRAL_BG_THEMES,
   normalizeOutputSubdir,
@@ -88,6 +96,7 @@ import {
   splitScriptSentences,
   stripNarrationTags,
   updateScriptLinePreservingTag,
+  VOICE_CATALOG,
 } from '../shared/mptEngine';
 import {
   build2411CardSpecForLine,
@@ -103,10 +112,11 @@ import {
   selectCuratedBackgroundsForConfig,
 } from '../shared/curatedBackgrounds';
 import {
+  ANIME_ROOM_METAS,
   ANIME_STORY_PRESETS,
+  getAnimeRoomMeta,
   parseAnimeDialogueScript,
 } from '../shared/animeStoryEngine';
-import { AnimeSceneStyle } from '../shared/types';
 import { TopicDiscoveryBar } from './TopicDiscoveryBar';
 import { SubtitlePreviewCaption } from './SubtitlePreviewCaption';
 import { PresentationIcon } from './PresentationIcon';
@@ -196,6 +206,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const previewPlayTimerRef = useRef<number | null>(null);
   const previewPlayingRef = useRef<boolean>(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const stagePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const stagePreviewAbortRef = useRef<AbortController | null>(null);
 
   const [termsInput, setTermsInput] = useState(config.terms.join(', '));
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
@@ -227,6 +239,19 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const [isPreviewingTts, setIsPreviewingTts] = useState(false);
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const [ttsPreviewNote, setTtsPreviewNote] = useState<string | null>(null);
+  const [showElKey, setShowElKey] = useState(false);
+  const [isCheckingElKey, setIsCheckingElKey] = useState(false);
+  const [elKeyStatus, setElKeyStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [customElVoices, setCustomElVoices] = useState<
+    Array<{ id: VoiceOptionId; name: string; category?: string }>
+  >(() => {
+    try {
+      const raw = window.localStorage.getItem('mpt_vn_el_voices_v1');
+      return raw ? (JSON.parse(raw) as Array<{ id: VoiceOptionId; name: string; category?: string }>) : [];
+    } catch {
+      return [];
+    }
+  });
   const [captionReplayNonce, setCaptionReplayNonce] = useState(0);
   const [previewCountdown, setPreviewCountdown] = useState<number | null>(null);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
@@ -336,6 +361,23 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       window.clearTimeout(previewPlayTimerRef.current);
       previewPlayTimerRef.current = null;
     }
+    if (stagePreviewAbortRef.current) {
+      try {
+        stagePreviewAbortRef.current.abort();
+      } catch {
+        // Ignore abort errors safely
+      }
+      stagePreviewAbortRef.current = null;
+    }
+    if (stagePreviewAudioRef.current) {
+      try {
+        stagePreviewAudioRef.current.pause();
+        stagePreviewAudioRef.current.src = '';
+      } catch {
+        // Ignore audio element cleanup errors safely
+      }
+      stagePreviewAudioRef.current = null;
+    }
     stopCountdownPreview();
     setIsPlayingPreview(false);
     try {
@@ -441,6 +483,23 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       if (exit2411TimerRef.current !== null) {
         window.clearTimeout(exit2411TimerRef.current);
       }
+      if (stagePreviewAbortRef.current) {
+        try {
+          stagePreviewAbortRef.current.abort();
+        } catch {
+          // Ignore
+        }
+        stagePreviewAbortRef.current = null;
+      }
+      if (stagePreviewAudioRef.current) {
+        try {
+          stagePreviewAudioRef.current.pause();
+          stagePreviewAudioRef.current.src = '';
+        } catch {
+          // Ignore
+        }
+        stagePreviewAudioRef.current = null;
+      }
       try {
         if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
           window.speechSynthesis.cancel();
@@ -493,8 +552,96 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     studioTab === 'anime_story' || config.materialSource === 'anime_cartoon';
   const parsedAnimeStory = parseAnimeDialogueScript(
     config.script,
-    config.animeCharacterVoices
+    config.animeCharacterVoices,
+    { roomOverride: config.animeRoomOverride }
   );
+
+  const handleVerifyElevenLabsKey = async () => {
+    setIsCheckingElKey(true);
+    setElKeyStatus(null);
+    try {
+      const res = await fetch('/api/elevenlabs/voices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: config.elevenLabsApiKey ?? '' }),
+      });
+      const data = await safeParseJsonResponse<{
+        ok?: boolean;
+        voices?: Array<{ id: VoiceOptionId; name: string; category?: string }>;
+        error?: string;
+      }>(res, 'Không kiểm tra được ELEVENLABS_API_KEY.');
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'ELEVENLABS_API_KEY chưa hợp lệ.');
+      }
+      const fetched = Array.isArray(data.voices) ? data.voices : [];
+      setCustomElVoices(fetched);
+      try {
+        window.localStorage.setItem('mpt_vn_el_voices_v1', JSON.stringify(fetched));
+      } catch {
+        // Ignore storage quota errors
+      }
+      setElKeyStatus({
+        ok: true,
+        message: `Kết nối ElevenLabs thành công! Đã tải ${fetched.length} giọng từ tài khoản của bạn.`,
+      });
+      onChangeConfig({ ttsProvider: 'elevenlabs' });
+    } catch (err) {
+      setElKeyStatus({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Lỗi kết nối ElevenLabs API.',
+      });
+    } finally {
+      setIsCheckingElKey(false);
+    }
+  };
+
+  const renderVoiceSelectOptions = () => {
+    const viVoices = VOICE_CATALOG.filter((v) => v.language === 'vi');
+    const jaVoices = VOICE_CATALOG.filter((v) => v.language === 'ja');
+    const enVoices = VOICE_CATALOG.filter((v) => v.language === 'en');
+    const elVoices = VOICE_CATALOG.filter((v) => v.language === 'multi');
+    return (
+      <>
+        <optgroup label="Tiếng Việt · Edge Neural / Google TTS">
+          {viVoices.map((v) => (
+            <option key={v.id} value={v.id}>
+              {formatVoiceOptionLabel(v)}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="Tiếng Nhật (日本語) · Edge Neural / Google TTS">
+          {jaVoices.map((v) => (
+            <option key={v.id} value={v.id}>
+              {formatVoiceOptionLabel(v)}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="Tiếng Anh (English) · Edge Neural / Google TTS">
+          {enVoices.map((v) => (
+            <option key={v.id} value={v.id}>
+              {formatVoiceOptionLabel(v)}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="ElevenLabs AI · Đa ngôn ngữ (Cần ELEVENLABS_API_KEY)">
+          {elVoices.map((v) => (
+            <option key={v.id} value={v.id}>
+              {formatVoiceOptionLabel(v)}
+            </option>
+          ))}
+        </optgroup>
+        {customElVoices.length > 0 && (
+          <optgroup label="ElevenLabs Account · Giọng riêng của bạn">
+            {customElVoices.map((cv) => (
+              <option key={cv.id} value={cv.id}>
+                {`[ElevenLabs Account] ${cv.name}${cv.category ? ` (${cv.category})` : ''}`}
+              </option>
+            ))}
+          </optgroup>
+        )}
+      </>
+    );
+  };
 
   const previewLines = splitScriptSentences(config.script, 140)
     .map((l) => stripNarrationTags(l))
@@ -507,6 +654,13 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const safeActiveIdx =
     totalPreviewItems > 0 ? Math.min(activeSceneIdx, totalPreviewItems - 1) : 0;
   const activeScene = !isAnimeMode ? previewScenes[safeActiveIdx] ?? null : null;
+  const activeAnimeBeat = isAnimeMode ? parsedAnimeStory.beats[safeActiveIdx] : undefined;
+  const activeAnimeSubtitleText = activeAnimeBeat
+    ? activeAnimeBeat.isStageCue
+      ? activeAnimeBeat.sceneTitle || activeAnimeBeat.rawText
+      : `${activeAnimeBeat.speakerName}: ${activeAnimeBeat.spokenText}`
+    : '';
+  const activeAnimeRawLine = activeAnimeBeat ? activeAnimeBeat.rawText : '';
 
   useEffect(() => {
     if (activeScene) {
@@ -735,6 +889,123 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     current2411SnapRef.current = nextSnap;
   }, [active2411CardKey]);
 
+  const playServerTtsBeat = async (params: {
+    text: string;
+    voiceId: VoiceOptionId;
+    fallbackDelayMs: number;
+    onFinished: () => void;
+    onFallbackSpeak: () => void;
+  }) => {
+    const { text, voiceId, fallbackDelayMs, onFinished, onFallbackSpeak } = params;
+    const clean = stripNarrationTags(text);
+    if (!clean) {
+      previewPlayTimerRef.current = window.setTimeout(() => {
+        if (previewPlayingRef.current) onFinished();
+      }, fallbackDelayMs);
+      return;
+    }
+
+    if (stagePreviewAbortRef.current) {
+      try {
+        stagePreviewAbortRef.current.abort();
+      } catch {
+        // Ignore
+      }
+    }
+    if (stagePreviewAudioRef.current) {
+      try {
+        stagePreviewAudioRef.current.pause();
+        stagePreviewAudioRef.current.src = '';
+      } catch {
+        // Ignore
+      }
+      stagePreviewAudioRef.current = null;
+    }
+
+    const controller = new AbortController();
+    stagePreviewAbortRef.current = controller;
+
+    try {
+      const res = await fetch('/api/tts-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          text: clean,
+          voiceId,
+          ttsProvider:
+            config.ttsProvider === 'elevenlabs' || isElevenLabsVoiceId(voiceId)
+              ? 'elevenlabs'
+              : config.ttsProvider,
+          voiceRate: config.voiceRate,
+          elevenLabsApiKey: config.elevenLabsApiKey,
+          dualVoiceEnabled: false,
+        }),
+      });
+      if (!previewPlayingRef.current || controller.signal.aborted) return;
+
+      const data = await safeParseJsonResponse<{
+        audioUrl?: string;
+        engineUsed?: string;
+        recoveredFromEdgeError?: boolean;
+        fallbackNote?: string;
+        error?: string;
+      }>(res, 'Không tạo được giọng đọc thử.');
+
+      if (!previewPlayingRef.current || controller.signal.aborted) return;
+
+      if (!res.ok || !data.audioUrl) {
+        throw new Error(data.error || 'Không tạo được giọng đọc thử.');
+      }
+
+      setPreviewAudioUrl(data.audioUrl);
+      setTtsPreviewNote(
+        data.fallbackNote
+          ? data.fallbackNote
+          : data.recoveredFromEdgeError
+          ? `Edge-TTS bị chặn -> Tự chuyển sang ${data.engineUsed}`
+          : `Đang phát thử từ ${data.engineUsed} (${voiceId})`
+      );
+
+      const audio = new Audio(data.audioUrl);
+      audio.volume = Math.max(0.2, Math.min(1.0, config.voiceVolume || 1.0));
+      stagePreviewAudioRef.current = audio;
+
+      let settled = false;
+      const finishOnce = () => {
+        if (settled) return;
+        settled = true;
+        if (!previewPlayingRef.current) return;
+        previewPlayTimerRef.current = window.setTimeout(() => {
+          if (previewPlayingRef.current) onFinished();
+        }, 220);
+      };
+
+      audio.onended = finishOnce;
+      audio.onerror = () => {
+        if (settled) return;
+        settled = true;
+        onFallbackSpeak();
+        if (previewPlayingRef.current) {
+          previewPlayTimerRef.current = window.setTimeout(() => {
+            if (previewPlayingRef.current) onFinished();
+          }, fallbackDelayMs);
+        }
+      };
+
+      await audio.play();
+    } catch (err) {
+      if (controller.signal.aborted || !previewPlayingRef.current) return;
+      if (err instanceof Error && err.message) {
+        setTtsPreviewNote(err.message);
+      }
+      onFallbackSpeak();
+      previewPlayTimerRef.current = window.setTimeout(() => {
+        if (previewPlayingRef.current) onFinished();
+      }, fallbackDelayMs);
+    }
+  };
+
   const startPreviewPlayback = () => {
     const count = Math.max(1, totalPreviewItems);
     stopPreviewPlayback();
@@ -754,15 +1025,38 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         setActiveSceneIdx(idx);
         setCaptionReplayNonce((n) => n + 1);
         const charProfile = parsedAnimeStory.characters.find((c) => c.id === beat.speakerId);
-        if (!beat.isStageCue || config.animeReadStageDirections) {
+        const charVoiceId =
+          config.animeCharacterVoices?.[beat.speakerId] ??
+          charProfile?.defaultVoiceId ??
+          config.voiceId;
+        const delayMs = Math.max(1700, Math.round(beat.estDurationSec * 1000));
+        const shouldSpeak = !beat.isStageCue || Boolean(config.animeReadStageDirections);
+
+        if (shouldSpeak && (config.ttsProvider === 'elevenlabs' || isElevenLabsVoiceId(charVoiceId))) {
+          void playServerTtsBeat({
+            text: beat.spokenText,
+            voiceId: charVoiceId,
+            fallbackDelayMs: delayMs,
+            onFinished: () => runAnimeBeat(idx + 1),
+            onFallbackSpeak: () =>
+              speakPreviewSlideText(
+                beat.spokenText,
+                charProfile?.gender === 'female',
+                charVoiceId,
+                charProfile?.pitchRatio
+              ),
+          });
+          return;
+        }
+
+        if (shouldSpeak) {
           speakPreviewSlideText(
             beat.spokenText,
             charProfile?.gender === 'female',
-            charProfile?.defaultVoiceId,
+            charVoiceId,
             charProfile?.pitchRatio
           );
         }
-        const delayMs = Math.max(1700, Math.round(beat.estDurationSec * 1000));
         previewPlayTimerRef.current = window.setTimeout(() => {
           if (!previewPlayingRef.current) return;
           runAnimeBeat(idx + 1);
@@ -793,12 +1087,40 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           : undefined) ??
         previewBaseSegments[idx];
       const isSecondary = segForIdx?.voiceSlot === 'secondary';
-      speakPreviewSlideText(lineText, isSecondary);
+      const segVoiceId =
+        segForIdx?.voiceId ??
+        (isSecondary ? config.secondaryVoiceId || config.voiceId : config.voiceId);
 
       const hasPause =
         /\[PAUSE\]/i.test(rawLineForIdx) ||
         (/^\s*(?:Q|Question)\s*[:：]/i.test(rawLineForIdx) && (config.pauseBetweenLinesSec ?? 0) > 0);
       const pauseSec = Math.max(0, Math.round(config.pauseBetweenLinesSec ?? 0));
+      const readDelayMs = Math.max(2200, Math.min(4200, Math.round(lineText.length * 52 + 1200)));
+
+      const advanceAfterLine = () => {
+        if (!previewPlayingRef.current) return;
+        if (hasPause && pauseSec > 0) {
+          handleRunCountdownPreview(() => {
+            if (!previewPlayingRef.current) return;
+            runStep(idx + 1);
+          });
+        } else {
+          runStep(idx + 1);
+        }
+      };
+
+      if (lineText && (config.ttsProvider === 'elevenlabs' || isElevenLabsVoiceId(segVoiceId))) {
+        void playServerTtsBeat({
+          text: lineText,
+          voiceId: segVoiceId,
+          fallbackDelayMs: hasPause && pauseSec > 0 ? 1250 : readDelayMs,
+          onFinished: advanceAfterLine,
+          onFallbackSpeak: () => speakPreviewSlideText(lineText, isSecondary, segVoiceId),
+        });
+        return;
+      }
+
+      speakPreviewSlideText(lineText, isSecondary, segVoiceId);
 
       if (hasPause && pauseSec > 0) {
         previewPlayTimerRef.current = window.setTimeout(() => {
@@ -809,7 +1131,6 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           });
         }, 1250);
       } else {
-        const readDelayMs = Math.max(2200, Math.min(4200, Math.round(lineText.length * 52 + 1200)));
         previewPlayTimerRef.current = window.setTimeout(() => {
           if (!previewPlayingRef.current) return;
           runStep(idx + 1);
@@ -897,18 +1218,28 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       autoLangPatch.pauseBetweenLinesSec =
         (config.pauseBetweenLinesSec ?? 0) > 0 ? config.pauseBetweenLinesSec : 5;
       autoLangPatch.clockTickEnabled = config.clockTickEnabled !== false;
+      const keepElevenLabs =
+        config.ttsProvider === 'elevenlabs' ||
+        isElevenLabsVoiceId(config.voiceId) ||
+        isElevenLabsVoiceId(config.secondaryVoiceId ?? '');
       if (hasJa && !hasVi) {
         autoLangPatch.language = 'ja_en';
-        autoLangPatch.voiceId = 'ja-JP-NanamiNeural';
-        autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
+        if (!keepElevenLabs) {
+          autoLangPatch.voiceId = 'ja-JP-NanamiNeural';
+          autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
+        }
       } else if (hasVi && hasJa) {
         autoLangPatch.language = 'vi_ja';
-        autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
-        autoLangPatch.secondaryVoiceId = 'ja-JP-NanamiNeural';
+        if (!keepElevenLabs) {
+          autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
+          autoLangPatch.secondaryVoiceId = 'ja-JP-NanamiNeural';
+        }
       } else if (hasVi && hasEnTarget) {
         autoLangPatch.language = 'bilingual';
-        autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
-        autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
+        if (!keepElevenLabs) {
+          autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
+          autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
+        }
       }
       if (pastedLines.some((l) => /^\s*(?:A|Answer)\s*[:：]/i.test(l))) {
         autoLangPatch.fullAnswerRecapMode =
@@ -1316,6 +1647,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           summarizeAtEnd: !isAnimeMode && Boolean(config.summarizeAtEnd),
           ttsProvider: config.ttsProvider,
           voiceRate: config.voiceRate,
+          elevenLabsApiKey: config.elevenLabsApiKey,
         }),
       });
       const data = await safeParseJsonResponse<{
@@ -1475,6 +1807,41 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label htmlFor="mpt-anime-room" className="text-xs font-medium text-slate-700">
+                    Bối cảnh câu chuyện (Tự động đổi theo ngữ cảnh &amp; lời dẫn （...）)
+                  </label>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-700">
+                    <MapPin className="w-3 h-3" aria-hidden="true" />
+                    <span>
+                      Đang hiển thị:{' '}
+                      {getAnimeRoomMeta(activeAnimeBeat?.roomKind ?? 'room_living').label}
+                    </span>
+                  </span>
+                </div>
+                <select
+                  id="mpt-anime-room"
+                  data-testid="anime-room-select"
+                  value={config.animeRoomOverride ?? 'auto'}
+                  onChange={(e) =>
+                    onChangeConfig({
+                      animeRoomOverride: e.target.value as 'auto' | AnimeRoomKind,
+                    })
+                  }
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                >
+                  <option value="auto">
+                    Tự động khớp câu chuyện &amp; tự chuyển cảnh khi có lời dẫn （...）
+                  </option>
+                  {ANIME_ROOM_METAS.map((room) => (
+                    <option key={room.id} value={room.id}>
+                      {room.label} — {room.hint}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div
                 data-testid="anime-cast-panel"
                 className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2.5"
@@ -1484,7 +1851,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     Dàn nhân vật tự động nhận diện ({parsedAnimeStory.characters.length} vai)
                   </span>
                   <span className="text-[11px] text-slate-500">
-                    Miệng, ánh mắt &amp; tay chân đồng bộ đúng người nói
+                    Toàn thân có chân, bước đi, cúi chào, thì thầm, mở tủ lạnh &amp; nhép miệng
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
@@ -1507,24 +1874,22 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         </span>
                       </div>
                       <select
+                        data-testid={`anime-cast-voice-${ch.id}`}
                         aria-label={`Giọng đọc cho ${ch.displayName}`}
                         value={config.animeCharacterVoices?.[ch.id] ?? ch.defaultVoiceId}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const nextVoice = e.target.value as VoiceOptionId;
                           onChangeConfig({
                             animeCharacterVoices: {
                               ...(config.animeCharacterVoices ?? {}),
-                              [ch.id]: e.target.value as VoiceOptionId,
+                              [ch.id]: nextVoice,
                             },
-                          })
-                        }
+                            ...(isElevenLabsVoiceId(nextVoice) ? { ttsProvider: 'elevenlabs' } : {}),
+                          });
+                        }}
                         className="w-full px-2 py-1 text-[11px] border border-slate-200 rounded bg-white text-slate-900"
                       >
-                        <option value="ja-JP-KeitaNeural">Nam Nhật (Keita)</option>
-                        <option value="ja-JP-NanamiNeural">Nữ Nhật (Nanami)</option>
-                        <option value="vi-VN-HoaiMyNeural">Nữ Việt (Hoài My)</option>
-                        <option value="vi-VN-NamMinhNeural">Nam Việt (Nam Minh)</option>
-                        <option value="en-US-JennyNeural">Nữ Anh (Jenny)</option>
-                        <option value="en-US-GuyNeural">Nam Anh (Guy)</option>
+                        {renderVoiceSelectOptions()}
                       </select>
                     </div>
                   ))}
@@ -2266,15 +2631,16 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 <select
                   id="mpt-voice-id"
                   value={config.voiceId}
-                  onChange={(e) => onChangeConfig({ voiceId: e.target.value as VoiceOptionId })}
+                  onChange={(e) => {
+                    const nextVoice = e.target.value as VoiceOptionId;
+                    onChangeConfig({
+                      voiceId: nextVoice,
+                      ...(isElevenLabsVoiceId(nextVoice) ? { ttsProvider: 'elevenlabs' } : {}),
+                    });
+                  }}
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
                 >
-                  <option value="vi-VN-HoaiMyNeural">Nữ Tiếng Việt (Hoài My · Tự nhiên)</option>
-                  <option value="vi-VN-NamMinhNeural">Nam Tiếng Việt (Nam Minh · Trầm ấm)</option>
-                  <option value="en-US-JennyNeural">Nữ Tiếng Anh (Jenny · US)</option>
-                  <option value="en-US-GuyNeural">Nam Tiếng Anh (Guy · US)</option>
-                  <option value="ja-JP-NanamiNeural">Nữ Tiếng Nhật (Nanami · 日本語)</option>
-                  <option value="ja-JP-KeitaNeural">Nam Tiếng Nhật (Keita · 日本語)</option>
+                  {renderVoiceSelectOptions()}
                 </select>
               </div>
             )}
@@ -2291,8 +2657,100 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               >
                 <option value="google_free">Google TTS Miễn phí (Ổn định 100%)</option>
                 <option value="edge_auto">Edge Neural TTS (Tự chuyển Google nếu lỗi)</option>
-                <option value="elevenlabs">ElevenLabs AI (Đa ngôn ngữ · cần Key trên Server)</option>
+                <option value="elevenlabs">ElevenLabs AI (Đa ngôn ngữ · dùng Key nhập bên dưới)</option>
               </select>
+            </div>
+
+            <div
+              data-testid="elevenlabs-key-panel"
+              className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label
+                  htmlFor="mpt-elevenlabs-key"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
+                  <span>ELEVENLABS_API_KEY (Lưu cục bộ trên trình duyệt · dùng chung mọi tab)</span>
+                </label>
+                {config.elevenLabsApiKey?.trim() ? (
+                  <span className="text-[11px] font-medium text-emerald-700">
+                    Đã nhập key cục bộ · Sẵn sàng phát ElevenLabs
+                  </span>
+                ) : config.ttsProvider === 'elevenlabs' ? (
+                  <span className="text-[11px] font-medium text-amber-700">
+                    Đang chọn ElevenLabs (Mặc định) — dán API key vào đây để kích hoạt giọng ElevenLabs
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-500">
+                    Tùy chọn — cần khi chọn giọng ElevenLabs AI
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[200px]">
+                  <input
+                    id="mpt-elevenlabs-key"
+                    data-testid="elevenlabs-key-input"
+                    type={showElKey ? 'text' : 'password'}
+                    autoComplete="off"
+                    value={config.elevenLabsApiKey ?? ''}
+                    onChange={(e) => {
+                      setElKeyStatus(null);
+                      onChangeConfig({ elevenLabsApiKey: e.target.value });
+                    }}
+                    placeholder="sk_... (Nhập trực tiếp ELEVENLABS_API_KEY để dùng giọng ElevenLabs)"
+                    className="w-full pl-3 pr-9 py-1.5 text-xs font-mono border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+                  />
+                  <button
+                    type="button"
+                    aria-label={showElKey ? 'Ẩn API key' : 'Hiện API key'}
+                    onClick={() => setShowElKey((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                  >
+                    {showElKey ? (
+                      <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  data-testid="elevenlabs-verify-btn"
+                  disabled={isCheckingElKey}
+                  onClick={() => void handleVerifyElevenLabsKey()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg disabled:opacity-50 whitespace-nowrap"
+                >
+                  {isCheckingElKey ? (
+                    <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                  )}
+                  <span>Kiểm tra &amp; Tải giọng ElevenLabs</span>
+                </button>
+                {config.elevenLabsApiKey && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setElKeyStatus(null);
+                      onChangeConfig({ elevenLabsApiKey: '' });
+                    }}
+                    className="px-2.5 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg whitespace-nowrap"
+                  >
+                    Xóa key
+                  </button>
+                )}
+              </div>
+              {elKeyStatus && (
+                <div
+                  className={`text-[11px] font-medium ${
+                    elKeyStatus.ok ? 'text-emerald-700' : 'text-rose-700'
+                  }`}
+                >
+                  {elKeyStatus.message}
+                </div>
+              )}
             </div>
 
             {!isAnimeMode && (
@@ -2355,17 +2813,16 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                             config.secondaryVoiceId ??
                             getDefaultSecondaryVoiceForLanguage(config.language)
                           }
-                          onChange={(e) =>
-                            onChangeConfig({ secondaryVoiceId: e.target.value as VoiceOptionId })
-                          }
+                          onChange={(e) => {
+                            const nextVoice = e.target.value as VoiceOptionId;
+                            onChangeConfig({
+                              secondaryVoiceId: nextVoice,
+                              ...(isElevenLabsVoiceId(nextVoice) ? { ttsProvider: 'elevenlabs' } : {}),
+                            });
+                          }}
                           className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
                         >
-                          <option value="en-US-JennyNeural">Nữ Tiếng Anh (Jenny · US)</option>
-                          <option value="en-US-GuyNeural">Nam Tiếng Anh (Guy · US)</option>
-                          <option value="ja-JP-NanamiNeural">Nữ Tiếng Nhật (Nanami · 日本語)</option>
-                          <option value="ja-JP-KeitaNeural">Nam Tiếng Nhật (Keita · 日本語)</option>
-                          <option value="vi-VN-HoaiMyNeural">Nữ Tiếng Việt (Hoài My · Tự nhiên)</option>
-                          <option value="vi-VN-NamMinhNeural">Nam Tiếng Việt (Nam Minh · Trầm ấm)</option>
+                          {renderVoiceSelectOptions()}
                         </select>
                       </div>
 
@@ -2990,11 +3447,21 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     config.scriptStyle === 'language_challenge' ||
                     config.scriptStyle === 'bilingual_dialogue' ||
                     config.scriptStyle === 'quiz_riddle';
+                  const keepElevenLabs =
+                    config.ttsProvider === 'elevenlabs' ||
+                    isElevenLabsVoiceId(config.voiceId) ||
+                    isElevenLabsVoiceId(config.secondaryVoiceId ?? '');
                   const patch: Partial<RenderJobConfig> = {
                     language: nextLang,
                     customScenes: undefined,
                     dualVoiceEnabled: isBilingual || isInteractiveStyle,
-                    secondaryVoiceId: getDefaultSecondaryVoiceForLanguage(nextLang),
+                    secondaryVoiceId: keepElevenLabs
+                      ? isElevenLabsVoiceId(config.secondaryVoiceId ?? '')
+                        ? config.secondaryVoiceId
+                        : config.voiceId === 'el-rachel'
+                        ? 'el-adam'
+                        : 'el-rachel'
+                      : getDefaultSecondaryVoiceForLanguage(nextLang),
                     pauseBetweenLinesSec:
                       config.scriptStyle === 'language_challenge' ||
                       config.scriptStyle === 'quiz_riddle'
@@ -3006,7 +3473,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         ? config.clockTickEnabled !== false
                         : config.clockTickEnabled,
                   };
-                  if (!doesVoiceMatchLanguage(config.voiceId, nextLang) || isBilingual) {
+                  if (!keepElevenLabs && (!doesVoiceMatchLanguage(config.voiceId, nextLang) || isBilingual)) {
                     patch.voiceId = getDefaultVoiceForLanguage(nextLang);
                   }
                   if (isKnownPresetSubject(config.subject)) {
@@ -3379,6 +3846,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   {parsedAnimeStory.beats.map((beat, bi) => {
                     const isSelected = safeActiveIdx === bi;
                     const charObj = parsedAnimeStory.characters.find((c) => c.id === beat.speakerId);
+                    const prevBeatRoom = bi > 0 ? parsedAnimeStory.beats[bi - 1].roomKind : null;
+                    const roomChanged = bi === 0 || prevBeatRoom !== beat.roomKind;
                     return (
                       <button
                         key={bi}
@@ -3399,6 +3868,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                           <span className="text-[10px] font-mono text-slate-400 w-5 shrink-0">
                             #{bi + 1}
                           </span>
+                          {roomChanged && (
+                            <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-900 text-[10px] font-semibold shrink-0">
+                              {getAnimeRoomMeta(beat.roomKind).label}
+                            </span>
+                          )}
                           {beat.isStageCue ? (
                             <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-semibold shrink-0">
                               {beat.enteringCharacterId ? `Vào cảnh: ${beat.enteringCharacterId}` : 'Chuyển cảnh'}
@@ -3412,7 +3886,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                             </span>
                           )}
                           <span className="text-[10px] font-mono text-slate-500 shrink-0">
-                            [{beat.emotion}]
+                            [{beat.action}]
                           </span>
                           <span className="truncate">{beat.rawText}</span>
                         </div>
@@ -3751,7 +4225,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   </span>
                 </button>
               )}
-              {!isAnimeMode && config.subtitle.enabled && (
+              {config.subtitle.enabled && (
                 <button
                   type="button"
                   onClick={() => setCaptionReplayNonce((n) => n + 1)}
@@ -3793,6 +4267,19 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             </div>
           </div>
 
+          {ttsPreviewNote && (
+            <div
+              data-testid="stage-tts-engine-note"
+              className={`px-3 py-1.5 rounded-lg border text-[11px] font-medium ${
+                ttsPreviewNote.includes('ElevenLabs') && !ttsPreviewNote.includes('Google TTS')
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-amber-50 border-amber-200 text-amber-800'
+              }`}
+            >
+              {ttsPreviewNote}
+            </div>
+          )}
+
           <div className="bg-slate-950 rounded-xl border border-slate-200 p-4 flex justify-center">
             <div
               data-testid="studio-preview-stage"
@@ -3816,6 +4303,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   sceneStyle={config.animeSceneStyle ?? 'room_warm'}
                   fontName={config.subtitle.fontName}
                   isPlaying={isPlayingPreview}
+                  subtitleEffect={config.subtitle.effect}
+                  highlightColor={config.subtitle.highlightColor}
+                  replayNonce={captionReplayNonce}
                 />
               ) : activeScene ? (
                 activeScene.kind === 'video' ? (
@@ -3961,21 +4451,21 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </div>
               )}
 
-              {config.subtitle.enabled && !isAnimeMode && (
+              {config.subtitle.enabled && (
                 <SubtitlePreviewCaption
-                  text={activePreviewCaption}
+                  text={isAnimeMode ? activeAnimeSubtitleText || activePreviewCaption : activePreviewCaption}
                   subtitle={config.subtitle}
                   aspectRatio={config.aspectRatio}
                   replayNonce={captionReplayNonce}
-                  countdownNumber={previewCountdown}
+                  countdownNumber={isAnimeMode ? null : previewCountdown}
                   countdownTotalSec={Math.max(1, Math.min(10, Math.round(config.pauseBetweenLinesSec || 5)))}
-                  pinnedSourceText={pinnedSourceForPreview}
-                  rawLine={activeRawLine}
+                  pinnedSourceText={isAnimeMode ? null : pinnedSourceForPreview}
+                  rawLine={isAnimeMode ? activeAnimeRawLine : activeRawLine}
                   scriptStyle={config.scriptStyle}
-                  isSecondarySlot={activeIsSecondarySlot}
-                  isIntroOrOutro={activeIsIntroOrOutro}
-                  isLightBackground={isLightNeutralBg}
-                  use2411CountdownStyle={config.materialSource === 'studio_2411'}
+                  isSecondarySlot={!isAnimeMode && activeIsSecondarySlot}
+                  isIntroOrOutro={!isAnimeMode && activeIsIntroOrOutro}
+                  isLightBackground={!isAnimeMode && isLightNeutralBg}
+                  use2411CountdownStyle={!isAnimeMode && config.materialSource === 'studio_2411'}
                   studio2411Theme={config.studio2411Theme}
                 />
               )}

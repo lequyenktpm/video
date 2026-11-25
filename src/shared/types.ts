@@ -17,13 +17,39 @@ export type ScriptStyle =
 
 export type TtsProvider = 'google_free' | 'edge_auto' | 'elevenlabs';
 
-export type VoiceOptionId =
+export type BuiltinVoiceOptionId =
   | 'vi-VN-HoaiMyNeural'
   | 'vi-VN-NamMinhNeural'
+  | 'vi-VN-HoaiMyBright'
+  | 'vi-VN-NamMinhYoung'
   | 'en-US-JennyNeural'
   | 'en-US-GuyNeural'
+  | 'en-US-AriaNeural'
+  | 'en-US-DavisNeural'
+  | 'en-US-EmmaNeural'
+  | 'en-GB-SoniaNeural'
+  | 'en-GB-RyanNeural'
   | 'ja-JP-NanamiNeural'
-  | 'ja-JP-KeitaNeural';
+  | 'ja-JP-KeitaNeural'
+  | 'ja-JP-AoiNeural'
+  | 'ja-JP-DaichiNeural'
+  | 'ja-JP-MayuNeural'
+  | 'ja-JP-ShioriNeural'
+  | 'ja-JP-NaokiNeural'
+  | 'el-rachel'
+  | 'el-elli'
+  | 'el-sarah'
+  | 'el-bella'
+  | 'el-charlotte'
+  | 'el-lily'
+  | 'el-adam'
+  | 'el-josh'
+  | 'el-antoni'
+  | 'el-liam'
+  | 'el-brian'
+  | 'el-sam';
+
+export type VoiceOptionId = BuiltinVoiceOptionId | `el-custom:${string}`;
 
 export type MaterialSource =
   | 'studio_2411'
@@ -37,6 +63,16 @@ export type MaterialSource =
   | 'local_upload';
 
 export type AnimeSceneStyle = 'room_warm' | 'dramatic_anime' | 'pastel_slice';
+
+export type AnimeRoomKind =
+  | 'room_living'
+  | 'kitchen_fridge'
+  | 'cafe_corner'
+  | 'office_desk'
+  | 'school_classroom'
+  | 'street_park'
+  | 'restaurant_izakaya'
+  | 'train_station';
 
 export type CuratedBackgroundCategory = 'all' | 'study' | 'interview' | 'life';
 
@@ -216,6 +252,7 @@ export interface RenderJobConfig {
   neutralBgTheme?: NeutralBgTheme;
   studio2411Theme?: Studio2411ThemeId;
   animeSceneStyle?: AnimeSceneStyle;
+  animeRoomOverride?: 'auto' | AnimeRoomKind;
   animeCharacterVoices?: Record<string, VoiceOptionId>;
   animeReadStageDirections?: boolean;
   curatedBgCategory?: CuratedBackgroundCategory;
@@ -230,6 +267,7 @@ export interface RenderJobConfig {
   transitionMode: VideoTransitionMode;
   clipDurationSec: number;
   ttsProvider: TtsProvider;
+  elevenLabsApiKey?: string;
   voiceId: VoiceOptionId;
   dualVoiceEnabled?: boolean;
   secondaryVoiceId?: VoiceOptionId;

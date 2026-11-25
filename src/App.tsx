@@ -12,6 +12,15 @@ import { safeParseJsonResponse } from './shared/mptEngine';
 import { DEFAULT_ANIME_DIALOGUE_SCRIPT } from './shared/animeStoryEngine';
 
 const HISTORY_STORAGE_KEY = 'mpt_vn_history_v1';
+const ELEVENLABS_KEY_STORAGE_KEY = 'mpt_vn_elevenlabs_key_v1';
+
+function loadSavedElevenLabsKey(): string {
+  try {
+    return window.localStorage.getItem(ELEVENLABS_KEY_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
 
 const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
   subject: 'Bí ẩn đại dương sâu thẳm chưa từng được giải mã',
@@ -45,10 +54,10 @@ const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
   concatMode: 'sequential',
   transitionMode: 'random',
   clipDurationSec: 3,
-  ttsProvider: 'google_free',
-  voiceId: 'vi-VN-HoaiMyNeural',
+  ttsProvider: 'elevenlabs',
+  voiceId: 'el-rachel',
   dualVoiceEnabled: false,
-  secondaryVoiceId: 'en-US-JennyNeural',
+  secondaryVoiceId: 'el-adam',
   pauseBetweenLinesSec: 0,
   clockTickEnabled: true,
   targetRepeatCount: 0,
@@ -114,10 +123,10 @@ const DEFAULT_LEARNING_CONFIG: RenderJobConfig = {
   concatMode: 'sequential',
   transitionMode: 'random',
   clipDurationSec: 3,
-  ttsProvider: 'google_free',
-  voiceId: 'ja-JP-NanamiNeural',
+  ttsProvider: 'elevenlabs',
+  voiceId: 'el-elli',
   dualVoiceEnabled: true,
-  secondaryVoiceId: 'en-US-JennyNeural',
+  secondaryVoiceId: 'el-rachel',
   pauseBetweenLinesSec: 5,
   clockTickEnabled: true,
   targetRepeatCount: 1,
@@ -158,10 +167,11 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
   scenePrompts: [],
   materialSource: 'anime_cartoon',
   animeSceneStyle: 'room_warm',
+  animeRoomOverride: 'auto',
   animeCharacterVoices: {
-    先輩: 'ja-JP-KeitaNeural',
-    芳蘭: 'ja-JP-NanamiNeural',
-    日向: 'ja-JP-KeitaNeural',
+    先輩: 'el-adam',
+    芳蘭: 'el-elli',
+    日向: 'el-josh',
   },
   animeReadStageDirections: false,
   selectedMediaIds: [],
@@ -170,10 +180,10 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
   concatMode: 'sequential',
   transitionMode: 'fade',
   clipDurationSec: 3,
-  ttsProvider: 'google_free',
-  voiceId: 'ja-JP-KeitaNeural',
+  ttsProvider: 'elevenlabs',
+  voiceId: 'el-adam',
   dualVoiceEnabled: true,
-  secondaryVoiceId: 'ja-JP-NanamiNeural',
+  secondaryVoiceId: 'el-elli',
   pauseBetweenLinesSec: 0,
   clockTickEnabled: false,
   targetRepeatCount: 0,
@@ -187,18 +197,18 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
   bgmPreset: 'lofi_chill',
   bgmVolume: 0.03,
   subtitle: {
-    enabled: false,
+    enabled: true,
     fontName: 'M PLUS 1p',
     position: 'bottom',
     customPositionPct: 86,
     fontSize: 34,
     sourceFontSize: 26,
-    textColor: '#0F172A',
-    highlightColor: '#D97706',
-    strokeColor: '#FFFFFF',
+    textColor: '#FFFFFF',
+    highlightColor: '#FACC15',
+    strokeColor: '#0F172A',
     strokeWidth: 2.0,
-    boxStyle: 'outline',
-    effect: 'static',
+    boxStyle: 'dark_box',
+    effect: 'karaoke',
     showRoleBadges: false,
   },
 };
@@ -206,10 +216,13 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<StudioTab>('short_video');
-  const [configsByTab, setConfigsByTab] = useState<Record<StudioTab, RenderJobConfig>>({
-    short_video: DEFAULT_SHORT_CONFIG,
-    learning: DEFAULT_LEARNING_CONFIG,
-    anime_story: DEFAULT_ANIME_STORY_CONFIG,
+  const [configsByTab, setConfigsByTab] = useState<Record<StudioTab, RenderJobConfig>>(() => {
+    const savedKey = loadSavedElevenLabsKey();
+    return {
+      short_video: { ...DEFAULT_SHORT_CONFIG, elevenLabsApiKey: savedKey },
+      learning: { ...DEFAULT_LEARNING_CONFIG, elevenLabsApiKey: savedKey },
+      anime_story: { ...DEFAULT_ANIME_STORY_CONFIG, elevenLabsApiKey: savedKey },
+    };
   });
 
   const [uploadedMedia, setUploadedMedia] = useState<MediaAssetItem[]>([]);
@@ -266,6 +279,37 @@ export default function App() {
   );
 
   const updateActiveConfig = (patch: Partial<RenderJobConfig>) => {
+    if (patch.elevenLabsApiKey !== undefined) {
+      const nextKey = patch.elevenLabsApiKey;
+      try {
+        if (nextKey.trim()) {
+          window.localStorage.setItem(ELEVENLABS_KEY_STORAGE_KEY, nextKey);
+        } else {
+          window.localStorage.removeItem(ELEVENLABS_KEY_STORAGE_KEY);
+        }
+      } catch {
+        // Ignore storage quota errors safely
+      }
+      setConfigsByTab((prev) => ({
+        short_video: {
+          ...prev.short_video,
+          ...(activeTab === 'short_video' ? patch : {}),
+          elevenLabsApiKey: nextKey,
+        },
+        learning: {
+          ...prev.learning,
+          ...(activeTab === 'learning' ? patch : {}),
+          elevenLabsApiKey: nextKey,
+        },
+        anime_story: {
+          ...prev.anime_story,
+          ...(activeTab === 'anime_story' ? patch : {}),
+          elevenLabsApiKey: nextKey,
+        },
+      }));
+      return;
+    }
+
     setConfigsByTab((prev) => ({
       ...prev,
       [activeTab]: { ...prev[activeTab], ...patch },
@@ -523,15 +567,19 @@ export default function App() {
           onStartRender={() => void handleStartRender()}
           onCancelRender={() => void handleCancelRender()}
           onResetForm={() => {
-            setConfigsByTab((prev) => ({
-              ...prev,
-              [activeTab]:
+            setConfigsByTab((prev) => {
+              const preservedKey = prev[activeTab].elevenLabsApiKey ?? loadSavedElevenLabsKey();
+              const base =
                 activeTab === 'anime_story'
                   ? DEFAULT_ANIME_STORY_CONFIG
                   : activeTab === 'learning'
                   ? DEFAULT_LEARNING_CONFIG
-                  : DEFAULT_SHORT_CONFIG,
-            }));
+                  : DEFAULT_SHORT_CONFIG;
+              return {
+                ...prev,
+                [activeTab]: { ...base, elevenLabsApiKey: preservedKey },
+              };
+            });
             setJobsByTab((prev) => ({ ...prev, [activeTab]: null }));
           }}
           recentHistory={history}

@@ -15,6 +15,7 @@ import {
   detectLineLanguage,
   doesVoiceMatchLanguage,
   extractEnglishSearchTerms,
+  formatVoiceOptionLabel,
   generateOfflineVietnameseScript,
   getCanvasDimensions,
   getDefaultSecondaryVoiceForLanguage,
@@ -24,9 +25,11 @@ import {
   getQualityEncodingParams,
   getScriptLengthSummary,
   getSubtitleWrapBudget,
+  getVoiceCatalogItem,
   hasVietnameseDiacritics,
   hexToAssBgr,
   isBilingualLanguage,
+  isElevenLabsVoiceId,
   isKnownPresetSubject,
   isOutroTag,
   isTitleOrIntroTag,
@@ -51,6 +54,7 @@ import {
   tokenizeSubtitleForEffect,
   updateScriptLinePreservingTag,
   validateRenderConfig,
+  VOICE_CATALOG,
   wrapSubtitleLine,
   RawSegmentTiming,
 } from './mptEngine';
@@ -1995,3 +1999,46 @@ test('Studio 2411 filters Lesson Topic labels, preserves unbroken PR tokens, and
   const longH = Math.max(...extractHeights(longSvg));
   assert.ok(shortH > 0 && shortH < longH - 20, `Expected compact short bubble (${shortH}) < long bubble (${longH})`);
 });
+
+test('VOICE_CATALOG exposes expanded voices across Edge/Google and ElevenLabs with explicit TTS labels', () => {
+  assert.ok(VOICE_CATALOG.length >= 25, `Expected at least 25 catalog voices, got ${VOICE_CATALOG.length}`);
+  const edgeVoices = VOICE_CATALOG.filter((v) => v.ttsProvider === 'edge_auto');
+  const elVoices = VOICE_CATALOG.filter((v) => v.ttsProvider === 'elevenlabs');
+  assert.ok(edgeVoices.length >= 15);
+  assert.ok(elVoices.length >= 10);
+
+  for (const v of VOICE_CATALOG) {
+    const formatted = formatVoiceOptionLabel(v);
+    assert.ok(formatted.startsWith(`[${v.ttsLabel}] `), `Voice label missing TTS tag: ${formatted}`);
+    assert.equal(getVoiceCatalogItem(v.id)?.id, v.id);
+    assert.equal(isElevenLabsVoiceId(v.id), v.ttsProvider === 'elevenlabs');
+  }
+
+  assert.equal(isElevenLabsVoiceId('el-custom:myVoice123'), true);
+  assert.equal(isElevenLabsVoiceId('ja-JP-DaichiNeural'), false);
+  assert.equal(doesVoiceMatchLanguage('el-rachel', 'ja'), true);
+  assert.equal(doesVoiceMatchLanguage('ja-JP-DaichiNeural', 'ja'), true);
+});
+
+test('planNarrationSegments preserves ElevenLabs primary and secondary voices across ja_en Q&A scripts', () => {
+  const segs = planNarrationSegments({
+    script: [
+      'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+      'English: Watch out for her!',
+    ].join('\n'),
+    language: 'ja_en',
+    scriptStyle: 'language_challenge',
+    voiceId: 'el-elli',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'el-custom:customVoice99',
+    pauseBetweenLinesSec: 5,
+  });
+
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].voiceId, 'el-elli');
+  assert.equal(segs[0].voiceSlot, 'primary');
+  assert.equal(segs[1].voiceId, 'el-custom:customVoice99');
+  assert.equal(segs[1].voiceSlot, 'secondary');
+});
+
+

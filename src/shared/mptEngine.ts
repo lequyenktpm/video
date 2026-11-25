@@ -12,12 +12,346 @@ import {
   SubtitleConfig,
   SubtitleCue,
   SubtitleEffect,
+  TtsProvider,
   VideoAspectRatio,
   VideoQuality,
   VideoTransitionMode,
   VisualMood,
   VoiceOptionId,
 } from './types';
+
+export interface VoiceCatalogItem {
+  id: VoiceOptionId;
+  label: string;
+  ttsLabel: string;
+  ttsProvider: TtsProvider;
+  language: 'vi' | 'ja' | 'en' | 'multi';
+  gender: 'female' | 'male';
+  edgeVoiceName?: string;
+  elevenLabsVoiceId?: string;
+  pitchShiftFactor?: number;
+}
+
+export const VOICE_CATALOG: VoiceCatalogItem[] = [
+  // Vietnamese (Edge Neural + Google TTS)
+  {
+    id: 'vi-VN-HoaiMyNeural',
+    label: 'Nữ Tiếng Việt · Hoài My (Ấm áp, tự nhiên)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'vi',
+    gender: 'female',
+    edgeVoiceName: 'vi-VN-HoaiMyNeural',
+    elevenLabsVoiceId: '21m00Tcm4TlvDq8ikWAM',
+  },
+  {
+    id: 'vi-VN-HoaiMyBright',
+    label: 'Nữ Tiếng Việt · Mai Chi (Trẻ trung, sáng)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'vi',
+    gender: 'female',
+    edgeVoiceName: 'vi-VN-HoaiMyNeural',
+    elevenLabsVoiceId: 'MF3mGyEYCl7XYWbV9V6O',
+    pitchShiftFactor: 1.07,
+  },
+  {
+    id: 'vi-VN-NamMinhNeural',
+    label: 'Nam Tiếng Việt · Nam Minh (Trầm ấm)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'vi',
+    gender: 'male',
+    edgeVoiceName: 'vi-VN-NamMinhNeural',
+    elevenLabsVoiceId: 'pNInz6obpgDQGcFmaJgB',
+  },
+  {
+    id: 'vi-VN-NamMinhYoung',
+    label: 'Nam Tiếng Việt · Minh Tuấn (Trẻ, nhanh nhẹn)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'vi',
+    gender: 'male',
+    edgeVoiceName: 'vi-VN-NamMinhNeural',
+    elevenLabsVoiceId: 'TxGEqnHWrfWFTfGW9XjX',
+    pitchShiftFactor: 1.06,
+  },
+  // Japanese (Edge Neural + Google TTS)
+  {
+    id: 'ja-JP-NanamiNeural',
+    label: 'Nữ Nhật · Nanami (Chuẩn, tự nhiên)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'ja',
+    gender: 'female',
+    edgeVoiceName: 'ja-JP-NanamiNeural',
+    elevenLabsVoiceId: 'MF3mGyEYCl7XYWbV9V6O',
+  },
+  {
+    id: 'ja-JP-AoiNeural',
+    label: 'Nữ Nhật · Aoi (Trẻ trung, Anime)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'ja',
+    gender: 'female',
+    edgeVoiceName: 'ja-JP-AoiNeural',
+    elevenLabsVoiceId: 'EXAVITQu4vr4xnSDxMaL',
+    pitchShiftFactor: 1.06,
+  },
+  {
+    id: 'ja-JP-MayuNeural',
+    label: 'Nữ Nhật · Mayu (Dịu dàng, kể chuyện)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'ja',
+    gender: 'female',
+    edgeVoiceName: 'ja-JP-MayuNeural',
+    elevenLabsVoiceId: 'pFZP5JQG7iQjIQuC4Bku',
+    pitchShiftFactor: 0.97,
+  },
+  {
+    id: 'ja-JP-ShioriNeural',
+    label: 'Nữ Nhật · Shiori (Trưởng thành, điềm đạm)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'ja',
+    gender: 'female',
+    edgeVoiceName: 'ja-JP-ShioriNeural',
+    elevenLabsVoiceId: 'XB0fDUnXU5powFXDhCwa',
+    pitchShiftFactor: 0.94,
+  },
+  {
+    id: 'ja-JP-KeitaNeural',
+    label: 'Nam Nhật · Keita (Tự nhiên, linh hoạt)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'ja',
+    gender: 'male',
+    edgeVoiceName: 'ja-JP-KeitaNeural',
+    elevenLabsVoiceId: 'TxGEqnHWrfWFTfGW9XjX',
+  },
+  {
+    id: 'ja-JP-DaichiNeural',
+    label: 'Nam Nhật · Daichi (Trầm ấm, Senpai)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'ja',
+    gender: 'male',
+    edgeVoiceName: 'ja-JP-DaichiNeural',
+    elevenLabsVoiceId: 'pNInz6obpgDQGcFmaJgB',
+    pitchShiftFactor: 0.93,
+  },
+  {
+    id: 'ja-JP-NaokiNeural',
+    label: 'Nam Nhật · Naoki (Điềm tĩnh, thân thiện)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'ja',
+    gender: 'male',
+    edgeVoiceName: 'ja-JP-NaokiNeural',
+    elevenLabsVoiceId: 'ErXwobaYiN019PkySvjV',
+    pitchShiftFactor: 1.03,
+  },
+  // English (Edge Neural + Google TTS)
+  {
+    id: 'en-US-JennyNeural',
+    label: 'Nữ Anh (US) · Jenny (Tự nhiên)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'en',
+    gender: 'female',
+    edgeVoiceName: 'en-US-JennyNeural',
+    elevenLabsVoiceId: 'EXAVITQu4vr4xnSDxMaL',
+  },
+  {
+    id: 'en-US-AriaNeural',
+    label: 'Nữ Anh (US) · Aria (Biểu cảm)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'en',
+    gender: 'female',
+    edgeVoiceName: 'en-US-AriaNeural',
+    elevenLabsVoiceId: '21m00Tcm4TlvDq8ikWAM',
+    pitchShiftFactor: 1.04,
+  },
+  {
+    id: 'en-US-EmmaNeural',
+    label: 'Nữ Anh (US) · Emma (Kể chuyện)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'en',
+    gender: 'female',
+    edgeVoiceName: 'en-US-EmmaNeural',
+    elevenLabsVoiceId: 'pFZP5JQG7iQjIQuC4Bku',
+    pitchShiftFactor: 0.98,
+  },
+  {
+    id: 'en-GB-SoniaNeural',
+    label: 'Nữ Anh (UK) · Sonia (Thanh lịch)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'en',
+    gender: 'female',
+    edgeVoiceName: 'en-GB-SoniaNeural',
+    elevenLabsVoiceId: 'Xb7hH8MSUJpSbSDYk0k2',
+  },
+  {
+    id: 'en-US-GuyNeural',
+    label: 'Nam Anh (US) · Guy (Tự nhiên)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'en',
+    gender: 'male',
+    edgeVoiceName: 'en-US-GuyNeural',
+    elevenLabsVoiceId: 'ErXwobaYiN019PkySvjV',
+  },
+  {
+    id: 'en-US-DavisNeural',
+    label: 'Nam Anh (US) · Davis (Sâu lắng)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'en',
+    gender: 'male',
+    edgeVoiceName: 'en-US-DavisNeural',
+    elevenLabsVoiceId: 'nPczCjzI2devNBz1zQrb',
+    pitchShiftFactor: 0.94,
+  },
+  {
+    id: 'en-GB-RyanNeural',
+    label: 'Nam Anh (UK) · Ryan (Lịch lãm)',
+    ttsLabel: 'Edge Neural · Google TTS',
+    ttsProvider: 'edge_auto',
+    language: 'en',
+    gender: 'male',
+    edgeVoiceName: 'en-GB-RyanNeural',
+    elevenLabsVoiceId: 'TX3LPaxmHKxFdv7VOQHJ',
+  },
+  // ElevenLabs AI Multilingual v2 Voices (Supports VI / JA / EN)
+  {
+    id: 'el-rachel',
+    label: 'Rachel (Nữ · Tự nhiên, đa ngôn ngữ)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'female',
+    elevenLabsVoiceId: '21m00Tcm4TlvDq8ikWAM',
+  },
+  {
+    id: 'el-elli',
+    label: 'Elli (Nữ trẻ · Anime / Hội thoại)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'female',
+    elevenLabsVoiceId: 'MF3mGyEYCl7XYWbV9V6O',
+    pitchShiftFactor: 1.05,
+  },
+  {
+    id: 'el-sarah',
+    label: 'Sarah (Nữ · Ấm áp, rõ chữ)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'female',
+    elevenLabsVoiceId: 'EXAVITQu4vr4xnSDxMaL',
+  },
+  {
+    id: 'el-bella',
+    label: 'Bella (Nữ · Nhẹ nhàng, dịu êm)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'female',
+    elevenLabsVoiceId: 'AZnzlk1XvdvUeBnXmlld',
+  },
+  {
+    id: 'el-charlotte',
+    label: 'Charlotte (Nữ · Thanh lịch, diễn cảm)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'female',
+    elevenLabsVoiceId: 'XB0fDUnXU5powFXDhCwa',
+  },
+  {
+    id: 'el-lily',
+    label: 'Lily (Nữ · Kể chuyện, thuyết minh)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'female',
+    elevenLabsVoiceId: 'pFZP5JQG7iQjIQuC4Bku',
+  },
+  {
+    id: 'el-adam',
+    label: 'Adam (Nam · Trầm sâu / Senpai)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'male',
+    elevenLabsVoiceId: 'pNInz6obpgDQGcFmaJgB',
+    pitchShiftFactor: 0.94,
+  },
+  {
+    id: 'el-josh',
+    label: 'Josh (Nam · Trẻ trung, năng động)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'male',
+    elevenLabsVoiceId: 'TxGEqnHWrfWFTfGW9XjX',
+    pitchShiftFactor: 1.04,
+  },
+  {
+    id: 'el-antoni',
+    label: 'Antoni (Nam · Cân bằng, tự nhiên)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'male',
+    elevenLabsVoiceId: 'ErXwobaYiN019PkySvjV',
+  },
+  {
+    id: 'el-liam',
+    label: 'Liam (Nam · Thân thiện, rõ nét)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'male',
+    elevenLabsVoiceId: 'TX3LPaxmHKxFdv7VOQHJ',
+  },
+  {
+    id: 'el-brian',
+    label: 'Brian (Nam · Sâu lắng, dẫn chuyện)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'male',
+    elevenLabsVoiceId: 'nPczCjzI2devNBz1zQrb',
+    pitchShiftFactor: 0.96,
+  },
+  {
+    id: 'el-sam',
+    label: 'Sam (Nam · Điềm đạm)',
+    ttsLabel: 'ElevenLabs AI',
+    ttsProvider: 'elevenlabs',
+    language: 'multi',
+    gender: 'male',
+    elevenLabsVoiceId: 'yoZ06aMxZJJ28mfd3POQ',
+  },
+];
+
+export function isElevenLabsVoiceId(voiceId: string): boolean {
+  return voiceId.startsWith('el-');
+}
+
+export function getVoiceCatalogItem(voiceId: string): VoiceCatalogItem | undefined {
+  return VOICE_CATALOG.find((v) => v.id === voiceId);
+}
+
+export function formatVoiceOptionLabel(item: Pick<VoiceCatalogItem, 'label' | 'ttsLabel'>): string {
+  return `[${item.ttsLabel}] ${item.label}`;
+}
 
 export interface NeutralBgThemeMeta {
   id: NeutralBgTheme;
@@ -184,7 +518,7 @@ export function getDefaultSecondaryVoiceForLanguage(language: LanguageCode): Voi
 }
 
 export function doesVoiceMatchLanguage(voiceId: VoiceOptionId, language: LanguageCode): boolean {
-  if (isBilingualLanguage(language)) return true;
+  if (isBilingualLanguage(language) || isElevenLabsVoiceId(voiceId)) return true;
   if (language === 'ja') return voiceId.startsWith('ja-');
   if (language === 'en') return voiceId.startsWith('en-');
   return voiceId.startsWith('vi-');
@@ -193,6 +527,7 @@ export function doesVoiceMatchLanguage(voiceId: VoiceOptionId, language: Languag
 export function getVoiceLanguagePrefix(voiceId: VoiceOptionId): 'vi' | 'en' | 'ja' {
   if (voiceId.startsWith('ja-')) return 'ja';
   if (voiceId.startsWith('en-')) return 'en';
+  if (isElevenLabsVoiceId(voiceId)) return 'vi';
   return 'vi';
 }
 
@@ -476,10 +811,16 @@ export interface MixedLanguageRun {
 function getFallbackVoiceForLangCode(
   lang: 'vi' | 'en' | 'ja',
   primary: VoiceOptionId,
-  secondary: VoiceOptionId
+  secondary: VoiceOptionId,
+  primaryLangHint?: 'vi' | 'en' | 'ja',
+  secondaryLangHint?: 'vi' | 'en' | 'ja'
 ): { voiceId: VoiceOptionId; slot: 'primary' | 'secondary' } {
-  if (getVoiceLanguagePrefix(primary) === lang) return { voiceId: primary, slot: 'primary' };
-  if (getVoiceLanguagePrefix(secondary) === lang) return { voiceId: secondary, slot: 'secondary' };
+  const resolvedPrimaryLang = primaryLangHint ?? getVoiceLanguagePrefix(primary);
+  const resolvedSecondaryLang = secondaryLangHint ?? getVoiceLanguagePrefix(secondary);
+  if (resolvedPrimaryLang === lang) return { voiceId: primary, slot: 'primary' };
+  if (resolvedSecondaryLang === lang) return { voiceId: secondary, slot: 'secondary' };
+  if (isElevenLabsVoiceId(primary)) return { voiceId: primary, slot: 'primary' };
+  if (isElevenLabsVoiceId(secondary)) return { voiceId: secondary, slot: 'secondary' };
   if (lang === 'ja') return { voiceId: 'ja-JP-NanamiNeural', slot: 'secondary' };
   if (lang === 'en') return { voiceId: 'en-US-JennyNeural', slot: 'secondary' };
   return { voiceId: 'vi-VN-HoaiMyNeural', slot: 'primary' };
@@ -579,7 +920,13 @@ export function splitMixedLanguageRuns(
     const mapped =
       soloLang === defaultLang
         ? { voiceId: defaultSlot === 'secondary' ? secondaryVoice : primaryVoice, slot: defaultSlot }
-        : getFallbackVoiceForLangCode(soloLang, primaryVoice, secondaryVoice);
+        : getFallbackVoiceForLangCode(
+            soloLang,
+            primaryVoice,
+            secondaryVoice,
+            primaryLang,
+            secondaryLang
+          );
     return [
       {
         text: trimmed,
@@ -591,7 +938,13 @@ export function splitMixedLanguageRuns(
   }
 
   return classified.map((item) => {
-    const mapped = getFallbackVoiceForLangCode(item.lang, primaryVoice, secondaryVoice);
+    const mapped = getFallbackVoiceForLangCode(
+      item.lang,
+      primaryVoice,
+      secondaryVoice,
+      primaryLang,
+      secondaryLang
+    );
     return {
       text: item.text,
       lang: item.lang,
@@ -740,13 +1093,33 @@ export function planNarrationSegments(
       (l) => !isTitleOrIntroTag(l) && hasVietnameseDiacritics(stripNarrationTags(l))
     );
     if (hasJaLine && hasEnTarget && !hasViLine) {
-      if (!primaryVoice.startsWith('ja-')) primaryVoice = 'ja-JP-NanamiNeural';
-      if (!secondaryVoice.startsWith('en-')) secondaryVoice = 'en-US-JennyNeural';
+      if (!primaryVoice.startsWith('ja-') && !isElevenLabsVoiceId(primaryVoice)) {
+        primaryVoice = 'ja-JP-NanamiNeural';
+      }
+      if (!secondaryVoice.startsWith('en-') && !isElevenLabsVoiceId(secondaryVoice)) {
+        secondaryVoice = 'en-US-JennyNeural';
+      }
     }
   }
 
-  const primaryLang = getVoiceLanguagePrefix(primaryVoice);
-  const secondaryLang = getVoiceLanguagePrefix(secondaryVoice);
+  const defaultPrimaryLangForConfig: 'vi' | 'en' | 'ja' =
+    config.language === 'ja' || config.language === 'ja_en'
+      ? 'ja'
+      : config.language === 'en'
+      ? 'en'
+      : 'vi';
+  const defaultSecondaryLangForConfig: 'vi' | 'en' | 'ja' =
+    config.language === 'bilingual' || config.language === 'ja_en' || config.language === 'en'
+      ? 'en'
+      : config.language === 'vi_ja' || config.language === 'ja'
+      ? 'ja'
+      : 'vi';
+  const primaryLang = isElevenLabsVoiceId(primaryVoice)
+    ? defaultPrimaryLangForConfig
+    : getVoiceLanguagePrefix(primaryVoice);
+  const secondaryLang = isElevenLabsVoiceId(secondaryVoice)
+    ? defaultSecondaryLangForConfig
+    : getVoiceLanguagePrefix(secondaryVoice);
   const dualEnabled =
     Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language) || hasExplicitQaSyntax;
   const basePause = Math.max(0, Math.min(10, Number(config.pauseBetweenLinesSec ?? 0)));
@@ -913,7 +1286,13 @@ export function planNarrationSegments(
       chosenSlot = 'secondary';
     } else if (explicitLangTag) {
       detectedLang = explicitLangTag;
-      const mapped = getFallbackVoiceForLangCode(explicitLangTag, primaryVoice, secondaryVoice);
+      const mapped = getFallbackVoiceForLangCode(
+        explicitLangTag,
+        primaryVoice,
+        secondaryVoice,
+        primaryLang,
+        secondaryLang
+      );
       chosenVoice = mapped.voiceId;
       chosenSlot = mapped.slot;
     } else if (dualEnabled) {
@@ -922,7 +1301,13 @@ export function planNarrationSegments(
           chosenVoice = secondaryVoice;
           chosenSlot = 'secondary';
         } else {
-          const mapped = getFallbackVoiceForLangCode(detectedLang, primaryVoice, secondaryVoice);
+          const mapped = getFallbackVoiceForLangCode(
+            detectedLang,
+            primaryVoice,
+            secondaryVoice,
+            primaryLang,
+            secondaryLang
+          );
           chosenVoice = mapped.voiceId;
           chosenSlot = mapped.slot;
         }
@@ -1201,7 +1586,9 @@ export function planNarrationSegments(
       const mappedVoice = getFallbackVoiceForLangCode(
         summary.voiceLang,
         primaryVoice,
-        secondaryVoice
+        secondaryVoice,
+        primaryLang,
+        secondaryLang
       );
       const sumChunks = splitScriptSentences(summary.text, 165);
       sumChunks.forEach((chunk, ci) => {
