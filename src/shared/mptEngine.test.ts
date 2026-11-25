@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildAssFromCues,
+  buildCountdownCues,
   buildMediaClipsPlan,
   buildMoneyPrinterPrompt,
   buildScenePromptsFromScript,
@@ -129,10 +130,10 @@ test('buildAssFromCues supports karaoke, pop_zoom, fade_slide, typewriter, Secon
   assert.ok(assKaraoke.includes('{\\kf'));
 
   const assPop = buildAssFromCues(cues, { ...baseSub, effect: 'pop_zoom' }, 720, 1280);
-  assert.ok(assPop.includes('\\fscx84\\fscy84\\t('));
+  assert.ok(assPop.includes('\\fscx58\\fscy58\\t('));
 
   const assSlide = buildAssFromCues(cues, { ...baseSub, effect: 'fade_slide' }, 720, 1280);
-  assert.ok(assSlide.includes('\\fad(180,140)'));
+  assert.ok(assSlide.includes('\\move(') && assSlide.includes('\\fad(220,150)'));
 
   const assTypewriter = buildAssFromCues(cues, { ...baseSub, effect: 'typewriter' }, 720, 1280);
   assert.ok(assTypewriter.includes('\\alpha&HFF&\\t('));
@@ -457,4 +458,77 @@ test('buildMoneyPrinterPrompt embeds verifiedFacts and non-fabrication rule', ()
   assert.ok(prompt.includes('NGUYÊN TẮC SỰ THẬT'));
   assert.ok(prompt.includes('146,6 mét'));
 });
+
+test('buildCountdownCues, splitCueIntoShortSubCues, and 5s smart learning pacing work together', () => {
+  const segs = planNarrationSegments({
+    script: [
+      '[VI] Chào mừng các bạn đến với thử thách 5 giây!',
+      '[VI] Câu 1: "Hãy cẩn thận với cô ấy!" nói tiếng Anh sao? [PAUSE]',
+      '[EN] Watch out for her!',
+      '[VI] Lưu video lại nhé!',
+    ].join('\n'),
+    language: 'bilingual',
+    scriptStyle: 'language_challenge',
+    voiceId: 'vi-VN-HoaiMyNeural',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'en-US-JennyNeural',
+    pauseBetweenLinesSec: 5,
+  });
+
+  assert.equal(segs.length, 4);
+  assert.ok(segs[0].pauseAfterSec < 1, 'Intro should have brief natural pause');
+  assert.equal(segs[1].pauseAfterSec, 5, 'Question with [PAUSE] should wait 5s');
+  assert.ok(segs[2].pauseAfterSec < 1, 'Answer should not wait 5s');
+  assert.equal(segs[3].pauseAfterSec, 0, 'Outro has no trailing pause');
+
+  const countdown = buildCountdownCues(10, 5, 20);
+  assert.equal(countdown.length, 5);
+  assert.deepEqual(
+    countdown.map((c) => c.text),
+    ['5', '4', '3', '2', '1']
+  );
+  assert.equal(countdown[0].startSec, 10);
+  assert.equal(countdown[4].endSec, 15);
+  assert.equal(countdown[0].isCountdown, true);
+
+  const preserved = splitCueIntoShortSubCues(
+    [
+      { index: 1, startSec: 0, endSec: 4.5, text: 'Watch out for her right now in the busy street', voiceSlot: 'secondary' },
+      ...countdown,
+    ],
+    22
+  );
+  const secondaryChunks = preserved.filter((c) => !c.isCountdown);
+  const cdChunks = preserved.filter((c) => c.isCountdown);
+  assert.ok(secondaryChunks.length >= 2);
+  assert.ok(secondaryChunks.every((c) => c.voiceSlot === 'secondary'));
+  assert.equal(cdChunks.length, 5);
+  assert.deepEqual(
+    cdChunks.map((c) => c.text),
+    ['5', '4', '3', '2', '1']
+  );
+
+  const ass = buildAssFromCues(
+    preserved,
+    {
+      enabled: true,
+      fontName: 'Noto Sans',
+      position: 'bottom',
+      customPositionPct: 84,
+      fontSize: 38,
+      textColor: '#FFFFFF',
+      highlightColor: '#FACC15',
+      strokeColor: '#000000',
+      strokeWidth: 2,
+      boxStyle: 'outline',
+      effect: 'karaoke',
+    },
+    720,
+    1280
+  );
+  assert.ok(ass.includes('Style: Countdown,Noto Sans,'));
+  assert.ok(ass.includes('Dialogue: 1,0:00:10.00,0:00:11.00,Countdown,,0,0,0,,'));
+  assert.ok(ass.includes('5'));
+});
+
 

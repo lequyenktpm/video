@@ -1,5 +1,7 @@
 export type LanguageCode = 'vi' | 'en' | 'ja' | 'bilingual' | 'vi_ja' | 'ja_en';
 
+export type StudioTab = 'short_video' | 'learning';
+
 export type LlmProvider = 'gemini_search' | 'pollinations' | 'ollama' | 'offline_vi';
 
 export type ScriptStyle =
@@ -54,6 +56,7 @@ export interface SubtitleCue {
   endSec: number;
   text: string;
   voiceSlot?: 'primary' | 'secondary';
+  isCountdown?: boolean;
 }
 
 export interface SubtitleConfig {
@@ -114,6 +117,7 @@ export interface RenderJobConfig {
   dualVoiceEnabled?: boolean;
   secondaryVoiceId?: VoiceOptionId;
   pauseBetweenLinesSec?: number;
+  clockTickEnabled?: boolean;
   voiceRate: number;
   voiceVolume: number;
   bgmPreset: BgmPreset;

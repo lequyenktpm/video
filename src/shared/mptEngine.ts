@@ -61,12 +61,12 @@ const LANGUAGE_PRESETS: Record<LanguageCode, string[]> = {
     '宇宙で一番静かな場所と無重力の世界の真実',
   ],
   bilingual: [
-    'Phản xạ 3s: "Hãy cẩn thận với cô ấy!" nói tiếng Anh sao?',
+    'Phản xạ 5s: "Hãy cẩn thận với cô ấy!" nói tiếng Anh sao?',
     'Giao tiếp công sở: Cách từ chối khéo bằng tiếng Anh tự nhiên',
     'Tại sao thời gian trôi nhanh hơn? — Why Time Feels Faster',
   ],
   vi_ja: [
-    'Phản xạ tiếng Nhật 3s: "Hôm nay bạn vất vả rồi!" nói sao?',
+    'Phản xạ tiếng Nhật 5s: "Hôm nay bạn vất vả rồi!" nói sao?',
     '3 câu giao tiếp tiếng Nhật quán ăn dùng mỗi ngày',
     'Cách nói "Đừng lo lắng quá nhé" cực tự nhiên trong tiếng Nhật',
   ],
@@ -193,7 +193,9 @@ export function planNarrationSegments(
   const primaryLang = getVoiceLanguagePrefix(primaryVoice);
   const secondaryLang = getVoiceLanguagePrefix(secondaryVoice);
   const dualEnabled = Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language);
-  const basePause = Math.max(0, Math.min(4, Number(config.pauseBetweenLinesSec ?? 0)));
+  const basePause = Math.max(0, Math.min(10, Number(config.pauseBetweenLinesSec ?? 0)));
+  const isChallengeMode =
+    config.scriptStyle === 'language_challenge' || config.scriptStyle === 'quiz_riddle';
 
   const segments: PlannedNarrationSegment[] = [];
 
@@ -201,8 +203,8 @@ export function planNarrationSegments(
     const pauseMatch = rawLine.match(/\[PAUSE(?::(\d+(?:\.\d+)?))?\]/i);
     const explicitPauseSec = pauseMatch
       ? pauseMatch[1]
-        ? Math.max(0.3, Math.min(5, parseFloat(pauseMatch[1])))
-        : Math.max(0.9, basePause || 1.2)
+        ? Math.max(0.5, Math.min(10, parseFloat(pauseMatch[1])))
+        : Math.max(1.0, basePause || 5.0)
       : 0;
 
     let explicitSlot: 'primary' | 'secondary' | null = null;
@@ -270,17 +272,35 @@ export function planNarrationSegments(
       }
     }
 
+    const looksLikeIntro =
+      lineIdx === 0 &&
+      rawLines.length >= 3 &&
+      /chào mừng|sẵn sàng|thử thách|welcome|ready|challenge|クイズ|チャレンジ|スタート/i.test(
+        cleanText
+      );
+    const isQuestionPrompt =
+      isChallengeMode &&
+      chosenSlot === 'primary' &&
+      lineIdx < rawLines.length - 1 &&
+      !looksLikeIntro &&
+      (/[?？]/.test(cleanText) || rawLines.length <= 2);
+
     const subChunks = splitScriptSentences(cleanText, 165);
     subChunks.forEach((chunk, chunkIdx) => {
       const isLastChunk = chunkIdx === subChunks.length - 1;
       const isLastLine = lineIdx === rawLines.length - 1;
-      const pauseAfter = isLastChunk
-        ? explicitPauseSec > 0
-          ? explicitPauseSec
-          : !isLastLine
-          ? basePause
-          : 0
-        : 0;
+      let pauseAfter = 0;
+      if (isLastChunk) {
+        if (explicitPauseSec > 0) {
+          pauseAfter = explicitPauseSec;
+        } else if (!isLastLine) {
+          if (isChallengeMode) {
+            pauseAfter = isQuestionPrompt ? basePause || 5.0 : basePause > 0 ? 0.55 : 0;
+          } else {
+            pauseAfter = basePause;
+          }
+        }
+      }
       segments.push({
         text: chunk,
         voiceId: chosenVoice,
@@ -292,6 +312,29 @@ export function planNarrationSegments(
   });
 
   return segments;
+}
+
+export function buildCountdownCues(
+  startSec: number,
+  durationSec: number,
+  startIndex = 1
+): SubtitleCue[] {
+  const totalDur = Math.max(0.5, durationSec);
+  const steps = Math.max(1, Math.min(10, Math.round(totalDur)));
+  const stepDur = totalDur / steps;
+  const result: SubtitleCue[] = [];
+  for (let k = 0; k < steps; k++) {
+    const num = steps - k;
+    result.push({
+      index: startIndex + k,
+      startSec: startSec + k * stepDur,
+      endSec: startSec + (k + 1) * stepDur,
+      text: String(num),
+      voiceSlot: 'primary',
+      isCountdown: true,
+    });
+  }
+  return result;
 }
 
 export function getScriptLengthSummary(sentenceCount: number): {
@@ -423,7 +466,7 @@ export function splitScriptSentences(script: string, maxLen = 165): string[] {
   if (!cleaned) return [];
 
   const rawSentences = cleaned
-    .split(/(?<=[.!?…。！？\n])\s*|\n+/)
+    .split(/(?<=[.!?…。！？])(?![\"'”’」』)])\s*|\n+/)
     .map((s) => s.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
@@ -542,6 +585,13 @@ export function splitCueIntoShortSubCues(
   let nextIdx = 1;
 
   for (const cue of cues) {
+    if (cue.isCountdown) {
+      result.push({
+        ...cue,
+        index: nextIdx++,
+      });
+      continue;
+    }
     const clean = cue.text.replace(/\s+/g, ' ').trim();
     const totalDur = Math.max(0.4, cue.endSec - cue.startSec);
     if (!clean) continue;
@@ -555,6 +605,7 @@ export function splitCueIntoShortSubCues(
         startSec: cue.startSec,
         endSec: cue.endSec,
         text: clean,
+        voiceSlot: cue.voiceSlot,
       });
       continue;
     }
@@ -713,7 +764,8 @@ function escapeAssText(text: string): string {
 function formatAssCueBody(
   wrappedText: string,
   durationSec: number,
-  effect: SubtitleEffect
+  effect: SubtitleEffect,
+  pos?: { width: number; height: number; alignment: number; marginV: number }
 ): string {
   if (effect === 'static') {
     return escapeAssText(wrappedText).replace(/\n/g, '\\N');
@@ -721,12 +773,24 @@ function formatAssCueBody(
 
   if (effect === 'pop_zoom') {
     const body = escapeAssText(wrappedText).replace(/\n/g, '\\N');
-    return `{\\fscx84\\fscy84\\t(0,115,\\fscx108\\fscy108)\\t(115,240,\\fscx100\\fscy100)}${body}`;
+    return `{\\fscx58\\fscy58\\t(0,145,\\fscx118\\fscy118)\\t(145,290,\\fscx100\\fscy100)}${body}`;
   }
 
   if (effect === 'fade_slide') {
     const body = escapeAssText(wrappedText).replace(/\n/g, '\\N');
-    return `{\\fad(180,140)\\fscy90\\t(0,220,\\fscy100)}${body}`;
+    if (pos) {
+      const cx = Math.round(pos.width / 2);
+      const cy =
+        pos.alignment === 8
+          ? pos.marginV
+          : pos.alignment === 5
+          ? Math.round(pos.height / 2)
+          : pos.height - pos.marginV;
+      const slidePx = Math.max(18, Math.round(pos.height * 0.03));
+      const startY = pos.alignment === 8 ? Math.max(10, cy - slidePx) : cy + slidePx;
+      return `{\\move(${cx},${startY},${cx},${cy},0,260)\\fad(220,150)}${body}`;
+    }
+    return `{\\fad(220,150)\\fscx92\\fscy92\\t(0,240,\\fscx100\\fscy100)}${body}`;
   }
 
   const tokens = tokenizeSubtitleForEffect(wrappedText);
@@ -768,7 +832,7 @@ function formatAssCueBody(
     .map((token) => {
       if (token === '\n') return '\\N';
       const tStart = Math.round(spokenIdx * stepMs);
-      const tEnd = Math.round(tStart + Math.min(90, Math.max(30, stepMs * 0.7)));
+      const tEnd = Math.round(tStart + Math.min(60, Math.max(25, stepMs * 0.55)));
       spokenIdx++;
       if (tStart === 0) {
         return escapeAssText(token);
@@ -821,6 +885,10 @@ export function buildAssFromCues(
   const secPrimary = effect === 'karaoke' ? highlightColour : secondaryTextColour;
   const secSecondary = effect === 'karaoke' ? '&H00F8BD38' : '&H000000FF';
 
+  const countdownFontSize = Math.max(36, Math.round(latinBudget.scaledFontSize * 2.25));
+  const countdownOutline = Math.max(3.2, Number((latinBudget.outlineWidth * 1.65).toFixed(1)));
+  const countdownShadow = Math.max(1.5, Number((latinBudget.shadowDepth * 1.4).toFixed(1)));
+
   const header = [
     '[Script Info]',
     'Title: MoneyPrinterTurbo VN Subtitles',
@@ -834,17 +902,27 @@ export function buildAssFromCues(
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
     `Style: Default,${effectiveFontName},${latinBudget.scaledFontSize},${primaryColour},${secondaryColour},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
     `Style: Secondary,${effectiveFontName},${latinBudget.scaledFontSize},${secPrimary},${secSecondary},${isBox ? '&H66000000' : outlineColour},${backColour},-1,0,0,0,100,100,0.4,0,${borderStyle},${latinBudget.outlineWidth.toFixed(1)},${latinBudget.shadowDepth.toFixed(1)},${alignment},${latinBudget.marginH},${latinBudget.marginH},${marginV},1`,
+    `Style: Countdown,${effectiveFontName},${countdownFontSize},${highlightColour},&H00FFFFFF,${outlineColour},&H80000000,-1,0,0,0,100,100,0,0,1,${countdownOutline.toFixed(1)},${countdownShadow.toFixed(1)},5,20,20,0,1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ];
 
   const events = cues.map((cue) => {
+    if (cue.isCountdown) {
+      const cleanNum = escapeAssText(cue.text.trim());
+      return `Dialogue: 1,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},Countdown,,0,0,0,,{\\fscx62\\fscy62\\t(0,145,\\fscx120\\fscy120)\\t(145,280,\\fscx100\\fscy100)\\fad(30,110)}${cleanNum}`;
+    }
     const cueIsCjk = hasAnyCjk && hasCjkChars(cue.text) && !cue.text.includes(' ');
     const wrapMax = cueIsCjk ? cjkBudget.maxCharsPerLine : latinBudget.maxCharsPerLine;
     const wrapped = wrapSubtitleLine(cue.text, wrapMax);
     const dur = Math.max(0.25, cue.endSec - cue.startSec);
-    const formattedBody = formatAssCueBody(wrapped, dur, effect);
+    const formattedBody = formatAssCueBody(wrapped, dur, effect, {
+      width,
+      height,
+      alignment,
+      marginV,
+    });
     const styleName = cue.voiceSlot === 'secondary' ? 'Secondary' : 'Default';
     return `Dialogue: 0,${formatAssTimestamp(cue.startSec)},${formatAssTimestamp(cue.endSec)},${styleName},,0,0,0,,${formattedBody}`;
   });
@@ -1358,7 +1436,7 @@ export function generateOfflineVietnameseScript(
   ) {
     if (language === 'ja_en') {
       sentences = [
-        '[JA] 1分瞬間英作文チャレンジ！今から出す日本語を3秒で英語にしてみましょう！',
+        '[JA] 1分瞬間英作文チャレンジ！今から出す日本語を5秒で英語にしてみましょう！',
         '[JA] 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
         '[EN] Watch out for her!',
         '[JA] 続いて「無理しないでね」はどう言いますか？ [PAUSE]',
@@ -1367,7 +1445,7 @@ export function generateOfflineVietnameseScript(
       ];
     } else if (language === 'vi_ja') {
       sentences = [
-        '[VI] Thử thách phản xạ dịch câu tiếng Nhật trong 3 giây! Bạn sẵn sàng chưa?',
+        '[VI] Thử thách phản xạ dịch câu tiếng Nhật trong 5 giây! Bạn sẵn sàng chưa?',
         '[VI] Câu đầu tiên: "Hôm nay bạn vất vả rồi" nói tiếng Nhật thế nào? [PAUSE]',
         '[JA] 今日もお疲れ様でした！',
         '[VI] Câu thứ 2: "Đừng lo lắng quá nhé" trong tiếng Nhật là gì? [PAUSE]',
@@ -1376,21 +1454,21 @@ export function generateOfflineVietnameseScript(
       ];
     } else if (language === 'ja') {
       sentences = [
-        `[V1] 3秒チャレンジ！${topic}の重要フレーズに挑戦しましょう！`,
+        `[V1] 5秒チャレンジ！${topic}の重要フレーズに挑戦しましょう！`,
         `[V1] 質問です。${topic}について正しいのはどちらでしょうか？ [PAUSE]`,
         `[V2] 正解は、多くの人が見落としがちな小さな仕組みに隠されています。`,
         `[V1] いくつ正解できましたか？保存して毎日のトレーニングに役立ててくださいね！`,
       ];
     } else if (language === 'en') {
       sentences = [
-        `[V1] Welcome to the 3-second speaking challenge on ${topic}! Ready?`,
+        `[V1] Welcome to the 5-second speaking challenge on ${topic}! Ready?`,
         `[V1] Question 1: How do native speakers react smoothly in this situation? [PAUSE]`,
         `[V2] Keep it natural, concise, and confident!`,
         `[V1] How many did you get right? Save this video and practice out loud every day!`,
       ];
     } else {
       sentences = [
-        '[VI] Chào mừng bạn đến với thử thách phản xạ dịch câu tiếng Anh trong 3 giây! Sẵn sàng chưa nào?',
+        '[VI] Chào mừng bạn đến với thử thách phản xạ dịch câu tiếng Anh trong 5 giây! Sẵn sàng chưa nào?',
         '[VI] Câu 1: "Hãy cẩn thận với cô ấy!" bạn nói tiếng Anh thế nào? [PAUSE]',
         '[EN] Watch out for her!',
         '[VI] Câu 2: "Cứ từ từ, đừng vội nhé!" dịch sang tiếng Anh là gì? [PAUSE]',
@@ -1432,18 +1510,18 @@ export function generateOfflineVietnameseScript(
     sentences =
       language === 'ja'
         ? [
-            `[V1] 3秒クイズ！${topic}にまつわる驚きの答えが分かりますか？ [PAUSE]`,
+            `[V1] 5秒クイズ！${topic}にまつわる驚きの答えが分かりますか？ [PAUSE]`,
             `[V2] 正解は、一見すると逆に見える自然の法則にありました！`,
             `[V1] あなたの予想は当たりましたか？コメントで教えてくださいね！`,
           ]
         : language === 'en'
         ? [
-            `[V1] Quick 3-second riddle about ${topic}: can you guess the real answer? [PAUSE]`,
+            `[V1] Quick 5-second riddle about ${topic}: can you guess the real answer? [PAUSE]`,
             `[V2] Surprise! The answer lies in a tiny detail most people overlook.`,
             `[V1] Did you get it right? Save this and challenge a friend!`,
           ]
         : [
-            `[V1] Đố bạn trong 3 giây về ${topic}: đâu là sự thật ít người đoán trúng? [PAUSE]`,
+            `[V1] Đố bạn trong 5 giây về ${topic}: đâu là sự thật ít người đoán trúng? [PAUSE]`,
             `[V2] Đáp án bất ngờ nằm ngay ở chi tiết tưởng như ngược đời nhất!`,
             `[V1] Bạn có đoán đúng không? Chia sẻ cho bạn bè cùng thử sức nhé!`,
           ];

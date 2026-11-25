@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Search,
   Sparkles,
+  Timer,
   Trash2,
   Upload,
   Volume2,
@@ -32,6 +33,7 @@ import {
   RenderJobStatus,
   ScenePreviewItem,
   ScriptStyle,
+  StudioTab,
   SubtitleBoxStyle,
   SubtitleEffect,
   SubtitleFont,
@@ -68,6 +70,7 @@ import { TopicDiscoveryBar } from './TopicDiscoveryBar';
 import { SubtitlePreviewCaption } from './SubtitlePreviewCaption';
 
 interface VideoStudioViewProps {
+  studioTab: StudioTab;
   config: RenderJobConfig;
   onChangeConfig: (patch: Partial<RenderJobConfig>) => void;
   uploadedMedia: MediaAssetItem[];
@@ -83,6 +86,7 @@ interface VideoStudioViewProps {
 }
 
 export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
+  studioTab,
   config,
   onChangeConfig,
   uploadedMedia,
@@ -98,6 +102,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
 }) => {
   const quickPasteRef = useRef<HTMLTextAreaElement | null>(null);
   const sceneFileInputRef = useRef<HTMLInputElement | null>(null);
+  const countdownTimerRef = useRef<number | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   const [termsInput, setTermsInput] = useState(config.terms.join(', '));
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
@@ -128,7 +134,87 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const [ttsPreviewNote, setTtsPreviewNote] = useState<string | null>(null);
   const [captionReplayNonce, setCaptionReplayNonce] = useState(0);
+  const [previewCountdown, setPreviewCountdown] = useState<number | null>(null);
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
+
+  const stopCountdownPreview = () => {
+    if (countdownTimerRef.current !== null) {
+      window.clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    setPreviewCountdown(null);
+  };
+
+  const playClockTickInBrowser = (isTick: boolean) => {
+    if (config.clockTickEnabled === false) return;
+    try {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new Ctx();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === 'suspended') {
+        void ctx.resume();
+      }
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(isTick ? 2250 : 1620, now);
+      osc.frequency.exponentialRampToValueAtTime(isTick ? 950 : 680, now + 0.032);
+      gain.gain.setValueAtTime(0.28, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.042);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.045);
+    } catch {
+      // Ignore Web Audio errors safely
+    }
+  };
+
+  const handleRunCountdownPreview = () => {
+    stopCountdownPreview();
+    const total = Math.max(1, Math.min(10, Math.round(config.pauseBetweenLinesSec || 5)));
+    let current = total;
+    setPreviewCountdown(current);
+    playClockTickInBrowser(true);
+
+    let tickStep = 1;
+    countdownTimerRef.current = window.setInterval(() => {
+      current -= 1;
+      if (current <= 0) {
+        stopCountdownPreview();
+        return;
+      }
+      setPreviewCountdown(current);
+      playClockTickInBrowser(tickStep % 2 === 0);
+      tickStep += 1;
+    }, 1000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (countdownTimerRef.current !== null) {
+        window.clearInterval(countdownTimerRef.current);
+      }
+      if (audioCtxRef.current) {
+        void audioCtxRef.current.close().catch(() => {});
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    stopCountdownPreview();
+    setPreviewScenes(config.customScenes ?? []);
+    setPreviewAudioUrl(null);
+    setTtsPreviewNote(null);
+    setScriptNote(null);
+    setScriptError(null);
+    setActiveSceneIdx(0);
+    setCaptionReplayNonce((n) => n + 1);
+  }, [studioTab]);
 
   useEffect(() => {
     setTermsInput(config.terms.join(', '));
@@ -540,6 +626,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           secondaryVoiceId:
             config.secondaryVoiceId ?? getDefaultSecondaryVoiceForLanguage(config.language),
           pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 0,
+          clockTickEnabled: config.clockTickEnabled !== false,
           ttsProvider: config.ttsProvider,
           voiceRate: config.voiceRate,
         }),
@@ -682,8 +769,13 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     pauseBetweenLinesSec:
                       config.scriptStyle === 'language_challenge' ||
                       config.scriptStyle === 'quiz_riddle'
-                        ? Math.max(1.0, config.pauseBetweenLinesSec || 1.2)
+                        ? Math.max(1.0, config.pauseBetweenLinesSec || 5)
                         : config.pauseBetweenLinesSec ?? 0,
+                    clockTickEnabled:
+                      config.scriptStyle === 'language_challenge' ||
+                      config.scriptStyle === 'quiz_riddle'
+                        ? config.clockTickEnabled !== false
+                        : config.clockTickEnabled,
                   };
                   if (!doesVoiceMatchLanguage(config.voiceId, nextLang) || isBilingual) {
                     patch.voiceId = getDefaultVoiceForLanguage(nextLang);
@@ -708,12 +800,22 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 }}
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
               >
-                <option value="vi">Tiếng Việt</option>
-                <option value="en">Tiếng Anh (English)</option>
-                <option value="ja">Tiếng Nhật (日本語)</option>
-                <option value="bilingual">Song ngữ Việt – Anh (Học Tiếng Anh)</option>
-                <option value="vi_ja">Song ngữ Việt – Nhật (Học Tiếng Nhật)</option>
-                <option value="ja_en">Song ngữ Nhật – Anh (瞬間英作文)</option>
+                {studioTab === 'learning' ? (
+                  <>
+                    <option value="bilingual">Song ngữ Việt – Anh (Học Tiếng Anh)</option>
+                    <option value="vi_ja">Song ngữ Việt – Nhật (Học Tiếng Nhật)</option>
+                    <option value="ja_en">Song ngữ Nhật – Anh (瞬間英作文)</option>
+                    <option value="en">Tiếng Anh (English)</option>
+                    <option value="ja">Tiếng Nhật (日本語)</option>
+                    <option value="vi">Tiếng Việt</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="vi">Tiếng Việt</option>
+                    <option value="en">Tiếng Anh (English)</option>
+                    <option value="ja">Tiếng Nhật (日本語)</option>
+                  </>
+                )}
               </select>
             </div>
 
@@ -737,6 +839,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                         ? 'vi-VN-HoaiMyNeural'
                         : 'en-US-JennyNeural'
                       : getDefaultSecondaryVoiceForLanguage(config.language);
+                  const isChallengeOrQuiz =
+                    nextStyle === 'language_challenge' || nextStyle === 'quiz_riddle';
                   const patch: Partial<RenderJobConfig> = {
                     scriptStyle: nextStyle,
                     customScenes: undefined,
@@ -749,8 +853,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                           config.secondaryVoiceId.slice(0, 2) === config.voiceId.slice(0, 2)))
                         ? defaultSec
                         : config.secondaryVoiceId ?? defaultSec,
-                    pauseBetweenLinesSec:
-                      nextStyle === 'language_challenge' || nextStyle === 'quiz_riddle' ? 1.2 : 0,
+                    pauseBetweenLinesSec: isChallengeOrQuiz ? 5 : 0,
+                    clockTickEnabled: isChallengeOrQuiz ? true : false,
                   };
                   if (isKnownPresetSubject(config.subject)) {
                     const starter = generateOfflineVietnameseScript(
@@ -770,15 +874,22 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 }}
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
               >
-                <option value="curious_facts">Sự thật tò mò (Hook 3s)</option>
-                <option value="language_challenge">Học ngoại ngữ / Phản xạ 3s (2 giọng)</option>
-                <option value="bilingual_dialogue">Hội thoại / Podcast 2 người</option>
-                <option value="quiz_riddle">Đố vui / Thử thách đáp nhanh</option>
-                <option value="storytelling">Kể chuyện cuốn hút</option>
-                <option value="tips_howto">Mẹo nhanh &amp; Thực tế</option>
-                <option value="news_fast">Tin nhanh súc tích</option>
-                <option value="motivational">Truyền cảm hứng / Triết lý</option>
-                <option value="top_list">Top xếp hạng / Danh sách nổi bật</option>
+                {studioTab === 'learning' ? (
+                  <>
+                    <option value="language_challenge">Học ngoại ngữ / Phản xạ 5s (2 giọng)</option>
+                    <option value="bilingual_dialogue">Hội thoại / Podcast 2 người</option>
+                    <option value="quiz_riddle">Đố vui / Thử thách đáp nhanh 5s</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="curious_facts">Sự thật tò mò (Hook 3s)</option>
+                    <option value="storytelling">Kể chuyện cuốn hút</option>
+                    <option value="tips_howto">Mẹo nhanh &amp; Thực tế</option>
+                    <option value="news_fast">Tin nhanh súc tích</option>
+                    <option value="motivational">Truyền cảm hứng / Triết lý</option>
+                    <option value="top_list">Top xếp hạng / Danh sách nổi bật</option>
+                  </>
+                )}
               </select>
             </div>
 
@@ -1433,10 +1544,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 <code className="px-1 py-0.5 rounded bg-white border border-slate-200 text-slate-800 font-mono">
                   [PAUSE]
                 </code>{' '}
-                vào cuối câu hỏi để chèn khoảng nghỉ đếm ngược 3s trước đáp án.
+                vào cuối câu hỏi để chèn khoảng chờ đếm ngược 5s kèm tiếng đồng hồ tick-tock trước đáp án.
               </p>
 
-              {(Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language)) && (
+              {(Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language) || studioTab === 'learning') && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                   <div>
                     <label
@@ -1468,24 +1579,41 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
                       <label htmlFor="mpt-pause-sec" className="font-medium text-slate-700">
-                        Khoảng nghỉ tư duy giữa câu
+                        Thời gian chờ suy nghĩ
                       </label>
                       <span className="font-mono tabular-nums text-slate-900">
-                        {(config.pauseBetweenLinesSec ?? 0).toFixed(1)}s
+                        {Number.isInteger(config.pauseBetweenLinesSec ?? 0)
+                          ? `${config.pauseBetweenLinesSec ?? 0}s`
+                          : `${(config.pauseBetweenLinesSec ?? 0).toFixed(1)}s`}
                       </span>
                     </div>
                     <input
                       id="mpt-pause-sec"
                       type="range"
                       min={0}
-                      max={2.5}
-                      step={0.2}
+                      max={10}
+                      step={0.5}
                       value={config.pauseBetweenLinesSec ?? 0}
                       onChange={(e) =>
                         onChangeConfig({ pauseBetweenLinesSec: Number(e.target.value) })
                       }
                       className="w-full accent-slate-900"
                     />
+                  </div>
+
+                  <div className="sm:col-span-2 pt-0.5">
+                    <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+                      <input
+                        id="mpt-clock-tick"
+                        type="checkbox"
+                        checked={config.clockTickEnabled !== false}
+                        onChange={(e) => onChangeConfig({ clockTickEnabled: e.target.checked })}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                      />
+                      <span>
+                        Phát tiếng đồng hồ Tick-Tock &amp; Hiện từng số đếm ngược (5 → 1) trong lúc chờ
+                      </span>
+                    </label>
                   </div>
                 </div>
               )}
@@ -1605,7 +1733,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 <select
                   id="mpt-sub-effect"
                   value={config.subtitle.effect}
-                  onChange={(e) => updateSubtitle({ effect: e.target.value as SubtitleEffect })}
+                  onChange={(e) => {
+                    updateSubtitle({ effect: e.target.value as SubtitleEffect });
+                    setCaptionReplayNonce((n) => n + 1);
+                  }}
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
                 >
                   <option value="karaoke">Karaoke chạy chữ theo lời đọc</option>
@@ -1792,7 +1923,24 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 {config.subtitle.fontSize}px
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {(studioTab === 'learning' || (config.pauseBetweenLinesSec ?? 0) >= 1.5) && (
+                <button
+                  type="button"
+                  data-testid="preview-countdown-btn"
+                  onClick={
+                    previewCountdown !== null ? stopCountdownPreview : handleRunCountdownPreview
+                  }
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-md whitespace-nowrap"
+                >
+                  <Timer className="w-3 h-3" aria-hidden="true" />
+                  <span>
+                    {previewCountdown !== null
+                      ? 'Dừng đếm ngược'
+                      : `Chạy thử đếm ngược ${Math.max(1, Math.min(10, Math.round(config.pauseBetweenLinesSec || 5)))}s`}
+                  </span>
+                </button>
+              )}
               {config.subtitle.enabled && (
                 <button
                   type="button"
@@ -1842,7 +1990,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   />
                 )
               ) : (
-                <div className="absolute inset-0 flex flex-col items-center justify-center p-5 text-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950">
+                <div
+                  className={`absolute inset-0 flex flex-col items-center justify-center p-5 text-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 transition-opacity ${
+                    previewCountdown !== null ? 'opacity-0' : 'opacity-100'
+                  }`}
+                >
                   <Film className="w-7 h-7 text-slate-500 mb-2.5" aria-hidden="true" />
                   <p className="text-xs text-slate-300 leading-relaxed">
                     Bấm &ldquo;Tìm &amp; xem trước cảnh quay&rdquo; để kiểm tra, sửa hoặc thay thế từng phân cảnh trước khi xuất MP4.
@@ -1871,6 +2023,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   subtitle={config.subtitle}
                   aspectRatio={config.aspectRatio}
                   replayNonce={captionReplayNonce}
+                  countdownNumber={previewCountdown}
                 />
               )}
             </div>

@@ -9,6 +9,7 @@ import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import { GoogleGenAI, Type } from '@google/genai';
 import {
   buildAssFromCues,
+  buildCountdownCues,
   buildMediaClipsPlan,
   buildMoneyPrinterPrompt,
   buildScenePromptsFromScript,
@@ -256,7 +257,7 @@ function getElevenLabsVoiceId(voiceId: VoiceOptionId): string {
 }
 
 async function createSilenceMp3(durationSec: number, outPath: string): Promise<void> {
-  const safeDur = Math.max(0.25, Math.min(5.0, durationSec));
+  const safeDur = Math.max(0.25, Math.min(10.0, durationSec));
   await runFfmpeg(
     [
       '-y',
@@ -266,6 +267,35 @@ async function createSilenceMp3(durationSec: number, outPath: string): Promise<v
       `anullsrc=r=24000:cl=mono`,
       '-t',
       safeDur.toFixed(2),
+      '-c:a',
+      'libmp3lame',
+      '-b:a',
+      '96k',
+      outPath,
+    ],
+    12000
+  );
+}
+
+async function createClockTickTockMp3(durationSec: number, outPath: string): Promise<void> {
+  const safeDur = Math.max(0.5, Math.min(10.0, durationSec));
+  // Realistic mechanical clock escapement: even seconds = crisp TICK, odd seconds = warmer TOCK
+  const rawExpr =
+    'if(lt(mod(t,1),0.036),exp(-mod(t,1)*155)*(if(eq(mod(floor(t),2),0),0.50*sin(2*PI*2450*mod(t,1))+0.34*sin(2*PI*1150*mod(t,1))+0.16*sin(2*PI*4600*mod(t,1)),0.48*sin(2*PI*1760*mod(t,1))+0.38*sin(2*PI*820*mod(t,1))+0.14*sin(2*PI*3300*mod(t,1)))),0)+if(between(mod(t,1),0.011,0.022),exp(-(mod(t,1)-0.011)*240)*0.20*sin(2*PI*3100*(mod(t,1)-0.011)),0)';
+  const escapedExpr = rawExpr.replace(/,/g, '\\,');
+  await runFfmpeg(
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      `aevalsrc=${escapedExpr}:s=24000:d=${safeDur.toFixed(2)}`,
+      '-af',
+      'highpass=f=380,lowpass=f=6800,volume=1.95',
+      '-ar',
+      '24000',
+      '-ac',
+      '1',
       '-c:a',
       'libmp3lame',
       '-b:a',
@@ -1961,17 +1991,21 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
 
       if (seg.pauseAfterSec > 0) {
         const pausePath = path.join(workDir, `pause_${i}.mp3`);
-        await createSilenceMp3(seg.pauseAfterSec, pausePath);
+        const useClockTick = config.clockTickEnabled !== false && seg.pauseAfterSec >= 1.5;
+        if (useClockTick) {
+          await createClockTickTockMp3(seg.pauseAfterSec, pausePath);
+        } else {
+          await createSilenceMp3(seg.pauseAfterSec, pausePath);
+        }
         const pauseDur = await probeDurationSec(pausePath);
         audioParts.push(pausePath);
-        if (config.scriptStyle === 'language_challenge' || config.scriptStyle === 'quiz_riddle') {
-          cues.push({
-            index: cues.length + 1,
-            startSec: cursorSec,
-            endSec: cursorSec + pauseDur,
-            text: '⏱ 3... 2... 1...',
-            voiceSlot: 'primary',
-          });
+        if (
+          seg.pauseAfterSec >= 1.5 &&
+          (config.scriptStyle === 'language_challenge' ||
+            config.scriptStyle === 'quiz_riddle' ||
+            config.clockTickEnabled)
+        ) {
+          cues.push(...buildCountdownCues(cursorSec, pauseDur, cues.length + 1));
         }
         cursorSec += pauseDur;
       }
@@ -2060,18 +2094,30 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       config.videoQuality ?? '720p'
     );
     const qualityParams = getQualityEncodingParams(config.videoQuality ?? '720p');
+    const visualCues: SubtitleCue[] = [];
+    for (const c of cues) {
+      if (c.isCountdown) {
+        if (visualCues.length > 0) {
+          visualCues[visualCues.length - 1].endSec = c.endSec;
+        }
+      } else {
+        visualCues.push({ ...c });
+      }
+    }
+    const effectiveVisualCues = visualCues.length > 0 ? visualCues : cues;
+
     const usePerSentenceAlignment = config.concatMode === 'sequential';
-    const fadeDur = config.transitionMode !== 'none' && cues.length > 1 ? 0.3 : 0;
+    const fadeDur = config.transitionMode !== 'none' && effectiveVisualCues.length > 1 ? 0.3 : 0;
 
     let plannedEntries: Array<{ asset: ResolvedSceneAsset; baseDur: number; renderDur: number }> = [];
 
     if (usePerSentenceAlignment) {
       let beatCursor = 0;
-      cues.forEach((cue, idx) => {
+      effectiveVisualCues.forEach((cue, idx) => {
         const sentenceDur = Math.max(1.4, cue.endSec - cue.startSec);
-        const isLastSentence = idx === cues.length - 1;
+        const isLastSentence = idx === effectiveVisualCues.length - 1;
         // Split sentences longer than 4.4s into 2 fast ~3s visual cuts when multiple clips exist
-        if (sentenceDur > 4.4 && assets.length > cues.length) {
+        if (sentenceDur > 4.4 && assets.length > effectiveVisualCues.length) {
           const halfDur = sentenceDur / 2;
           plannedEntries.push({
             asset: assets[beatCursor++ % assets.length],
@@ -3097,6 +3143,7 @@ async function startServer() {
       getDefaultSecondaryVoiceForLanguage(language)) as VoiceOptionId;
     const dualVoiceEnabled = Boolean(req.body?.dualVoiceEnabled) || isBilingualLanguage(language);
     const pauseBetweenLinesSec = Number(req.body?.pauseBetweenLinesSec ?? 0);
+    const clockTickEnabled = req.body?.clockTickEnabled !== false;
     const ttsProvider = (req.body?.ttsProvider ?? 'google_free') as TtsProvider;
     const voiceRate = Number(req.body?.voiceRate ?? 1.0);
 
@@ -3115,11 +3162,18 @@ async function startServer() {
           pauseBetweenLinesSec,
         });
 
-        // Pick first primary + first secondary (or first 2 segments) so user hears both voices!
-        const sampleSegs = planned.slice(0, 2);
-        const firstSecondaryIdx = planned.findIndex((s) => s.voiceSlot === 'secondary');
-        if (firstSecondaryIdx >= 2 && planned[0]) {
-          sampleSegs[1] = planned[firstSecondaryIdx];
+        // Prefer a Question (pauseAfterSec >= 1.5) + its Answer so the user previews Question + Tick-Tock + Answer!
+        let sampleSegs = planned.slice(0, 2);
+        const firstPauseIdx = planned.findIndex((s) => s.pauseAfterSec >= 1.5);
+        if (firstPauseIdx >= 0 && planned[firstPauseIdx]) {
+          const followSeg =
+            planned[firstPauseIdx + 1] ?? planned.find((s) => s.voiceSlot === 'secondary');
+          sampleSegs = followSeg ? [planned[firstPauseIdx], followSeg] : [planned[firstPauseIdx]];
+        } else {
+          const firstSecondaryIdx = planned.findIndex((s) => s.voiceSlot === 'secondary');
+          if (firstSecondaryIdx >= 2 && planned[0]) {
+            sampleSegs[1] = planned[firstSecondaryIdx];
+          }
         }
 
         if (sampleSegs.length >= 2) {
@@ -3148,7 +3202,11 @@ async function startServer() {
             parts.push(segPath);
             if (i === 0 && seg.pauseAfterSec > 0) {
               const pGap = path.join(previewWorkDir, 'gap.mp3');
-              await createSilenceMp3(Math.min(1.5, seg.pauseAfterSec), pGap);
+              if (clockTickEnabled && seg.pauseAfterSec >= 1.5) {
+                await createClockTickTockMp3(Math.min(5, seg.pauseAfterSec), pGap);
+              } else {
+                await createSilenceMp3(Math.min(1.5, seg.pauseAfterSec), pGap);
+              }
               parts.push(pGap);
             }
           }

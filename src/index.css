@@ -29,34 +29,98 @@
 
 @keyframes mptPopZoom {
   0% {
-    opacity: 0.4;
-    transform: scale(0.84);
+    opacity: 0.25;
+    transform: scale(0.6);
   }
-  50% {
+  10% {
     opacity: 1;
-    transform: scale(1.08);
+    transform: scale(1.16);
   }
-  100% {
+  20% {
     opacity: 1;
     transform: scale(1);
+  }
+  84% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  95% {
+    opacity: 0.25;
+    transform: scale(0.88);
+  }
+  100% {
+    opacity: 0.25;
+    transform: scale(0.6);
   }
 }
 
 @keyframes mptFadeSlide {
   0% {
     opacity: 0;
-    transform: translateY(10px) scale(0.96);
+    transform: translateY(18px) scale(0.95);
   }
-  100% {
+  16% {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+  84% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  96% {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.95);
+  }
+}
+
+@keyframes mptCountdownPop {
+  0% {
+    opacity: 0.2;
+    transform: scale(0.55);
+  }
+  22% {
+    opacity: 1;
+    transform: scale(1.22);
+  }
+  38% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  88% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.35;
+    transform: scale(0.86);
+  }
+}
+
+@keyframes mptCaretBlink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0;
   }
 }
 
 .animate-mpt-pop {
-  animation: mptPopZoom 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: mptPopZoom 2.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
 .animate-mpt-slide {
-  animation: mptFadeSlide 0.36s ease-out both;
+  animation: mptFadeSlide 2.2s ease-out infinite;
+}
+
+.animate-mpt-countdown {
+  animation: mptCountdownPop 0.96s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-mpt-caret {
+  animation: mptCaretBlink 0.7s steps(2, start) infinite;
 }

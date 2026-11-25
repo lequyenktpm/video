@@ -1,23 +1,66 @@
 import React from 'react';
+import { StudioTab } from '../shared/types';
 
-export const TopBar: React.FC = () => {
+interface TopBarProps {
+  activeTab: StudioTab;
+  onSelectTab: (tab: StudioTab) => void;
+}
+
+export const TopBar: React.FC<TopBarProps> = ({ activeTab, onSelectTab }) => {
   const anchorLinks = [
     { href: '#sec-script', label: '1. Kịch bản' },
     { href: '#sec-visuals', label: '2. Cảnh quay' },
     { href: '#sec-audio', label: '3. Giọng & Phụ đề' },
   ];
 
+  const tabs: Array<{ id: StudioTab; label: string }> = [
+    { id: 'short_video', label: 'Tạo Video Ngắn' },
+    { id: 'learning', label: 'Học Ngoại Ngữ & Đố Vui (5s)' },
+  ];
+
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200">
-      <div className="max-w-[1360px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3 md:gap-8">
-        <a
-          href="#top"
-          className="text-base sm:text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
-        >
-          MoneyPrinterTurbo VN
-        </a>
+      <div className="max-w-[1360px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3 md:gap-6">
+        <div className="flex items-center gap-4 min-w-0">
+          <a
+            href="#top"
+            className="text-base sm:text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
+          >
+            MoneyPrinterTurbo VN
+          </a>
 
-        <nav aria-label="Điều hướng bước tạo video" className="flex items-center gap-5 sm:gap-7">
+          <div
+            role="tablist"
+            aria-label="Chế độ Studio"
+            className="inline-flex items-center gap-1 p-1 rounded-lg bg-slate-100 border border-slate-200"
+          >
+            {tabs.map((tab) => {
+              const selected = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  data-testid={`studio-tab-${tab.id}`}
+                  onClick={() => onSelectTab(tab.id)}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    selected
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <nav
+          aria-label="Điều hướng bước tạo video"
+          className="hidden md:flex items-center gap-5 lg:gap-7"
+        >
           {anchorLinks.map((link) => (
             <a
               key={link.href}

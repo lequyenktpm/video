@@ -4,6 +4,7 @@ import {
   MediaAssetItem,
   RenderJobConfig,
   RenderJobStatus,
+  StudioTab,
 } from './shared/types';
 import { TopBar } from './components/TopBar';
 import { VideoStudioView } from './components/VideoStudioView';
@@ -11,7 +12,7 @@ import { safeParseJsonResponse } from './shared/mptEngine';
 
 const HISTORY_STORAGE_KEY = 'mpt_vn_history_v1';
 
-const DEFAULT_CONFIG: RenderJobConfig = {
+const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
   subject: 'Bí ẩn đại dương sâu thẳm chưa từng được giải mã',
   language: 'vi',
   scriptStyle: 'curious_facts',
@@ -42,6 +43,7 @@ const DEFAULT_CONFIG: RenderJobConfig = {
   dualVoiceEnabled: false,
   secondaryVoiceId: 'en-US-JennyNeural',
   pauseBetweenLinesSec: 0,
+  clockTickEnabled: false,
   voiceRate: 1.05,
   voiceVolume: 1.0,
   bgmPreset: 'lofi_chill',
@@ -61,16 +63,77 @@ const DEFAULT_CONFIG: RenderJobConfig = {
   },
 };
 
+const DEFAULT_LEARNING_CONFIG: RenderJobConfig = {
+  subject: 'Phản xạ 5s: "Hãy cẩn thận với cô ấy!" nói tiếng Anh sao?',
+  language: 'bilingual',
+  scriptStyle: 'language_challenge',
+  sentenceCount: 6,
+  llmProvider: 'pollinations',
+  script: [
+    '[VI] Sẵn sàng thử thách phản xạ tiếng Anh trong 5 giây cùng mình nhé!',
+    '[VI] Câu 1: "Hãy cẩn thận với cô ấy!" nói tiếng Anh thế nào? [PAUSE]',
+    '[EN] Watch out for her!',
+    '[VI] Câu 2: "Tôi hoàn toàn đồng ý với bạn." nói sao cho tự nhiên? [PAUSE]',
+    '[EN] I completely agree with you.',
+    '[VI] Tuyệt vời! Lưu video lại để luyện phản xạ mỗi ngày nhé!',
+  ].join('\n'),
+  terms: ['english study', 'city walk', 'coffee shop conversation', 'modern office'],
+  scenePrompts: [
+    'young person listening with headphones in cozy minimalist room, soft daylight, no text',
+    'thinking person looking out sunlit window in modern cafe, shallow depth of field, no text',
+    'confident speaker smiling in sunlit street, natural portrait cinematography, no text',
+    'two friends talking in cozy coffee shop, cinematic lighting, no text',
+    'professional typing on laptop at bright wooden desk, natural light, no text',
+    'notebook and pen on warm wooden desk morning light, motivational mood, no text',
+  ],
+  materialSource: 'mixkit_video',
+  selectedMediaIds: [],
+  aspectRatio: '9:16',
+  videoQuality: '720p',
+  concatMode: 'sequential',
+  transitionMode: 'fade',
+  clipDurationSec: 3,
+  ttsProvider: 'google_free',
+  voiceId: 'vi-VN-HoaiMyNeural',
+  dualVoiceEnabled: true,
+  secondaryVoiceId: 'en-US-JennyNeural',
+  pauseBetweenLinesSec: 5,
+  clockTickEnabled: true,
+  voiceRate: 1.0,
+  voiceVolume: 1.0,
+  bgmPreset: 'lofi_chill',
+  bgmVolume: 0.16,
+  subtitle: {
+    enabled: true,
+    fontName: 'Noto Sans',
+    position: 'bottom',
+    customPositionPct: 84,
+    fontSize: 38,
+    textColor: '#FFFFFF',
+    highlightColor: '#FACC15',
+    strokeColor: '#000000',
+    strokeWidth: 2.0,
+    boxStyle: 'outline',
+    effect: 'karaoke',
+  },
+};
+
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [config, setConfig] = useState<RenderJobConfig>(DEFAULT_CONFIG);
+  const [activeTab, setActiveTab] = useState<StudioTab>('short_video');
+  const [configsByTab, setConfigsByTab] = useState<Record<StudioTab, RenderJobConfig>>({
+    short_video: DEFAULT_SHORT_CONFIG,
+    learning: DEFAULT_LEARNING_CONFIG,
+  });
 
   const [uploadedMedia, setUploadedMedia] = useState<MediaAssetItem[]>([]);
   const [builtinBgm, setBuiltinBgm] = useState<MediaAssetItem[]>([]);
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
 
-  const [renderJob, setRenderJob] = useState<RenderJobStatus | null>(null);
-  const [isRendering, setIsRendering] = useState(false);
+  const [jobsByTab, setJobsByTab] = useState<Record<StudioTab, RenderJobStatus | null>>({
+    short_video: null,
+    learning: null,
+  });
 
   const [history, setHistory] = useState<CompletedVideoRecord[]>(() => {
     try {
@@ -109,29 +172,44 @@ export default function App() {
     void loadMediaLibrary();
   }, []);
 
+  const config = configsByTab[activeTab];
+  const renderJob = jobsByTab[activeTab];
+  const isRendering = Boolean(
+    renderJob && (renderJob.status === 'queued' || renderJob.status === 'running')
+  );
+
+  const updateActiveConfig = (patch: Partial<RenderJobConfig>) => {
+    setConfigsByTab((prev) => ({
+      ...prev,
+      [activeTab]: { ...prev[activeTab], ...patch },
+    }));
+  };
+
   useEffect(() => {
-    if (!renderJob || renderJob.status === 'done' || renderJob.status === 'error') {
-      return;
-    }
+    const runningEntries = (Object.entries(jobsByTab) as Array<[StudioTab, RenderJobStatus | null]>).filter(
+      ([, job]) => job && job.status !== 'done' && job.status !== 'error'
+    );
+    if (runningEntries.length === 0) return;
 
     const timer = window.setInterval(async () => {
-      try {
-        const res = await fetch(`/api/render-status/${renderJob.jobId}`);
-        if (!res.ok) return;
-        const latest = await safeParseJsonResponse<RenderJobStatus>(
-          res,
-          'Không đọc được trạng thái render.'
-        );
-        setRenderJob(latest);
+      for (const [tabKey, job] of runningEntries) {
+        if (!job) continue;
+        try {
+          const res = await fetch(`/api/render-status/${job.jobId}`);
+          if (!res.ok) continue;
+          const latest = await safeParseJsonResponse<RenderJobStatus>(
+            res,
+            'Không đọc được trạng thái render.'
+          );
+          setJobsByTab((prev) => ({ ...prev, [tabKey]: latest }));
 
-        if (latest.status === 'done' || latest.status === 'error') {
-          setIsRendering(false);
           if (latest.status === 'done' && latest.videoUrl && latest.srtUrl) {
+            const tabCfg = configsByTab[tabKey];
             const record: CompletedVideoRecord = {
               jobId: latest.jobId,
-              subject: config.subject,
-              aspectRatio: config.aspectRatio,
-              voiceId: config.voiceId,
+              subject: tabCfg.subject,
+              aspectRatio: tabCfg.aspectRatio,
+              voiceId: tabCfg.voiceId,
               durationSec: latest.durationSec ?? 0,
               fileSizeBytes: latest.fileSizeBytes ?? 0,
               videoUrl: latest.videoUrl,
@@ -142,14 +220,14 @@ export default function App() {
               prev.some((r) => r.jobId === record.jobId) ? prev : [record, ...prev].slice(0, 12)
             );
           }
+        } catch {
+          // Retry next interval
         }
-      } catch {
-        // Retry next interval
       }
     }, 700);
 
     return () => window.clearInterval(timer);
-  }, [renderJob?.jobId, renderJob?.status, config.subject, config.aspectRatio, config.voiceId]);
+  }, [jobsByTab, configsByTab]);
 
   const handleUploadFile = async (file: File) => {
     setUploadNotice(null);
@@ -170,16 +248,14 @@ export default function App() {
       await loadMediaLibrary();
       setUploadNotice(`Đã nạp vào studio: ${data.item.name}`);
       if (data.item.kind === 'audio') {
-        setConfig((prev) => ({
-          ...prev,
+        updateActiveConfig({
           bgmPreset: 'custom',
-          customBgmFilename: data.item?.id,
-        }));
+          customBgmFilename: data.item.id,
+        });
       } else {
-        setConfig((prev) => ({
-          ...prev,
+        updateActiveConfig({
           materialSource: 'local_upload',
-        }));
+        });
       }
     } catch (err) {
       setUploadNotice(err instanceof Error ? err.message : 'Lỗi tải tệp lên.');
@@ -192,12 +268,13 @@ export default function App() {
   };
 
   const handleStartRender = async () => {
-    setIsRendering(true);
+    const targetTab = activeTab;
+    const payload = configsByTab[targetTab];
     try {
       const res = await fetch('/api/render-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
+        body: JSON.stringify(payload),
       });
       const data = await safeParseJsonResponse<{
         jobId?: string;
@@ -207,18 +284,20 @@ export default function App() {
       if (!res.ok || !data.status) {
         throw new Error(data.error || 'Không thể khởi tạo tác vụ dựng video.');
       }
-      setRenderJob(data.status);
+      setJobsByTab((prev) => ({ ...prev, [targetTab]: data.status! }));
     } catch (err) {
-      setIsRendering(false);
-      setRenderJob({
-        jobId: `err_${Date.now()}`,
-        status: 'error',
-        progressPct: 0,
-        stepLabel: 'Không thể khởi tạo dựng video',
-        logs: [],
-        errorMessage: err instanceof Error ? err.message : 'Lỗi máy chủ.',
-        createdAtIso: new Date().toISOString(),
-      });
+      setJobsByTab((prev) => ({
+        ...prev,
+        [targetTab]: {
+          jobId: `err_${Date.now()}`,
+          status: 'error',
+          progressPct: 0,
+          stepLabel: 'Không thể khởi tạo dựng video',
+          logs: [],
+          errorMessage: err instanceof Error ? err.message : 'Lỗi máy chủ.',
+          createdAtIso: new Date().toISOString(),
+        },
+      }));
     }
   };
 
@@ -239,16 +318,20 @@ export default function App() {
         }}
       />
 
-      <TopBar />
+      <TopBar activeTab={activeTab} onSelectTab={setActiveTab} />
 
       <main className="flex-1 max-w-[1360px] w-full mx-auto px-4 sm:px-6 py-6 space-y-5">
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 text-balance">
-              Tạo Video Ngắn Tự Động — Chuẩn B-Roll &amp; Phụ Đề Chuyên Nghiệp
+              {activeTab === 'learning'
+                ? 'Studio Học Ngoại Ngữ & Đố Vui — 2 Giọng Đọc & Đếm Ngược 5s'
+                : 'Tạo Video Ngắn Tự Động — Chuẩn B-Roll & Phụ Đề Chuyên Nghiệp'}
             </h1>
             <p className="text-sm text-slate-600 mt-1 max-w-3xl">
-              Nhập chủ đề hoặc dán kịch bản từ AI, tự động ghép cảnh quay HD chuyển động mượt từng nhịp, lồng giọng đọc và gắn phụ đề chuẩn TikTok / Reels / Shorts.
+              {activeTab === 'learning'
+                ? 'Tạo video phản xạ dịch câu Việt–Anh–Nhật, hội thoại 2 giọng và đố vui với khoảng chờ đếm ngược 5 giây kèm tiếng đồng hồ Tick-Tock.'
+                : 'Nhập chủ đề hoặc dán kịch bản từ AI, tự động ghép cảnh quay HD chuyển động mượt từng nhịp, lồng giọng đọc và gắn phụ đề chuẩn TikTok / Reels / Shorts.'}
             </p>
           </div>
           {uploadNotice && (
@@ -257,8 +340,9 @@ export default function App() {
         </div>
 
         <VideoStudioView
+          studioTab={activeTab}
           config={config}
-          onChangeConfig={(patch) => setConfig((prev) => ({ ...prev, ...patch }))}
+          onChangeConfig={updateActiveConfig}
           uploadedMedia={uploadedMedia}
           builtinBgm={builtinBgm}
           onTriggerUpload={() => fileInputRef.current?.click()}
@@ -267,8 +351,12 @@ export default function App() {
           isRendering={isRendering}
           onStartRender={() => void handleStartRender()}
           onResetForm={() => {
-            setConfig(DEFAULT_CONFIG);
-            setRenderJob(null);
+            setConfigsByTab((prev) => ({
+              ...prev,
+              [activeTab]:
+                activeTab === 'learning' ? DEFAULT_LEARNING_CONFIG : DEFAULT_SHORT_CONFIG,
+            }));
+            setJobsByTab((prev) => ({ ...prev, [activeTab]: null }));
           }}
           recentHistory={history}
           onDeleteHistory={(jobId) =>
