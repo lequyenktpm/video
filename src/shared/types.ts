@@ -38,7 +38,18 @@ export type VideoQuality = '480p' | '720p' | '1080p';
 
 export type VideoConcatMode = 'sequential' | 'random';
 
-export type VideoTransitionMode = 'fade' | 'slide' | 'none';
+export type VideoTransitionMode =
+  | 'random'
+  | 'fade'
+  | 'dissolve'
+  | 'slide'
+  | 'wipeleft'
+  | 'smoothleft'
+  | 'circleopen'
+  | 'radial'
+  | 'pixelize'
+  | 'fadeblack'
+  | 'none';
 
 export type SubtitlePosition = 'bottom' | 'center' | 'top' | 'custom';
 
@@ -48,7 +59,15 @@ export type SubtitleBoxStyle = 'outline' | 'dark_box';
 
 export type SubtitleEffect = 'karaoke' | 'pop_zoom' | 'fade_slide' | 'typewriter' | 'static';
 
-export type BgmPreset = 'none' | 'lofi_chill' | 'tech_upbeat' | 'cinema_ambient' | 'custom';
+export type BgmPreset =
+  | 'none'
+  | 'lofi_chill'
+  | 'soft_piano'
+  | 'tech_upbeat'
+  | 'cinema_ambient'
+  | 'custom';
+
+export type FullAnswerRecapMode = 'off' | 'target_full' | 'both_full';
 
 export interface SubtitleCue {
   index: number;
@@ -118,6 +137,12 @@ export interface RenderJobConfig {
   secondaryVoiceId?: VoiceOptionId;
   pauseBetweenLinesSec?: number;
   clockTickEnabled?: boolean;
+  targetRepeatCount?: number;
+  targetRepeatPauseSec?: number;
+  fullAnswerRecapMode?: FullAnswerRecapMode;
+  summarizeAtEnd?: boolean;
+  outputDir?: string;
+  outputFilename?: string;
   voiceRate: number;
   voiceVolume: number;
   bgmPreset: BgmPreset;
@@ -135,6 +160,9 @@ export interface RenderJobStatus {
   scenes?: ScenePreviewItem[];
   videoUrl?: string;
   srtUrl?: string;
+  savedOutputPath?: string;
+  savedSrtPath?: string;
+  outputFilename?: string;
   durationSec?: number;
   fileSizeBytes?: number;
   errorMessage?: string;
@@ -162,5 +190,7 @@ export interface CompletedVideoRecord {
   fileSizeBytes: number;
   videoUrl: string;
   srtUrl: string;
+  savedOutputPath?: string;
+  outputFilename?: string;
   createdAtIso: string;
 }

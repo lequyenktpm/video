@@ -1,4 +1,5 @@
 import {
+  FullAnswerRecapMode,
   LanguageCode,
   RenderJobConfig,
   ScriptStyle,
@@ -7,6 +8,7 @@ import {
   SubtitleEffect,
   VideoAspectRatio,
   VideoQuality,
+  VideoTransitionMode,
   VoiceOptionId,
 } from './types';
 
@@ -140,8 +142,11 @@ export function detectLineLanguage(
 
 export function stripNarrationTags(line: string): string {
   return line
-    .replace(/^\s*\[(?:V1|V2|1|2|A|B|VI|EN|JA)\]\s*/i, '')
-    .replace(/^\s*(?:A|B|Speaker\s*[12]|Người\s*[12])\s*:\s*/i, '')
+    .replace(/^\s*\[(?:V1|V2|1|2|A|B|Q|VI|EN|JA|ANSWER|QUESTION)\]\s*/i, '')
+    .replace(
+      /^\s*(?:Q|A|Question|Answer|Câu\s*hỏi|Trả\s*lời|Speaker\s*[12]|Người\s*[12]|English|Japanese|Vietnamese|Tiếng\s*Anh|Tiếng\s*Nhật|Tiếng\s*Việt)\s*[:：]\s*/i,
+      ''
+    )
     .replace(/\s*\[PAUSE(?::\d+(?:\.\d+)?)?\]\s*/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -153,6 +158,8 @@ export interface PlannedNarrationSegment {
   voiceSlot: 'primary' | 'secondary';
   detectedLang: 'vi' | 'en' | 'ja';
   pauseAfterSec: number;
+  pauseKind?: 'thinking' | 'repeat' | 'recap';
+  segmentKind?: 'speech' | 'recap' | 'summary';
 }
 
 function getFallbackVoiceForLangCode(
@@ -167,6 +174,94 @@ function getFallbackVoiceForLangCode(
   return { voiceId: 'vi-VN-HoaiMyNeural', slot: 'primary' };
 }
 
+function isOutroCtaLine(cleanText: string): boolean {
+  return /theo dõi|đăng ký|lưu video|bình luận|chia sẻ|follow|subscribe|save this|comment|保存|フォロー|コメント|チャンネル登録/i.test(
+    cleanText
+  );
+}
+
+export function buildVideoEndingSummary(params: {
+  subject?: string;
+  language: LanguageCode;
+  scriptStyle: ScriptStyle;
+  primaryLang: 'vi' | 'en' | 'ja';
+  questions: string[];
+  targetHighlights: string[];
+  sourceHighlights: string[];
+}): { text: string; voiceLang: 'vi' | 'en' | 'ja' } | null {
+  const { subject = '', language, scriptStyle, primaryLang, questions, targetHighlights, sourceHighlights } =
+    params;
+
+  const isQaOrLearning =
+    isBilingualLanguage(language) ||
+    scriptStyle === 'language_challenge' ||
+    scriptStyle === 'bilingual_dialogue' ||
+    scriptStyle === 'quiz_riddle' ||
+    questions.length > 0 ||
+    targetHighlights.length > 0;
+
+  const cleanSubject = subject.replace(/[?!。？！]+$/g, '').trim();
+
+  if (isQaOrLearning) {
+    const sampleQuestion = (questions[0] ?? cleanSubject).replace(/[?!。？！]+$/g, '').trim();
+    const firstKey = (targetHighlights[0] ?? '').replace(/[.!?。！？]+$/g, '').trim();
+    const count = Math.max(1, targetHighlights.length || sourceHighlights.length);
+
+    if (primaryLang === 'ja' || language === 'ja_en') {
+      const qPart = sampleQuestion ? `「${sampleQuestion.slice(0, 48)}」について、` : '';
+      const keyPart = firstKey ? `「${firstKey.slice(0, 56)}」などの` : '';
+      return {
+        voiceLang: 'ja',
+        text: `今日のまとめ：${qPart}${keyPart}実践フレーズを${count}つ学びました。ぜひ声に出して復習しましょう！`,
+      };
+    }
+    if (primaryLang === 'en' && !isBilingualLanguage(language)) {
+      const qPart = sampleQuestion ? `on "${sampleQuestion.slice(0, 55)}"` : 'today';
+      return {
+        voiceLang: 'en',
+        text: `Quick recap: we practiced ${count} key expressions ${qPart}. Review them out loud to lock them in!`,
+      };
+    }
+    const qPart = sampleQuestion ? `chủ đề "${sampleQuestion.slice(0, 52)}" ` : '';
+    const keyPart = firstKey ? `với mẫu câu trọng tâm "${firstKey.slice(0, 56)}"` : '';
+    return {
+      voiceLang: 'vi',
+      text: `Tóm tắt bài học hôm nay: chúng ta đã luyện ${count} câu trả lời ${qPart}${keyPart}.`,
+    };
+  }
+
+  // Knowledge / storytelling / tips video summary
+  const middleFacts = sourceHighlights.filter((s) => !isOutroCtaLine(s));
+  const coreFact = (middleFacts[1] ?? middleFacts[0] ?? '').replace(/[.!?。！？]+$/g, '').trim();
+  if (!coreFact && !cleanSubject) return null;
+
+  if (primaryLang === 'ja') {
+    const topicLabel = cleanSubject || '今日のテーマ';
+    return {
+      voiceLang: 'ja',
+      text: coreFact
+        ? `今日のまとめ：${topicLabel}について、${coreFact.slice(0, 75)}という大切な知識を学びました。`
+        : `今日のまとめ：${topicLabel}の重要なポイントを振り返りました。`,
+    };
+  }
+  if (primaryLang === 'en') {
+    const topicLabel = cleanSubject || 'this topic';
+    return {
+      voiceLang: 'en',
+      text: coreFact
+        ? `Key takeaway on ${topicLabel}: ${coreFact.slice(0, 90)}.`
+        : `Key takeaway: remember the core insights we explored about ${topicLabel}.`,
+    };
+  }
+  const topicLabel = cleanSubject || 'chủ đề hôm nay';
+  return {
+    voiceLang: 'vi',
+    text: coreFact
+      ? `Tóm tắt kiến thức hôm nay: qua chủ đề ${topicLabel}, điểm đáng nhớ nhất là ${coreFact.slice(0, 95)}.`
+      : `Tóm tắt kiến thức hôm nay: chúng ta đã cùng tìm hiểu những góc nhìn nổi bật về ${topicLabel}.`,
+  };
+}
+
 export function planNarrationSegments(
   config: Pick<
     RenderJobConfig,
@@ -177,7 +272,17 @@ export function planNarrationSegments(
     | 'dualVoiceEnabled'
     | 'secondaryVoiceId'
     | 'pauseBetweenLinesSec'
-  >
+  > &
+    Partial<
+      Pick<
+        RenderJobConfig,
+        | 'subject'
+        | 'targetRepeatCount'
+        | 'targetRepeatPauseSec'
+        | 'fullAnswerRecapMode'
+        | 'summarizeAtEnd'
+      >
+    >
 ): PlannedNarrationSegment[] {
   const rawLines = config.script
     .replace(/\r\n/g, '\n')
@@ -187,19 +292,138 @@ export function planNarrationSegments(
 
   if (rawLines.length === 0) return [];
 
-  const primaryVoice = config.voiceId;
-  const secondaryVoice =
+  const hasExplicitQaSyntax = rawLines.some((l) =>
+    /^\s*(?:Q|Question|Câu\s*hỏi|Answer|Trả\s*lời|English|Japanese|Vietnamese|Tiếng\s*Anh|Tiếng\s*Nhật|Tiếng\s*Việt)\s*[:：]/i.test(
+      l
+    )
+  );
+
+  let primaryVoice = config.voiceId;
+  let secondaryVoice =
     config.secondaryVoiceId ?? getDefaultSecondaryVoiceForLanguage(config.language);
+
+  // Auto-align voices when user pastes a JA+EN Q&A script on any bilingual tab
+  if (hasExplicitQaSyntax) {
+    const hasJaLine = rawLines.some((l) => hasCjkChars(stripNarrationTags(l)));
+    const hasEnTarget = rawLines.some((l) => /^\s*(?:English|Tiếng\s*Anh)\s*[:：]/i.test(l));
+    if (hasJaLine && hasEnTarget) {
+      if (!primaryVoice.startsWith('ja-')) primaryVoice = 'ja-JP-NanamiNeural';
+      if (!secondaryVoice.startsWith('en-')) secondaryVoice = 'en-US-JennyNeural';
+    }
+  }
+
   const primaryLang = getVoiceLanguagePrefix(primaryVoice);
   const secondaryLang = getVoiceLanguagePrefix(secondaryVoice);
-  const dualEnabled = Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language);
+  const dualEnabled =
+    Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language) || hasExplicitQaSyntax;
   const basePause = Math.max(0, Math.min(10, Number(config.pauseBetweenLinesSec ?? 0)));
   const isChallengeMode =
     config.scriptStyle === 'language_challenge' || config.scriptStyle === 'quiz_riddle';
 
-  const segments: PlannedNarrationSegment[] = [];
+  const targetRepeatCount = Math.max(0, Math.min(2, Math.round(config.targetRepeatCount ?? 0)));
+  const targetRepeatPauseSec = Math.max(
+    0.5,
+    Math.min(5, Number(config.targetRepeatPauseSec ?? 2.0))
+  );
+  const fullAnswerRecapMode: FullAnswerRecapMode = config.fullAnswerRecapMode ?? 'off';
+  const summarizeAtEnd = Boolean(config.summarizeAtEnd);
 
-  rawLines.forEach((rawLine, lineIdx) => {
+  const segments: PlannedNarrationSegment[] = [];
+  const collectedQuestions: string[] = [];
+  const collectedTargetHighlights: string[] = [];
+  const collectedSourceHighlights: string[] = [];
+
+  let inAnswerBlock = false;
+  let answerSourceSentences: string[] = [];
+  let answerTargetSentences: string[] = [];
+
+  const flushAnswerRecap = () => {
+    if (fullAnswerRecapMode === 'off') {
+      answerSourceSentences = [];
+      answerTargetSentences = [];
+      return;
+    }
+    const hasMultiTarget = answerTargetSentences.length >= 2;
+    const hasMultiSource = answerSourceSentences.length >= 2;
+    if (!hasMultiTarget && !(fullAnswerRecapMode === 'both_full' && hasMultiSource)) {
+      answerSourceSentences = [];
+      answerTargetSentences = [];
+      return;
+    }
+
+    if (segments.length > 0) {
+      segments[segments.length - 1].pauseAfterSec = Math.max(
+        segments[segments.length - 1].pauseAfterSec,
+        0.9
+      );
+      if (!segments[segments.length - 1].pauseKind) {
+        segments[segments.length - 1].pauseKind = 'recap';
+      }
+    }
+
+    if (fullAnswerRecapMode === 'both_full' && hasMultiSource) {
+      const joinedSource = answerSourceSentences.join(primaryLang === 'ja' ? '' : ' ');
+      const srcChunks = splitScriptSentences(joinedSource, 165);
+      srcChunks.forEach((chunk, ci) => {
+        segments.push({
+          text: chunk,
+          voiceId: primaryVoice,
+          voiceSlot: 'primary',
+          detectedLang: primaryLang,
+          pauseAfterSec: ci === srcChunks.length - 1 ? 0.6 : 0,
+          pauseKind: ci === srcChunks.length - 1 ? 'recap' : undefined,
+          segmentKind: 'recap',
+        });
+      });
+    }
+
+    if (hasMultiTarget) {
+      const bridgeText =
+        primaryLang === 'ja'
+          ? '回答全体を通して聞いてみましょう。'
+          : primaryLang === 'en'
+          ? 'Now listen to the full answer together.'
+          : 'Nghe lại toàn bộ câu trả lời liền mạch nhé!';
+      segments.push({
+        text: bridgeText,
+        voiceId: primaryVoice,
+        voiceSlot: 'primary',
+        detectedLang: primaryLang,
+        pauseAfterSec: 0.4,
+        pauseKind: 'recap',
+        segmentKind: 'recap',
+      });
+
+      const joinedTarget = answerTargetSentences.join(secondaryLang === 'ja' ? '' : ' ');
+      const targetChunks = splitScriptSentences(joinedTarget, 165);
+      targetChunks.forEach((chunk, ci) => {
+        segments.push({
+          text: chunk,
+          voiceId: secondaryVoice,
+          voiceSlot: 'secondary',
+          detectedLang: secondaryLang,
+          pauseAfterSec: ci === targetChunks.length - 1 ? 0.8 : 0,
+          pauseKind: ci === targetChunks.length - 1 ? 'recap' : undefined,
+          segmentKind: 'recap',
+        });
+      });
+    }
+
+    answerSourceSentences = [];
+    answerTargetSentences = [];
+  };
+
+  let pendingOutroLines: string[] = [];
+  const mainLines = [...rawLines];
+  if (
+    summarizeAtEnd &&
+    mainLines.length >= 2 &&
+    isOutroCtaLine(stripNarrationTags(mainLines[mainLines.length - 1]))
+  ) {
+    pendingOutroLines = [mainLines.pop()!];
+  }
+
+  const processLine = (rawLine: string, lineIdx: number, totalCount: number) => {
     const pauseMatch = rawLine.match(/\[PAUSE(?::(\d+(?:\.\d+)?))?\]/i);
     const explicitPauseSec = pauseMatch
       ? pauseMatch[1]
@@ -207,32 +431,47 @@ export function planNarrationSegments(
         : Math.max(1.0, basePause || 5.0)
       : 0;
 
+    const isQuestionHeader = /^\s*(?:Q|Question|Câu\s*hỏi)\s*[:：]/i.test(rawLine);
+    const isAnswerHeader =
+      hasExplicitQaSyntax && /^\s*(?:A|Answer|Trả\s*lời)\s*[:：]/i.test(rawLine);
+
+    if (isQuestionHeader) {
+      flushAnswerRecap();
+      inAnswerBlock = false;
+    } else if (isAnswerHeader) {
+      flushAnswerRecap();
+      inAnswerBlock = true;
+    }
+
     let explicitSlot: 'primary' | 'secondary' | null = null;
     let explicitLangTag: 'vi' | 'en' | 'ja' | null = null;
 
-    if (/^\s*\[(?:V1|1|A)\]/i.test(rawLine) || /^\s*(?:A|Speaker\s*1|Người\s*1)\s*:/i.test(rawLine)) {
+    if (
+      /^\s*\[(?:V1|1|A)\]/i.test(rawLine) ||
+      (!hasExplicitQaSyntax && /^\s*(?:A|Speaker\s*1|Người\s*1)\s*[:：]/i.test(rawLine))
+    ) {
       explicitSlot = 'primary';
     } else if (
       /^\s*\[(?:V2|2|B)\]/i.test(rawLine) ||
-      /^\s*(?:B|Speaker\s*2|Người\s*2)\s*:/i.test(rawLine)
+      /^\s*(?:B|Speaker\s*2|Người\s*2)\s*[:：]/i.test(rawLine)
     ) {
       explicitSlot = 'secondary';
-    } else if (/^\s*\[VI\]/i.test(rawLine)) {
+    } else if (/^\s*\[VI\]/i.test(rawLine) || /^\s*(?:Vietnamese|Tiếng\s*Việt)\s*[:：]/i.test(rawLine)) {
       explicitLangTag = 'vi';
-    } else if (/^\s*\[EN\]/i.test(rawLine)) {
+    } else if (/^\s*\[EN\]/i.test(rawLine) || /^\s*(?:English|Tiếng\s*Anh)\s*[:：]/i.test(rawLine)) {
       explicitLangTag = 'en';
-    } else if (/^\s*\[JA\]/i.test(rawLine)) {
+    } else if (/^\s*\[JA\]/i.test(rawLine) || /^\s*(?:Japanese|Tiếng\s*Nhật)\s*[:：]/i.test(rawLine)) {
       explicitLangTag = 'ja';
     }
 
     const cleanText = stripNarrationTags(rawLine);
     if (!cleanText) {
-      // Standalone [PAUSE] line attaches pause to previous segment
       if (segments.length > 0 && explicitPauseSec > 0) {
         segments[segments.length - 1].pauseAfterSec = Math.max(
           segments[segments.length - 1].pauseAfterSec,
           explicitPauseSec
         );
+        segments[segments.length - 1].pauseKind = 'thinking';
       }
       return;
     }
@@ -272,44 +511,143 @@ export function planNarrationSegments(
       }
     }
 
+    if (isQuestionHeader) {
+      collectedQuestions.push(cleanText);
+    }
+
     const looksLikeIntro =
       lineIdx === 0 &&
-      rawLines.length >= 3 &&
+      totalCount >= 3 &&
       /chào mừng|sẵn sàng|thử thách|welcome|ready|challenge|クイズ|チャレンジ|スタート/i.test(
         cleanText
       );
+
+    if (chosenSlot === 'secondary') {
+      collectedTargetHighlights.push(cleanText);
+      if (inAnswerBlock) {
+        answerTargetSentences.push(cleanText);
+      }
+    } else if (!looksLikeIntro && !isOutroCtaLine(cleanText)) {
+      collectedSourceHighlights.push(cleanText);
+      if (inAnswerBlock) {
+        answerSourceSentences.push(cleanText);
+      }
+    }
+
     const isQuestionPrompt =
       isChallengeMode &&
       chosenSlot === 'primary' &&
-      lineIdx < rawLines.length - 1 &&
+      lineIdx < totalCount - 1 &&
       !looksLikeIntro &&
-      (/[?？]/.test(cleanText) || rawLines.length <= 2);
+      !inAnswerBlock &&
+      (/[?？]/.test(cleanText) || isQuestionHeader || totalCount <= 2);
+
+    const isLastLine = lineIdx === totalCount - 1 && pendingOutroLines.length === 0 && !summarizeAtEnd;
+    let finalPostLinePause = 0;
+    let finalPauseKind: PlannedNarrationSegment['pauseKind'] = undefined;
+
+    if (explicitPauseSec > 0) {
+      finalPostLinePause = explicitPauseSec;
+      finalPauseKind = 'thinking';
+    } else if (!isLastLine) {
+      if (isChallengeMode) {
+        if (isQuestionPrompt) {
+          finalPostLinePause = basePause || 5.0;
+          finalPauseKind = 'thinking';
+        } else if (basePause > 0) {
+          finalPostLinePause = 0.55;
+        }
+      } else {
+        finalPostLinePause = basePause;
+        if (basePause >= 1.5) finalPauseKind = 'thinking';
+      }
+    }
+
+    const isTargetForRepeat =
+      chosenSlot === 'secondary' &&
+      targetRepeatCount > 0 &&
+      (detectedLang !== primaryLang ||
+        Boolean(explicitLangTag) ||
+        isBilingualLanguage(config.language) ||
+        config.scriptStyle === 'language_challenge');
 
     const subChunks = splitScriptSentences(cleanText, 165);
-    subChunks.forEach((chunk, chunkIdx) => {
-      const isLastChunk = chunkIdx === subChunks.length - 1;
-      const isLastLine = lineIdx === rawLines.length - 1;
-      let pauseAfter = 0;
-      if (isLastChunk) {
-        if (explicitPauseSec > 0) {
-          pauseAfter = explicitPauseSec;
-        } else if (!isLastLine) {
-          if (isChallengeMode) {
-            pauseAfter = isQuestionPrompt ? basePause || 5.0 : basePause > 0 ? 0.55 : 0;
+    const totalReads = isTargetForRepeat ? 1 + targetRepeatCount : 1;
+
+    for (let readPass = 0; readPass < totalReads; readPass++) {
+      const isLastPass = readPass === totalReads - 1;
+      subChunks.forEach((chunk, chunkIdx) => {
+        const isLastChunk = chunkIdx === subChunks.length - 1;
+        let pauseAfter = 0;
+        let pauseKind: PlannedNarrationSegment['pauseKind'] = undefined;
+        if (isLastChunk) {
+          if (!isLastPass) {
+            pauseAfter = targetRepeatPauseSec;
+            pauseKind = 'repeat';
           } else {
-            pauseAfter = basePause;
+            pauseAfter = finalPostLinePause;
+            pauseKind = finalPauseKind;
           }
         }
-      }
-      segments.push({
-        text: chunk,
-        voiceId: chosenVoice,
-        voiceSlot: chosenSlot,
-        detectedLang,
-        pauseAfterSec: pauseAfter,
+        segments.push({
+          text: chunk,
+          voiceId: chosenVoice,
+          voiceSlot: chosenSlot,
+          detectedLang,
+          pauseAfterSec: pauseAfter,
+          pauseKind,
+          segmentKind: 'speech',
+        });
       });
+    }
+  };
+
+  mainLines.forEach((line, idx) => processLine(line, idx, mainLines.length));
+  flushAnswerRecap();
+
+  if (summarizeAtEnd) {
+    const summary = buildVideoEndingSummary({
+      subject: config.subject,
+      language: config.language,
+      scriptStyle: config.scriptStyle,
+      primaryLang,
+      questions: collectedQuestions,
+      targetHighlights: collectedTargetHighlights,
+      sourceHighlights: collectedSourceHighlights,
     });
-  });
+    if (summary) {
+      if (segments.length > 0 && segments[segments.length - 1].pauseAfterSec < 0.7) {
+        segments[segments.length - 1].pauseAfterSec = 0.7;
+        segments[segments.length - 1].pauseKind = 'recap';
+      }
+      const mappedVoice = getFallbackVoiceForLangCode(
+        summary.voiceLang,
+        primaryVoice,
+        secondaryVoice
+      );
+      const sumChunks = splitScriptSentences(summary.text, 165);
+      sumChunks.forEach((chunk, ci) => {
+        segments.push({
+          text: chunk,
+          voiceId: mappedVoice.voiceId,
+          voiceSlot: mappedVoice.slot,
+          detectedLang: summary.voiceLang,
+          pauseAfterSec:
+            ci === sumChunks.length - 1 && pendingOutroLines.length > 0 ? 0.5 : 0,
+          pauseKind:
+            ci === sumChunks.length - 1 && pendingOutroLines.length > 0 ? 'recap' : undefined,
+          segmentKind: 'summary',
+        });
+      });
+    }
+  }
+
+  if (pendingOutroLines.length > 0) {
+    inAnswerBlock = false;
+    pendingOutroLines.forEach((line, idx) =>
+      processLine(line, idx, pendingOutroLines.length)
+    );
+  }
 
   return segments;
 }
@@ -1652,6 +1990,85 @@ export function validateRenderConfig(config: RenderJobConfig): string | null {
     return 'Cỡ chữ phụ đề hợp lệ từ 24px đến 80px.';
   }
   return null;
+}
+
+export const RANDOM_XFADE_POOL = [
+  'fade',
+  'dissolve',
+  'slideleft',
+  'slideright',
+  'wipeleft',
+  'wiperight',
+  'smoothleft',
+  'smoothright',
+  'circleopen',
+  'radial',
+  'fadeblack',
+  'horzopen',
+  'vertopen',
+] as const;
+
+export function resolveXfadeTransition(
+  mode: VideoTransitionMode,
+  cutIndex: number,
+  seed = 1337
+): string {
+  if (mode === 'none') return 'none';
+  if (mode === 'slide') return 'slideleft';
+  if (mode === 'random') {
+    const idx = Math.abs((seed * 31 + cutIndex * 17) % RANDOM_XFADE_POOL.length);
+    return RANDOM_XFADE_POOL[idx];
+  }
+  return mode;
+}
+
+export function slugifyOutputFilename(subject: string, fallback = 'video_ngan'): string {
+  const raw = subject.trim();
+  if (!raw) return fallback;
+
+  // Transliterate Vietnamese characters to clean ASCII while preserving CJK if no Latin words exist
+  const noVi = raw
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  const cleaned = noVi
+    .replace(/[^a-zA-Z0-9\u3040-\u30ff\u4e00-\u9faf\s_-]/g, ' ')
+    .trim()
+    .replace(/[\s-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+
+  if (!cleaned) return fallback;
+  return cleaned.slice(0, 56).replace(/_+$/g, '') || fallback;
+}
+
+export function normalizeOutputSubdir(input?: string): string {
+  const raw = (input ?? '').trim().replace(/\\/g, '/');
+  if (!raw || raw === '.' || raw === '/' || raw === 'output' || raw === './output') {
+    return 'output';
+  }
+  const cleanSegments = raw
+    .split('/')
+    .map((seg) =>
+      seg
+        .replace(/đ/g, 'd')
+        .replace(/Đ/g, 'D')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '')
+    )
+    .filter((seg) => seg && seg !== '.' && seg !== '..');
+
+  if (cleanSegments.length === 0) return 'output';
+  if (cleanSegments[0].toLowerCase() === 'output') {
+    return cleanSegments.join('/');
+  }
+  return ['output', ...cleanSegments].join('/');
 }
 
 export function buildMediaClipsPlan(

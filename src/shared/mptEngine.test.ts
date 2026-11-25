@@ -23,9 +23,13 @@ import {
   hexToAssBgr,
   isBilingualLanguage,
   isKnownPresetSubject,
+  normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
   planNarrationSegments,
+  RANDOM_XFADE_POOL,
+  resolveXfadeTransition,
   safeParseJsonResponse,
+  slugifyOutputFilename,
   splitCueIntoShortSubCues,
   splitScriptSentences,
   stripNarrationTags,
@@ -530,5 +534,127 @@ test('buildCountdownCues, splitCueIntoShortSubCues, and 5s smart learning pacing
   assert.ok(ass.includes('Dialogue: 1,0:00:10.00,0:00:11.00,Countdown,,0,0,0,,'));
   assert.ok(ass.includes('5'));
 });
+
+test('planNarrationSegments supports Q&A multi-sentence interview scripts with target repeat, full answer recap, and ending summary', () => {
+  const interviewScript = [
+    'Q: あなたの長所と短所を教えてください。',
+    'English: Please tell me your strengths and weaknesses.',
+    '',
+    'A: 私の長所は積極性です。',
+    'English: My strength is my proactive nature.',
+    '学生時代、スピーチ大会やサークルの成果発表会にも積極的に参加しました。',
+    'English: During my student days, I actively participated in speech contests and club presentation events.',
+    '短所は周りの人にも積極性を求めるところです。',
+    'English: My weakness is that I also demand proactiveness from those around me.',
+    'ですから、サークルでは、先に相手の都合や希望を聞いて調整するように気をつけていました。',
+    'English: Therefore, in my club, I was careful to first ask about the other person\'s circumstances and wishes, and then adjust accordingly.',
+  ].join('\n');
+
+  assert.equal(stripNarrationTags('Q: あなたの長所と短所を教えてください。'), 'あなたの長所と短所を教えてください。');
+  assert.equal(stripNarrationTags('English: Please tell me your strengths and weaknesses.'), 'Please tell me your strengths and weaknesses.');
+
+  const segs = planNarrationSegments({
+    subject: 'Phỏng vấn điểm mạnh điểm yếu Nhật - Anh',
+    script: interviewScript,
+    language: 'ja_en',
+    scriptStyle: 'language_challenge',
+    voiceId: 'ja-JP-NanamiNeural',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'en-US-JennyNeural',
+    pauseBetweenLinesSec: 5,
+    targetRepeatCount: 1,
+    targetRepeatPauseSec: 2,
+    fullAnswerRecapMode: 'target_full',
+    summarizeAtEnd: true,
+  });
+
+  // Every English translation line should be read twice (1 initial + 1 repeat) with a 2s repeat pause
+  const firstEnHits = segs.filter(
+    (s) => s.segmentKind === 'speech' && s.text === 'Please tell me your strengths and weaknesses.'
+  );
+  assert.equal(firstEnHits.length, 2);
+  assert.equal(firstEnHits[0].pauseAfterSec, 2);
+  assert.equal(firstEnHits[0].pauseKind, 'repeat');
+  assert.equal(firstEnHits[0].voiceId, 'en-US-JennyNeural');
+
+  // Full answer recap should contain all 4 English answer sentences joined together
+  const recapSegs = segs.filter((s) => s.segmentKind === 'recap');
+  assert.ok(recapSegs.length >= 2);
+  const recapJoined = recapSegs.map((s) => s.text).join(' ');
+  assert.ok(recapJoined.includes('My strength is my proactive nature.'));
+  assert.ok(recapJoined.includes('During my student days'));
+  assert.ok(recapJoined.includes('My weakness is'));
+  assert.ok(recapJoined.includes('Therefore, in my club'));
+
+  // Ending summary should be appended
+  const summarySegs = segs.filter((s) => s.segmentKind === 'summary');
+  assert.ok(summarySegs.length >= 1);
+  assert.ok(summarySegs[0].text.includes('今日のまとめ'));
+});
+
+test('planNarrationSegments supports 2x target repeats and knowledge ending summary', () => {
+  const segs = planNarrationSegments({
+    subject: 'Bí ẩn đại dương',
+    script: [
+      'Hơn 80% đại dương vẫn chưa được khám phá.',
+      'Nhiều loài sứa biển có khả năng tự phát sáng trong bóng tối.',
+      'Theo dõi kênh để khám phá thêm nhé!',
+    ].join('\n'),
+    language: 'vi',
+    scriptStyle: 'curious_facts',
+    voiceId: 'vi-VN-HoaiMyNeural',
+    pauseBetweenLinesSec: 0,
+    summarizeAtEnd: true,
+  });
+
+  const summaryIdx = segs.findIndex((s) => s.segmentKind === 'summary');
+  assert.ok(summaryIdx > 0);
+  assert.ok(summaryIdx < segs.length - 1, 'Summary should appear right before the outro CTA');
+  assert.ok(segs[summaryIdx].text.includes('Tóm tắt kiến thức hôm nay'));
+
+  const doubleRepeat = planNarrationSegments({
+    script: '[VI] Xin chào! [PAUSE]\n[EN] Hello there!',
+    language: 'bilingual',
+    scriptStyle: 'language_challenge',
+    voiceId: 'vi-VN-HoaiMyNeural',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'en-US-JennyNeural',
+    pauseBetweenLinesSec: 3,
+    targetRepeatCount: 2,
+    targetRepeatPauseSec: 2.5,
+  });
+  const enReads = doubleRepeat.filter((s) => s.text === 'Hello there!');
+  assert.equal(enReads.length, 3);
+  assert.equal(enReads[0].pauseAfterSec, 2.5);
+  assert.equal(enReads[1].pauseAfterSec, 2.5);
+  assert.equal(enReads[0].pauseKind, 'repeat');
+});
+
+test('resolveXfadeTransition, slugifyOutputFilename, and normalizeOutputSubdir work cleanly', () => {
+  assert.equal(resolveXfadeTransition('none', 0), 'none');
+  assert.equal(resolveXfadeTransition('slide', 0), 'slideleft');
+  assert.equal(resolveXfadeTransition('circleopen', 0), 'circleopen');
+  const r0 = resolveXfadeTransition('random', 0, 100);
+  const r1 = resolveXfadeTransition('random', 1, 100);
+  assert.ok((RANDOM_XFADE_POOL as readonly string[]).includes(r0));
+  assert.ok((RANDOM_XFADE_POOL as readonly string[]).includes(r1));
+  assert.notEqual(r0, r1);
+
+  assert.equal(
+    slugifyOutputFilename('Bí ẩn đại dương sâu thẳm chưa từng được giải mã'),
+    'bi_an_dai_duong_sau_tham_chua_tung_duoc_giai_ma'
+  );
+  assert.equal(
+    slugifyOutputFilename('Phản xạ 5s: "Hãy cẩn thận với cô ấy!"'),
+    'phan_xa_5s_hay_can_than_voi_co_ay'
+  );
+  assert.equal(slugifyOutputFilename('   '), 'video_ngan');
+
+  assert.equal(normalizeOutputSubdir(''), 'output');
+  assert.equal(normalizeOutputSubdir('output'), 'output');
+  assert.equal(normalizeOutputSubdir('hoc_tieng_anh'), 'output/hoc_tieng_anh');
+  assert.equal(normalizeOutputSubdir('output/phong_van/../bi_mat'), 'output/phong_van/bi_mat');
+});
+
 
 

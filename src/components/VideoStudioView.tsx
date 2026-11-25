@@ -9,6 +9,8 @@ import {
   Download,
   ExternalLink,
   Film,
+  Folder,
+  FolderPlus,
   Image as ImageIcon,
   Loader2,
   RefreshCw,
@@ -24,6 +26,7 @@ import {
 import {
   BgmPreset,
   CompletedVideoRecord,
+  FullAnswerRecapMode,
   GroundingSource,
   LanguageCode,
   LlmProvider,
@@ -60,14 +63,52 @@ import {
   hasCjkChars,
   isBilingualLanguage,
   isKnownPresetSubject,
+  normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
   safeParseJsonResponse,
+  slugifyOutputFilename,
   splitCueIntoShortSubCues,
   splitScriptSentences,
   stripNarrationTags,
 } from '../shared/mptEngine';
 import { TopicDiscoveryBar } from './TopicDiscoveryBar';
 import { SubtitlePreviewCaption } from './SubtitlePreviewCaption';
+
+const SUBTITLE_COLOR_THEMES: Array<{
+  name: string;
+  textColor: string;
+  highlightColor: string;
+  strokeColor: string;
+}> = [
+  { name: 'Trắng Vàng Điện Ảnh', textColor: '#FFFFFF', highlightColor: '#FACC15', strokeColor: '#0F172A' },
+  { name: 'Xanh Ngọc Hiện Đại', textColor: '#F8FAFC', highlightColor: '#2DD4BF', strokeColor: '#0F172A' },
+  { name: 'Hồng San Hô Nổi Bật', textColor: '#FFF1F2', highlightColor: '#FB7185', strokeColor: '#1E1B4B' },
+  { name: 'Kem Ấm Hoàng Hôn', textColor: '#FEF3C7', highlightColor: '#FB923C', strokeColor: '#1C1917' },
+  { name: 'Tím Lavender Sáng Tạo', textColor: '#F5F3FF', highlightColor: '#C084FC', strokeColor: '#1E1B4B' },
+  { name: 'Xanh Bầu Trời Tươi Mát', textColor: '#F0F9FF', highlightColor: '#38BDF8', strokeColor: '#0C4A6E' },
+];
+
+const TEXT_COLOR_SWATCHES = [
+  '#FFFFFF',
+  '#FEF3C7',
+  '#FACC15',
+  '#38BDF8',
+  '#2DD4BF',
+  '#4ADE80',
+  '#FB7185',
+  '#C084FC',
+];
+
+const KARAOKE_COLOR_SWATCHES = [
+  '#FACC15',
+  '#2DD4BF',
+  '#38BDF8',
+  '#4ADE80',
+  '#FB7185',
+  '#C084FC',
+  '#FB923C',
+  '#F472B6',
+];
 
 interface VideoStudioViewProps {
   studioTab: StudioTab;
@@ -136,6 +177,59 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const [captionReplayNonce, setCaptionReplayNonce] = useState(0);
   const [previewCountdown, setPreviewCountdown] = useState<number | null>(null);
   const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
+
+  const [outputFolders, setOutputFolders] = useState<string[]>(['output']);
+  const [outputRootAbsPath, setOutputRootAbsPath] = useState<string>('');
+  const [newFolderInput, setNewFolderInput] = useState('');
+  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
+
+  const loadOutputFolders = async () => {
+    try {
+      const res = await fetch('/api/outputs/folders');
+      if (res.ok) {
+        const data = await safeParseJsonResponse<{
+          rootAbsPath?: string;
+          folders?: string[];
+        }>(res, 'Lỗi đọc danh sách thư mục output.');
+        if (Array.isArray(data.folders) && data.folders.length > 0) {
+          setOutputFolders(data.folders);
+        }
+        if (data.rootAbsPath) {
+          setOutputRootAbsPath(data.rootAbsPath);
+        }
+      }
+    } catch {
+      // Ignore gracefully
+    }
+  };
+
+  useEffect(() => {
+    void loadOutputFolders();
+  }, []);
+
+  const handleCreateOutputFolder = async () => {
+    const clean = newFolderInput.trim();
+    if (!clean) return;
+    try {
+      const res = await fetch('/api/outputs/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: clean }),
+      });
+      if (res.ok) {
+        const data = await safeParseJsonResponse<{ folder: string; folders: string[] }>(
+          res,
+          'Không tạo được thư mục.'
+        );
+        setOutputFolders(data.folders);
+        onChangeConfig({ outputDir: data.folder });
+        setNewFolderInput('');
+        setShowNewFolderInput(false);
+      }
+    } catch {
+      // Ignore gracefully
+    }
+  };
 
   const stopCountdownPreview = () => {
     if (countdownTimerRef.current !== null) {
@@ -616,6 +710,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          subject: config.subject,
           text: sampleText,
           script: config.script,
           language: config.language,
@@ -627,6 +722,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             config.secondaryVoiceId ?? getDefaultSecondaryVoiceForLanguage(config.language),
           pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 0,
           clockTickEnabled: config.clockTickEnabled !== false,
+          targetRepeatCount: config.targetRepeatCount ?? 0,
+          targetRepeatPauseSec: config.targetRepeatPauseSec ?? 2,
+          fullAnswerRecapMode: config.fullAnswerRecapMode ?? 'off',
+          summarizeAtEnd: Boolean(config.summarizeAtEnd),
           ttsProvider: config.ttsProvider,
           voiceRate: config.voiceRate,
         }),
@@ -670,10 +769,20 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     });
   };
 
-  const toDownloadUrl = (fileUrl: string, downloadName: string): string => {
+  const toDownloadUrl = (fileUrl: string, downloadName: string, savedPath?: string): string => {
+    if (savedPath || fileUrl.startsWith('/files/output/')) {
+      const targetPath = savedPath || fileUrl.replace(/^\//, '');
+      return `/api/download-output?path=${encodeURIComponent(targetPath)}&name=${encodeURIComponent(downloadName)}`;
+    }
     const filename = fileUrl.split('/').pop() || downloadName;
     return `/api/download/${encodeURIComponent(filename)}?name=${encodeURIComponent(downloadName)}`;
   };
+
+  const resolvedOutputDir = normalizeOutputSubdir(config.outputDir);
+  const expectedBaseFilename = slugifyOutputFilename(
+    config.outputFilename?.trim() || config.subject,
+    'video_ngan'
+  );
 
   const activeBgmUrl =
     config.bgmPreset === 'none'
@@ -1304,6 +1413,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   Video/Ảnh tải lên từ máy ({uploadedVisuals.length} tệp)
                 </option>
               </select>
+              <p className="text-[11px] text-slate-500 mt-1 leading-snug">
+                B-roll là video/ảnh nền minh họa chạy sau chữ. Nên chọn <strong>Mixkit Free</strong> để có video thật chuyển động mượt, hoặc <strong>B-roll HD + AI</strong> khi cần ảnh sát nội dung từng câu.
+              </p>
             </div>
 
             <div>
@@ -1367,9 +1479,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 <option value="sequential">Tự động cắt nhịp ~3s khớp từng câu thoại</option>
                 <option value="random">Cắt đảo ngẫu nhiên theo thời lượng cố định</option>
               </select>
+              <p className="text-[11px] text-slate-500 mt-1 leading-snug">
+                Pacing là tốc độ &amp; cách đổi cảnh: <strong>Khớp từng câu</strong> tự động đổi cảnh theo nhịp đọc; <strong>Đảo ngẫu nhiên</strong> cắt đều theo số giây cố định.
+              </p>
             </div>
 
-            <div>
+            <div className="sm:col-span-2">
               <label htmlFor="mpt-transition" className="block text-xs font-medium text-slate-700 mb-1">
                 Hiệu ứng chuyển cảnh
               </label>
@@ -1381,8 +1496,16 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 }
                 className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
               >
+                <option value="random">Ngẫu nhiên đa dạng nhiều hiệu ứng (Mặc định)</option>
                 <option value="fade">Chuyển mượt (Crossfade 0.3s)</option>
+                <option value="dissolve">Tan biến mềm mại (Dissolve)</option>
                 <option value="slide">Trượt ngang (Slide)</option>
+                <option value="smoothleft">Trượt êm điện ảnh (Smooth Slide)</option>
+                <option value="wipeleft">Quét ngang chuyển cảnh (Wipe)</option>
+                <option value="circleopen">Mở vòng tròn (Circle Open)</option>
+                <option value="radial">Xoay tia tròn (Radial)</option>
+                <option value="pixelize">Chuyển cảnh điểm ảnh (Pixelize)</option>
+                <option value="fadeblack">Chuyển qua tối điện ảnh (Fade Black)</option>
                 <option value="none">Cắt thẳng (Jump Cut nhanh)</option>
               </select>
             </div>
@@ -1615,8 +1738,94 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       </span>
                     </label>
                   </div>
+
+                  <div>
+                    <label
+                      htmlFor="mpt-target-repeat-count"
+                      className="block text-xs font-medium text-slate-700 mb-1"
+                    >
+                      Lặp lại khi đọc sang ngôn ngữ đích
+                    </label>
+                    <select
+                      id="mpt-target-repeat-count"
+                      value={config.targetRepeatCount ?? 0}
+                      onChange={(e) =>
+                        onChangeConfig({ targetRepeatCount: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                    >
+                      <option value={0}>Đọc 1 lần (Không lặp)</option>
+                      <option value={1}>Đọc 2 lần (Lặp thêm 1 lần · Khuyên dùng)</option>
+                      <option value={2}>Đọc 3 lần (Lặp thêm 2 lần)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <label htmlFor="mpt-target-repeat-pause" className="font-medium text-slate-700">
+                        Nghỉ giữa các lần lặp câu dịch
+                      </label>
+                      <span className="font-mono tabular-nums text-slate-900">
+                        {(config.targetRepeatPauseSec ?? 2).toFixed(1).replace(/\.0$/, '')}s
+                      </span>
+                    </div>
+                    <input
+                      id="mpt-target-repeat-pause"
+                      type="range"
+                      min={0.5}
+                      max={5}
+                      step={0.5}
+                      value={config.targetRepeatPauseSec ?? 2}
+                      onChange={(e) =>
+                        onChangeConfig({ targetRepeatPauseSec: Number(e.target.value) })
+                      }
+                      className="w-full accent-slate-900"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label
+                      htmlFor="mpt-full-answer-recap"
+                      className="block text-xs font-medium text-slate-700 mb-1"
+                    >
+                      Đọc lại cả đoạn câu trả lời (khi câu trả lời gồm nhiều câu ghép lại)
+                    </label>
+                    <select
+                      id="mpt-full-answer-recap"
+                      value={config.fullAnswerRecapMode ?? 'off'}
+                      onChange={(e) =>
+                        onChangeConfig({
+                          fullAnswerRecapMode: e.target.value as FullAnswerRecapMode,
+                        })
+                      }
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+                    >
+                      <option value="off">Chỉ đọc từng câu (Không ghép lại cả đoạn)</option>
+                      <option value="target_full">
+                        Đọc liền mạch cả đoạn câu trả lời bằng ngôn ngữ đích (Phỏng vấn / Hội thoại)
+                      </option>
+                      <option value="both_full">
+                        Đọc liền mạch cả đoạn ngôn ngữ gốc + ngôn ngữ đích
+                      </option>
+                    </select>
+                  </div>
                 </div>
               )}
+            </div>
+
+            <div className="sm:col-span-2 px-3 py-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200">
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-900 cursor-pointer">
+                <input
+                  id="mpt-summarize-end"
+                  type="checkbox"
+                  checked={Boolean(config.summarizeAtEnd)}
+                  onChange={(e) => onChangeConfig({ summarizeAtEnd: e.target.checked })}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                />
+                <span>
+                  Tóm tắt nội dung đã học trước khi kết thúc video (tóm tắt câu hỏi phỏng vấn / kiến thức chính)
+                </span>
+              </label>
             </div>
 
             <div>
@@ -1653,8 +1862,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 id="mpt-bgm-vol"
                 type="range"
                 min={0}
-                max={0.7}
-                step={0.05}
+                max={0.5}
+                step={0.01}
                 value={config.bgmVolume}
                 onChange={(e) => onChangeConfig({ bgmVolume: Number(e.target.value) })}
                 className="w-full accent-slate-900"
@@ -1664,7 +1873,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
               <div>
                 <label htmlFor="mpt-bgm" className="block text-xs font-medium text-slate-700 mb-1">
-                  Nhạc nền miễn phí (BGM)
+                  Nhạc nền nhẹ miễn phí (BGM)
                 </label>
                 <select
                   id="mpt-bgm"
@@ -1689,9 +1898,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   }}
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
                 >
-                  <option value="lofi_chill">Lofi Chill nhẹ nhàng</option>
-                  <option value="tech_upbeat">Công nghệ nhịp điệu nhanh</option>
-                  <option value="cinema_ambient">Điện ảnh sâu lắng</option>
+                  <option value="lofi_chill">Nhạc nhẹ Lofi êm dịu (Mặc định · 3%)</option>
+                  <option value="soft_piano">Nhạc nhẹ Piano sâu lắng</option>
+                  <option value="cinema_ambient">Nhạc nhẹ không gian điện ảnh</option>
+                  <option value="tech_upbeat">Công nghệ nhịp điệu sáng tạo</option>
                   <option value="none">Không dùng nhạc nền</option>
                   {uploadedAudios.map((aud) => (
                     <option key={aud.id} value={`custom:${aud.id}`}>
@@ -1834,12 +2044,53 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-3">
+              <div className="sm:col-span-2 space-y-2">
+                <span className="block text-xs font-medium text-slate-700">
+                  Bảng màu chữ đẹp gợi ý (bấm chọn nhanh)
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {SUBTITLE_COLOR_THEMES.map((theme) => {
+                    const isActive =
+                      config.subtitle.textColor.toUpperCase() === theme.textColor &&
+                      (config.subtitle.highlightColor || '').toUpperCase() === theme.highlightColor;
+                    return (
+                      <button
+                        key={theme.name}
+                        type="button"
+                        onClick={() =>
+                          updateSubtitle({
+                            textColor: theme.textColor,
+                            highlightColor: theme.highlightColor,
+                            strokeColor: theme.strokeColor,
+                          })
+                        }
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors ${
+                          isActive
+                            ? 'border-slate-900 bg-slate-900 text-white'
+                            : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span
+                          className="w-2.5 h-2.5 rounded-full border border-black/20"
+                          style={{ backgroundColor: theme.textColor }}
+                        />
+                        <span
+                          className="w-2.5 h-2.5 rounded-full border border-black/20 -ml-2"
+                          style={{ backgroundColor: theme.highlightColor }}
+                        />
+                        <span>{theme.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-3">
                 <label htmlFor="mpt-sub-color" className="text-xs font-medium text-slate-700">
-                  Màu chữ
+                  Màu chữ chính
                 </label>
-                <div className="flex items-center gap-2">
-                  {['#FFFFFF', '#FACC15', '#38BDF8'].map((c) => (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {TEXT_COLOR_SWATCHES.map((c) => (
                     <button
                       key={c}
                       type="button"
@@ -1876,12 +2127,12 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 />
               </div>
               {config.subtitle.effect === 'karaoke' && (
-                <div className="sm:col-span-2 flex items-center justify-between gap-3 pt-1">
+                <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-3 pt-1">
                   <label htmlFor="mpt-sub-highlight" className="text-xs font-medium text-slate-700">
                     Màu chữ chạy Karaoke
                   </label>
-                  <div className="flex items-center gap-2">
-                    {['#FACC15', '#38BDF8', '#4ADE80', '#FB7185'].map((c) => (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {KARAOKE_COLOR_SWATCHES.map((c) => (
                       <button
                         key={c}
                         type="button"
@@ -2218,6 +2469,85 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             </div>
           )}
 
+          <div
+            data-testid="output-destination-panel"
+            className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="mpt-output-dir" className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                <Folder className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
+                <span>Thư mục xuất file (Output Folder)</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowNewFolderInput((v) => !v)}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-700 hover:underline"
+              >
+                <FolderPlus className="w-3 h-3" aria-hidden="true" />
+                <span>Tạo thư mục con</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <select
+                id="mpt-output-dir"
+                value={
+                  outputFolders.includes(resolvedOutputDir) ? resolvedOutputDir : '__custom__'
+                }
+                onChange={(e) => {
+                  if (e.target.value !== '__custom__') {
+                    onChangeConfig({ outputDir: e.target.value });
+                  }
+                }}
+                className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
+              >
+                {outputFolders.map((folder) => (
+                  <option key={folder} value={folder}>
+                    {folder}/ {folder === 'output' ? '(Thư mục gốc dự án)' : ''}
+                  </option>
+                ))}
+                {!outputFolders.includes(resolvedOutputDir) && (
+                  <option value="__custom__">{resolvedOutputDir}/</option>
+                )}
+              </select>
+
+              <input
+                id="mpt-output-filename"
+                type="text"
+                value={config.outputFilename ?? ''}
+                onChange={(e) => onChangeConfig({ outputFilename: e.target.value })}
+                placeholder={`Tự đặt theo bài: ${expectedBaseFilename}`}
+                aria-label="Tên file xuất (để trống để tự đặt theo nội dung bài)"
+                className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-md bg-white text-slate-900"
+              />
+            </div>
+
+            {showNewFolderInput && (
+              <div className="flex items-center gap-1.5">
+                <input
+                  id="mpt-new-folder"
+                  type="text"
+                  value={newFolderInput}
+                  onChange={(e) => setNewFolderInput(e.target.value)}
+                  placeholder="VD: phong_van_nhat_anh hoặc bai_hoc_1"
+                  className="flex-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md text-slate-900"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleCreateOutputFolder()}
+                  className="px-2.5 py-1 text-xs font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 whitespace-nowrap"
+                >
+                  Tạo &amp; Chọn
+                </button>
+              </div>
+            )}
+
+            <div className="text-[11px] font-mono text-slate-600 truncate">
+              Lưu tại: <span className="text-slate-900 font-medium">{resolvedOutputDir}/{expectedBaseFilename}.mp4</span>
+              {outputRootAbsPath ? ` (${outputRootAbsPath})` : ''}
+            </div>
+          </div>
+
           <button
             type="button"
             disabled={isRendering || !config.script.trim()}
@@ -2278,13 +2608,14 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
             className="bg-white border border-slate-200 rounded-xl p-5 space-y-3"
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0">
                 <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
-                <div>
+                <div className="min-w-0">
                   <h4 className="text-sm font-semibold text-slate-900">Video MP4 đã xuất xong</h4>
-                  <p className="text-xs text-slate-500 tabular-nums">
+                  <p className="text-xs text-slate-500 tabular-nums truncate">
                     {(renderJob.durationSec ?? 0).toFixed(1)}s ·{' '}
                     {((renderJob.fileSizeBytes ?? 0) / 1024).toFixed(0)} KB
+                    {renderJob.savedOutputPath ? ` · ${renderJob.savedOutputPath}` : ''}
                   </p>
                 </div>
               </div>
@@ -2292,16 +2623,24 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               <div className="flex items-center gap-2">
                 {renderJob.srtUrl && (
                   <a
-                    href={toDownloadUrl(renderJob.srtUrl, `phu_de_${renderJob.jobId}.srt`)}
-                    download={`phu_de_${renderJob.jobId}.srt`}
+                    href={toDownloadUrl(
+                      renderJob.srtUrl,
+                      (renderJob.outputFilename || `${expectedBaseFilename}.mp4`).replace(/\.mp4$/i, '.srt'),
+                      renderJob.savedSrtPath
+                    )}
+                    download={(renderJob.outputFilename || `${expectedBaseFilename}.mp4`).replace(/\.mp4$/i, '.srt')}
                     className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 whitespace-nowrap"
                   >
                     Tải .SRT
                   </a>
                 )}
                 <a
-                  href={toDownloadUrl(renderJob.videoUrl, `moneyprinter_vn_${renderJob.jobId}.mp4`)}
-                  download={`moneyprinter_vn_${renderJob.jobId}.mp4`}
+                  href={toDownloadUrl(
+                    renderJob.videoUrl,
+                    renderJob.outputFilename || `${expectedBaseFilename}.mp4`,
+                    renderJob.savedOutputPath
+                  )}
+                  download={renderJob.outputFilename || `${expectedBaseFilename}.mp4`}
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 whitespace-nowrap"
                 >
                   <Download className="w-3.5 h-3.5" aria-hidden="true" />
@@ -2346,33 +2685,38 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               <span>Bản xuất gần đây ({recentHistory.length})</span>
             </div>
             <div className="divide-y divide-slate-100">
-              {recentHistory.slice(0, 4).map((rec) => (
-                <div key={rec.jobId} className="py-2 flex items-center justify-between gap-2 text-xs">
-                  <div className="min-w-0">
-                    <div className="font-medium text-slate-900 truncate">{rec.subject}</div>
-                    <div className="text-[11px] text-slate-500 tabular-nums">
-                      {rec.aspectRatio} · {rec.durationSec.toFixed(1)}s
+              {recentHistory.slice(0, 4).map((rec) => {
+                const dlName =
+                  rec.outputFilename || `${slugifyOutputFilename(rec.subject, rec.jobId)}.mp4`;
+                return (
+                  <div key={rec.jobId} className="py-2 flex items-center justify-between gap-2 text-xs">
+                    <div className="min-w-0">
+                      <div className="font-medium text-slate-900 truncate">{rec.subject}</div>
+                      <div className="text-[11px] text-slate-500 tabular-nums truncate">
+                        {rec.aspectRatio} · {rec.durationSec.toFixed(1)}s
+                        {rec.savedOutputPath ? ` · ${rec.savedOutputPath}` : ''}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <a
+                        href={toDownloadUrl(rec.videoUrl, dlName, rec.savedOutputPath)}
+                        download={dlName}
+                        className="text-indigo-700 font-medium hover:underline whitespace-nowrap"
+                      >
+                        Tải MP4
+                      </a>
+                      <button
+                        type="button"
+                        aria-label={`Xóa bản xuất ${rec.subject}`}
+                        onClick={() => onDeleteHistory(rec.jobId)}
+                        className="text-slate-400 hover:text-rose-600"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <a
-                      href={toDownloadUrl(rec.videoUrl, `moneyprinter_${rec.jobId}.mp4`)}
-                      download={`moneyprinter_${rec.jobId}.mp4`}
-                      className="text-indigo-700 font-medium hover:underline whitespace-nowrap"
-                    >
-                      Tải MP4
-                    </a>
-                    <button
-                      type="button"
-                      aria-label={`Xóa bản xuất ${rec.subject}`}
-                      onClick={() => onDeleteHistory(rec.jobId)}
-                      className="text-slate-400 hover:text-rose-600"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         )}

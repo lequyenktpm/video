@@ -24,8 +24,11 @@ import {
   hasCjkChars,
   hasVietnameseDiacritics,
   isBilingualLanguage,
+  normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
   planNarrationSegments,
+  resolveXfadeTransition,
+  slugifyOutputFilename,
   splitCueIntoShortSubCues,
   splitScriptSentences,
   stripNarrationTags,
@@ -68,15 +71,68 @@ const ROOT_DIR = process.cwd();
 const DATA_DIR = path.join(ROOT_DIR, '.mpt_data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const OUTPUTS_DIR = path.join(DATA_DIR, 'outputs');
+const PROJECT_OUTPUT_ROOT = path.join(ROOT_DIR, 'output');
 const CACHE_DIR = path.join(DATA_DIR, 'cache');
 const BGM_DIR = path.join(DATA_DIR, 'bgm');
 
-for (const dir of [DATA_DIR, UPLOADS_DIR, OUTPUTS_DIR, CACHE_DIR, BGM_DIR]) {
+for (const dir of [DATA_DIR, UPLOADS_DIR, OUTPUTS_DIR, PROJECT_OUTPUT_ROOT, CACHE_DIR, BGM_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
 function sanitizeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function sanitizeDownloadFilename(name: string): string {
+  const cleaned = name.replace(/[/\\:*?"<>|\r\n]/g, '_').trim();
+  return cleaned || 'video_ngan.mp4';
+}
+
+function resolveProjectOutputDir(rawDir?: string): { relDir: string; absDir: string } {
+  const relDir = normalizeOutputSubdir(rawDir);
+  const absDir = path.resolve(ROOT_DIR, relDir);
+  const resolvedBase = path.resolve(PROJECT_OUTPUT_ROOT);
+  if (absDir !== resolvedBase && !absDir.startsWith(resolvedBase + path.sep)) {
+    return { relDir: 'output', absDir: resolvedBase };
+  }
+  fs.mkdirSync(absDir, { recursive: true });
+  return { relDir, absDir };
+}
+
+function listProjectOutputSubfolders(): string[] {
+  const folders: string[] = ['output'];
+  const walk = (dir: string, relPrefix: string, depth: number) => {
+    if (depth > 2 || !fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        const rel = `${relPrefix}/${entry.name}`;
+        folders.push(rel);
+        walk(path.join(dir, entry.name), rel, depth + 1);
+      }
+    }
+  };
+  walk(PROJECT_OUTPUT_ROOT, 'output', 0);
+  return folders;
+}
+
+function allocateUniqueBaseName(absDir: string, rawBase: string): string {
+  const base = rawBase || 'video_ngan';
+  if (
+    !fs.existsSync(path.join(absDir, `${base}.mp4`)) &&
+    !fs.existsSync(path.join(absDir, `${base}.srt`))
+  ) {
+    return base;
+  }
+  for (let n = 2; n <= 999; n++) {
+    const candidate = `${base}_${n}`;
+    if (
+      !fs.existsSync(path.join(absDir, `${candidate}.mp4`)) &&
+      !fs.existsSync(path.join(absDir, `${candidate}.srt`))
+    ) {
+      return candidate;
+    }
+  }
+  return `${base}_${Date.now()}`;
 }
 
 async function runFfmpeg(args: string[], timeoutMs = 90000): Promise<void> {
@@ -106,18 +162,26 @@ async function probeDurationSec(filePath: string): Promise<number> {
 }
 
 async function ensureBuiltinBgm(): Promise<void> {
-  const tracks: Array<{ file: string; expr: string }> = [
+  const tracks: Array<{ file: string; expr: string; lowpass: number }> = [
     {
       file: 'lofi_chill.mp3',
-      expr: '0.16*sin(2*PI*261.63*t)+0.12*sin(2*PI*329.63*t)+0.10*sin(2*PI*392.00*t)+0.08*sin(2*PI*493.88*t)*(0.6+0.4*sin(2*PI*0.5*t))',
+      expr: '0.14*sin(2*PI*220.00*t)+0.10*sin(2*PI*277.18*t)+0.09*sin(2*PI*329.63*t)+0.06*sin(2*PI*440.00*t)*(0.6+0.4*sin(2*PI*0.35*t))',
+      lowpass: 1150,
+    },
+    {
+      file: 'soft_piano.mp3',
+      expr: '0.16*sin(2*PI*261.63*t)*exp(-0.8*mod(t,2))+0.13*sin(2*PI*329.63*t)*exp(-0.9*mod(t+0.5,2))+0.11*sin(2*PI*392.00*t)*exp(-0.9*mod(t+1,2))+0.08*sin(2*PI*523.25*t)*exp(-1.1*mod(t+1.5,2))',
+      lowpass: 1350,
     },
     {
       file: 'tech_upbeat.mp3',
       expr: '0.15*sin(2*PI*220*t)*(0.5+0.5*sin(2*PI*2*t))+0.12*sin(2*PI*329.63*t)*(0.5+0.5*sin(2*PI*4*t))+0.09*sin(2*PI*440*t)',
+      lowpass: 1800,
     },
     {
       file: 'cinema_ambient.mp3',
       expr: '0.18*sin(2*PI*146.83*t)+0.14*sin(2*PI*220*t)*(0.7+0.3*sin(2*PI*0.25*t))+0.10*sin(2*PI*349.23*t)*(0.6+0.4*sin(2*PI*0.4*t))',
+      lowpass: 1400,
     },
   ];
 
@@ -133,7 +197,7 @@ async function ensureBuiltinBgm(): Promise<void> {
           '-i',
           `aevalsrc=${t.expr}:s=24000:d=24`,
           '-af',
-          'lowpass=f=1800,afade=t=in:st=0:d=1.5,afade=t=out:st=22.5:d=1.5',
+          `lowpass=f=${t.lowpass},afade=t=in:st=0:d=1.8,afade=t=out:st=22.2:d=1.8`,
           '-c:a',
           'libmp3lame',
           '-b:a',
@@ -1991,7 +2055,11 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
 
       if (seg.pauseAfterSec > 0) {
         const pausePath = path.join(workDir, `pause_${i}.mp3`);
-        const useClockTick = config.clockTickEnabled !== false && seg.pauseAfterSec >= 1.5;
+        const isThinkingCountdown =
+          seg.pauseKind !== 'repeat' &&
+          seg.pauseKind !== 'recap' &&
+          seg.pauseAfterSec >= 1.5;
+        const useClockTick = config.clockTickEnabled !== false && isThinkingCountdown;
         if (useClockTick) {
           await createClockTickTockMp3(seg.pauseAfterSec, pausePath);
         } else {
@@ -2000,7 +2068,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         const pauseDur = await probeDurationSec(pausePath);
         audioParts.push(pausePath);
         if (
-          seg.pauseAfterSec >= 1.5 &&
+          isThinkingCountdown &&
           (config.scriptStyle === 'language_challenge' ||
             config.scriptStyle === 'quiz_riddle' ||
             config.clockTickEnabled)
@@ -2198,10 +2266,10 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       throw new Error('Không thể chuẩn hóa các đoạn cảnh quay thành MP4.');
     }
 
-    // 4. Concatenate / xfade clips smoothly
+    // 4. Concatenate / xfade clips smoothly (supporting random & expanded xfade effects)
     const visualTrackPath = path.join(workDir, 'visual_merged.mp4');
-    if (config.transitionMode !== 'none' && normalizedClips.length > 1 && normalizedClips.length <= 14) {
-      const xfadeType = config.transitionMode === 'slide' ? 'slideleft' : 'fade';
+    if (config.transitionMode !== 'none' && normalizedClips.length > 1 && normalizedClips.length <= 24) {
+      const xfadeSeed = Date.now() % 10000;
       const inputs: string[] = [];
       normalizedClips.forEach((c) => {
         inputs.push('-i', c.path);
@@ -2212,6 +2280,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       let currentOffset = normalizedClips[0].baseDur;
 
       for (let i = 1; i < normalizedClips.length; i++) {
+        const xfadeType = resolveXfadeTransition(config.transitionMode, i - 1, xfadeSeed);
         const nextLabel = `[v${i}]`;
         const outLabel = i === normalizedClips.length - 1 ? '[vout]' : nextLabel;
         filterParts.push(
@@ -2270,12 +2339,19 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     // 5. Split long cues into punchy 1-2 line subtitles & mix voiceover + BGM
     updateJob(jobId, { progressPct: 82, stepLabel: 'Đang gắn phụ đề tiếng Việt & trộn nhạc nền...' });
 
+    const { relDir: targetRelDir, absDir: targetAbsDir } = resolveProjectOutputDir(config.outputDir);
+    const rawBaseName = slugifyOutputFilename(
+      config.outputFilename?.trim() || config.subject,
+      jobId
+    );
+    const uniqueBaseName = allocateUniqueBaseName(targetAbsDir, rawBaseName);
+
     const hasCjkSub = cues.some((c) => hasCjkChars(c.text));
     const wrapBudget = getSubtitleWrapBudget(config.subtitle, width, height, hasCjkSub);
     const shortSubCues = splitCueIntoShortSubCues(cues, wrapBudget.maxCueChars);
     const srtContent = buildSrtFromCues(shortSubCues);
-    const srtFilename = `${jobId}.srt`;
-    const srtOutPath = path.join(OUTPUTS_DIR, srtFilename);
+    const srtFilename = `${uniqueBaseName}.srt`;
+    const srtOutPath = path.join(targetAbsDir, srtFilename);
     fs.writeFileSync(srtOutPath, srtContent, 'utf-8');
 
     const assPath = path.join(workDir, 'subtitles.ass');
@@ -2284,6 +2360,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
 
     let bgmPath: string | null = null;
     if (config.bgmPreset === 'lofi_chill') bgmPath = path.join(BGM_DIR, 'lofi_chill.mp3');
+    else if (config.bgmPreset === 'soft_piano') bgmPath = path.join(BGM_DIR, 'soft_piano.mp3');
     else if (config.bgmPreset === 'tech_upbeat') bgmPath = path.join(BGM_DIR, 'tech_upbeat.mp3');
     else if (config.bgmPreset === 'cinema_ambient') bgmPath = path.join(BGM_DIR, 'cinema_ambient.mp3');
     else if (config.bgmPreset === 'custom' && config.customBgmFilename) {
@@ -2294,8 +2371,8 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       bgmPath = null;
     }
 
-    const mp4Filename = `${jobId}.mp4`;
-    const mp4OutPath = path.join(OUTPUTS_DIR, mp4Filename);
+    const mp4Filename = `${uniqueBaseName}.mp4`;
+    const mp4OutPath = path.join(targetAbsDir, mp4Filename);
     const voiceVol = Math.max(0.1, Math.min(2.0, config.voiceVolume));
     const bgmVol = Math.max(0.0, Math.min(1.0, config.bgmVolume));
 
@@ -2364,6 +2441,11 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     const stat = fs.statSync(mp4OutPath);
     const finalDur = await probeDurationSec(mp4OutPath);
 
+    const relSubPath = path.relative(PROJECT_OUTPUT_ROOT, targetAbsDir).replace(/\\/g, '/');
+    const urlPrefix = relSubPath ? `/files/output/${relSubPath.split('/').map(encodeURIComponent).join('/')}` : '/files/output';
+    const savedOutputPath = `${targetRelDir}/${mp4Filename}`;
+    const savedSrtPath = `${targetRelDir}/${srtFilename}`;
+
     updateJob(
       jobId,
       {
@@ -2371,12 +2453,15 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         progressPct: 100,
         stepLabel: 'Hoàn tất xuất video MP4!',
         scenes: scenePreviews,
-        videoUrl: `/files/outputs/${mp4Filename}`,
-        srtUrl: `/files/outputs/${srtFilename}`,
+        videoUrl: `${urlPrefix}/${encodeURIComponent(mp4Filename)}`,
+        srtUrl: `${urlPrefix}/${encodeURIComponent(srtFilename)}`,
+        savedOutputPath,
+        savedSrtPath,
+        outputFilename: mp4Filename,
         durationSec: finalDur,
         fileSizeBytes: stat.size,
       },
-      `Xuất thành công ${mp4Filename} (${(stat.size / 1024).toFixed(0)} KB, ${finalDur.toFixed(1)}s).`
+      `Xuất thành công ${savedOutputPath} (${(stat.size / 1024).toFixed(0)} KB, ${finalDur.toFixed(1)}s).`
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Lỗi không xác định khi xuất video FFmpeg.';
@@ -2431,19 +2516,91 @@ async function startServer() {
       },
     })
   );
+  app.use(
+    '/files/output',
+    express.static(PROJECT_OUTPUT_ROOT, {
+      acceptRanges: true,
+      setHeaders: (res, filePath) => {
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        if (filePath.endsWith('.mp4')) {
+          res.setHeader('Content-Type', 'video/mp4');
+        } else if (filePath.endsWith('.srt')) {
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        }
+      },
+    })
+  );
   app.use('/files/uploads', express.static(UPLOADS_DIR));
   app.use('/files/bgm', express.static(BGM_DIR));
   app.use('/files/cache', express.static(CACHE_DIR));
 
-  // Forced-attachment download endpoint so downloading works reliably inside iframes & browsers
+  // List & create project output folders inside ./output
+  app.get('/api/outputs/folders', (_req, res) => {
+    res.json({
+      rootName: 'output',
+      rootAbsPath: PROJECT_OUTPUT_ROOT,
+      folders: listProjectOutputSubfolders(),
+    });
+  });
+
+  app.post('/api/outputs/folders', (req, res) => {
+    const { relDir } = resolveProjectOutputDir(String(req.body?.folder ?? ''));
+    res.json({
+      folder: relDir,
+      folders: listProjectOutputSubfolders(),
+    });
+  });
+
+  // Forced-attachment download endpoint supporting both legacy outputs and ./output subfolders
+  app.get('/api/download-output', (req, res) => {
+    const rawRel = String(req.query.path ?? '').trim();
+    if (!rawRel) {
+      res.status(400).json({ error: 'Thiếu đường dẫn tệp.' });
+      return;
+    }
+    const cleanRel = rawRel.replace(/^\/+/, '').replace(/\\/g, '/');
+    let fullPath = '';
+    if (cleanRel.startsWith('output/')) {
+      const candidate = path.resolve(ROOT_DIR, cleanRel);
+      const base = path.resolve(PROJECT_OUTPUT_ROOT);
+      if (candidate.startsWith(base + path.sep) && fs.existsSync(candidate)) {
+        fullPath = candidate;
+      }
+    } else if (cleanRel.startsWith('files/output/')) {
+      const sub = decodeURIComponent(cleanRel.replace(/^files\/output\//, ''));
+      const candidate = path.resolve(PROJECT_OUTPUT_ROOT, sub);
+      const base = path.resolve(PROJECT_OUTPUT_ROOT);
+      if (candidate.startsWith(base + path.sep) && fs.existsSync(candidate)) {
+        fullPath = candidate;
+      }
+    }
+    if (!fullPath) {
+      res.status(404).json({ error: 'Không tìm thấy tệp trong thư mục output.' });
+      return;
+    }
+    const requestedName = sanitizeDownloadFilename(
+      String(req.query.name || path.basename(fullPath))
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.download(fullPath, requestedName);
+  });
+
   app.get('/api/download/:filename', (req, res) => {
     const safeFile = sanitizeName(req.params.filename);
-    const fullPath = path.join(OUTPUTS_DIR, safeFile);
-    if (!fs.existsSync(fullPath)) {
+    const legacyPath = path.join(OUTPUTS_DIR, safeFile);
+    const projectPath = path.join(PROJECT_OUTPUT_ROOT, sanitizeDownloadFilename(req.params.filename));
+    const fullPath = fs.existsSync(legacyPath)
+      ? legacyPath
+      : fs.existsSync(projectPath)
+      ? projectPath
+      : '';
+    if (!fullPath) {
       res.status(404).json({ error: 'Không tìm thấy tệp video hoặc phụ đề.' });
       return;
     }
-    const requestedName = sanitizeName(String(req.query.name || safeFile));
+    const requestedName = sanitizeDownloadFilename(String(req.query.name || safeFile));
     res.setHeader('Cache-Control', 'no-store');
     res.download(fullPath, requestedName);
   });
@@ -3147,12 +3304,18 @@ async function startServer() {
     const ttsProvider = (req.body?.ttsProvider ?? 'google_free') as TtsProvider;
     const voiceRate = Number(req.body?.voiceRate ?? 1.0);
 
+    const targetRepeatCount = Number(req.body?.targetRepeatCount ?? 0);
+    const targetRepeatPauseSec = Number(req.body?.targetRepeatPauseSec ?? 2.0);
+    const fullAnswerRecapMode = req.body?.fullAnswerRecapMode ?? 'off';
+    const summarizeAtEnd = Boolean(req.body?.summarizeAtEnd);
+
     const filename = `preview_${Date.now()}.mp3`;
     const outPath = path.join(OUTPUTS_DIR, filename);
 
     try {
       if (dualVoiceEnabled && rawScript) {
         const planned = planNarrationSegments({
+          subject: String(req.body?.subject ?? ''),
           script: rawScript,
           language,
           scriptStyle,
@@ -3160,19 +3323,21 @@ async function startServer() {
           dualVoiceEnabled,
           secondaryVoiceId,
           pauseBetweenLinesSec,
+          targetRepeatCount,
+          targetRepeatPauseSec,
+          fullAnswerRecapMode,
+          summarizeAtEnd,
         });
 
-        // Prefer a Question (pauseAfterSec >= 1.5) + its Answer so the user previews Question + Tick-Tock + Answer!
-        let sampleSegs = planned.slice(0, 2);
-        const firstPauseIdx = planned.findIndex((s) => s.pauseAfterSec >= 1.5);
+        // Prefer a Question (pauseAfterSec >= 1.5) + its Answer (including repeat!) so user hears the exact flow
+        let sampleSegs = planned.slice(0, 3);
+        const firstPauseIdx = planned.findIndex((s) => s.pauseKind === 'thinking' && s.pauseAfterSec >= 1.5);
         if (firstPauseIdx >= 0 && planned[firstPauseIdx]) {
-          const followSeg =
-            planned[firstPauseIdx + 1] ?? planned.find((s) => s.voiceSlot === 'secondary');
-          sampleSegs = followSeg ? [planned[firstPauseIdx], followSeg] : [planned[firstPauseIdx]];
+          sampleSegs = planned.slice(firstPauseIdx, firstPauseIdx + 3);
         } else {
           const firstSecondaryIdx = planned.findIndex((s) => s.voiceSlot === 'secondary');
           if (firstSecondaryIdx >= 2 && planned[0]) {
-            sampleSegs[1] = planned[firstSecondaryIdx];
+            sampleSegs = [planned[0], planned[firstSecondaryIdx]];
           }
         }
 
@@ -3200,12 +3365,12 @@ async function startServer() {
               outPath: segPath,
             });
             parts.push(segPath);
-            if (i === 0 && seg.pauseAfterSec > 0) {
-              const pGap = path.join(previewWorkDir, 'gap.mp3');
-              if (clockTickEnabled && seg.pauseAfterSec >= 1.5) {
+            if (i < sampleSegs.length - 1 && seg.pauseAfterSec > 0) {
+              const pGap = path.join(previewWorkDir, `gap_${i}.mp3`);
+              if (seg.pauseKind === 'thinking' && clockTickEnabled && seg.pauseAfterSec >= 1.5) {
                 await createClockTickTockMp3(Math.min(5, seg.pauseAfterSec), pGap);
               } else {
-                await createSilenceMp3(Math.min(1.5, seg.pauseAfterSec), pGap);
+                await createSilenceMp3(Math.min(3.5, seg.pauseAfterSec), pGap);
               }
               parts.push(pGap);
             }
@@ -3298,10 +3463,17 @@ async function startServer() {
     const builtinBgm: MediaAssetItem[] = [
       {
         id: 'lofi_chill',
-        name: 'Lofi Chill Nhẹ Nhàng (Miễn phí bản quyền)',
+        name: 'Nhạc nhẹ Lofi êm dịu (Miễn phí bản quyền)',
         kind: 'audio',
         source: 'builtin_bgm',
         url: '/files/bgm/lofi_chill.mp3',
+      },
+      {
+        id: 'soft_piano',
+        name: 'Nhạc nhẹ Piano sâu lắng (Miễn phí bản quyền)',
+        kind: 'audio',
+        source: 'builtin_bgm',
+        url: '/files/bgm/soft_piano.mp3',
       },
       {
         id: 'tech_upbeat',
