@@ -38,10 +38,12 @@ import {
   planXfadeMergeBatches,
   RANDOM_XFADE_POOL,
   resolveCountdownCenterY,
+  resolveSmooth2411XfadeTransition,
   resolveXfadeTransition,
   safeParseJsonResponse,
   sanitizeSceneComponentsList,
   slugifyOutputFilename,
+  SMOOTH_2411_XFADE_POOL,
   splitCueIntoShortSubCues,
   splitScriptSentences,
   splitTtsTextChunks,
@@ -56,6 +58,7 @@ import {
   build2411CardSpecForLine,
   build2411CardSvg,
   buildContextualSceneComponentsForScript,
+  isGenericSpeakerLabel,
   resolveStudio2411AnimationIn,
   STUDIO_2411_ANIMATION_OPTIONS,
   STUDIO_2411_THEMES,
@@ -1282,7 +1285,7 @@ test('STUDIO_2411_THEMES, build2411CardSpecForLine, and build2411CardSvg build n
     height: 1280,
   });
   assert.ok(svg.startsWith('<svg '));
-  assert.ok(svg.includes('LISTEN &amp; TRANSLATE'));
+  assert.equal(svg.includes('LISTEN &amp; TRANSLATE'), false);
   assert.ok(svg.includes('THINK TIME · 5S'));
   assert.ok(svg.includes('#F5F3FF'));
   assert.equal(svg.includes('undefined'), false);
@@ -1525,9 +1528,19 @@ test('Component 2411 wraps long CJK+English copy without ellipsis/overflow and k
   assert.equal(quizChatSpec.layoutKind, 'quiz_prompt');
   assert.ok(quizChatSpec.exampleText?.startsWith('Hint:'));
   assert.equal(quizChatSpec.exampleText?.toLowerCase().includes('watch out for her'), false);
-  const quizChatSvg = build2411CardSvg({ spec: quizChatSpec, width: 720, height: 1280 });
-  assert.ok(quizChatSvg.includes('Your turn'));
-  assert.ok(quizChatSvg.includes('Translate in 5s'));
+  const quizChatSvg = build2411CardSvg({
+    spec: quizChatSpec,
+    width: 720,
+    height: 1280,
+    animFrame: 1,
+    speakerAPose: 'idle',
+    speakerBPose: 'thinking',
+    countdownActive: true,
+  });
+  assert.ok(quizChatSvg.includes('Think 5s'));
+  assert.ok(quizChatSvg.includes('<circle'));
+  assert.equal(quizChatSvg.includes('Your Turn'), false);
+  assert.equal(quizChatSvg.includes('5S TRANSLATION DRILL'), false);
 
   // Two-speaker friends-chat answer slide: Speaker A shows promptPreviewText, Speaker B shows translated answer
   const answerChatSpec = build2411CardSpecForLine({
@@ -1790,4 +1803,138 @@ test('spoiler-free quiz hints, dualVoiceEnabled friends-chat consistency, aligne
     }
   }
 });
+
+test('decluttered Studio 2411 cards, synced speaker poses, rawLineIndex anti-spoiler planning, and smooth transitions', () => {
+  // 1. Generic speaker labels are filtered, explicit names are preserved
+  for (const fake of ['Host', 'Challenge', 'Summary', 'Practice', 'Prompt', 'Your Turn', 'Reply', 'Speaker', 'Candidate', 'Interviewer', 'Speaker 1']) {
+    assert.equal(isGenericSpeakerLabel(fake), true, `Expected generic label: ${fake}`);
+  }
+  assert.equal(isGenericSpeakerLabel('Alex'), false);
+  assert.equal(isGenericSpeakerLabel('Mia'), false);
+
+  // 2. Intro/outro friends-chat omits duplicate Row 2 instructions, generic pills, header bar, and footer labels
+  const introSpec = build2411CardSpecForLine({
+    rawLine: 'Tiêu đề: 今から日本語を読み上げます。5秒以内に英語で言ってみましょう！',
+    lineIndex: 0,
+    totalLines: 6,
+    isIntroOrOutro: true,
+    scriptStyle: 'language_challenge',
+    dualVoiceEnabled: true,
+    themeId: 'cards_pastel',
+    defaultPauseSec: 5,
+  });
+  assert.equal(introSpec.exampleText, undefined);
+  const introSvg = build2411CardSvg({
+    spec: introSpec,
+    width: 720,
+    height: 1280,
+    fontName: 'M PLUS 1p',
+    animFrame: 0,
+    speakerAPose: 'talking',
+    speakerBPose: 'idle',
+  });
+  assert.equal(introSvg.includes('5S TRANSLATION DRILL'), false);
+  assert.equal(introSvg.includes('Listen &amp; translate aloud'), false);
+  assert.equal(introSvg.includes('>Host<'), false);
+  assert.equal(introSvg.includes('>Challenge<'), false);
+  assert.equal(introSvg.includes('RANDOM'), false);
+  assert.ok(introSvg.includes('M PLUS 1p'));
+
+  // 3. Real names render cleanly when explicitly provided
+  const namedSpec = build2411CardSpecForLine({
+    rawLine: 'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+    lineIndex: 1,
+    totalLines: 6,
+    scriptStyle: 'language_challenge',
+    dualVoiceEnabled: true,
+    override: { variant: 'friends-chat', labels: ['Alex', 'Mia'] },
+  });
+  const namedSvg = build2411CardSvg({ spec: namedSpec, width: 720, height: 1280 });
+  assert.ok(namedSvg.includes('>Alex<'));
+  assert.ok(namedSvg.includes('>Mia<'));
+
+  // 4. Multi-frame SVG animation varies talking mouth/hand and 3-dot thinking indicator
+  const animFrames = ([0, 1, 2, 3] as const).map((animFrame) =>
+    build2411CardSvg({
+      spec: namedSpec,
+      width: 720,
+      height: 1280,
+      animFrame,
+      speakerAPose: 'idle',
+      speakerBPose: 'thinking',
+      countdownActive: true,
+    })
+  );
+  assert.equal(new Set(animFrames).size, 4, 'Thinking animation frames 0..3 must all differ');
+
+  // 5. showRoleBadges defaults to hidden in buildAssFromCues unless explicitly enabled
+  const baseCues = [
+    {
+      index: 1,
+      startSec: 0,
+      endSec: 3,
+      text: '今から日本語を読み上げます。',
+      voiceSlot: 'primary' as const,
+      roleKind: 'title' as const,
+      roleLabel: 'Intro',
+      contextLabel: 'Timing',
+    },
+  ];
+  const baseSubCfg: SubtitleConfig = {
+    enabled: true,
+    fontName: 'M PLUS 1p',
+    position: 'bottom',
+    customPositionPct: 84,
+    fontSize: 38,
+    sourceFontSize: 28,
+    textColor: '#0F172A',
+    highlightColor: '#4F46E5',
+    strokeColor: '#FFFFFF',
+    strokeWidth: 2,
+    boxStyle: 'outline',
+    effect: 'karaoke',
+  };
+  const assDefault = buildAssFromCues(baseCues, baseSubCfg, 720, 1280);
+  const assWithBadge = buildAssFromCues(baseCues, { ...baseSubCfg, showRoleBadges: true }, 720, 1280);
+  assert.equal(assDefault.includes('Dialogue: 3,0:00:00.00,0:00:03.00,RoleBadge'), false);
+  assert.equal(assWithBadge.includes('RoleBadge,,0,0,0,,'), true);
+
+  // 6. planNarrationSegments preserves rawLineIndex across split sentences, repeats, and summary
+  const segs = planNarrationSegments({
+    script: [
+      'Tiêu đề: 今から日本語を読み上げます。5秒以内に英語で言ってみましょう！',
+      'Q: 「彼女には気をつけて！」を英語で言えますか？ [PAUSE]',
+      'English: Watch out for her!',
+      'Q: 「無理しないでね」はどう言いますか？ [PAUSE]',
+      'English: Take it easy!',
+      'Outro: お疲れ様でした！',
+    ].join('\n'),
+    language: 'ja_en',
+    scriptStyle: 'language_challenge',
+    voiceId: 'ja-JP-NanamiNeural',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'en-US-JennyNeural',
+    pauseBetweenLinesSec: 5,
+    targetRepeatCount: 1,
+    fullAnswerRecapMode: 'off',
+    summarizeAtEnd: true,
+  });
+  const q1Seg = segs.find((s) => s.text.includes('彼女には気をつけて'));
+  const a1Segs = segs.filter((s) => s.text === 'Watch out for her!');
+  const q2Seg = segs.find((s) => s.text.includes('無理しないでね'));
+  const sumSeg = segs.find((s) => s.segmentKind === 'summary');
+  assert.equal(q1Seg?.rawLineIndex, 1);
+  assert.equal(a1Segs.length, 2);
+  assert.ok(a1Segs.every((s) => s.rawLineIndex === 2));
+  assert.equal(q2Seg?.rawLineIndex, 3);
+  assert.equal(sumSeg?.rawLineIndex, undefined);
+
+  // 7. Smooth 2411 transition pool never uses harsh wipes/pixelize
+  for (let i = 0; i < 12; i++) {
+    const tr = resolveSmooth2411XfadeTransition('random', i, 42);
+    assert.ok((SMOOTH_2411_XFADE_POOL as readonly string[]).includes(tr), `Unexpected harsh transition: ${tr}`);
+  }
+  assert.equal(resolveSmooth2411XfadeTransition('fade', 0, 0), 'fade');
+});
+
 

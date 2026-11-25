@@ -458,6 +458,7 @@ export interface PlannedNarrationSegment {
   pauseKind?: 'thinking' | 'repeat' | 'recap';
   segmentKind?: 'speech' | 'recap' | 'summary';
   isIntroOrOutro?: boolean;
+  rawLineIndex?: number;
   roleKind?: ScriptRoleKind;
   roleLabel?: string;
   contextLabel?: string;
@@ -845,14 +846,15 @@ export function planNarrationSegments(
     answerTargetSentences = [];
   };
 
-  const pendingOutroLines: string[] = [];
-  const mainLines = [...rawLines];
+  const indexedRawLines = rawLines.map((rawLine, origIdx) => ({ rawLine, origIdx }));
+  const pendingOutroLines: Array<{ rawLine: string; origIdx: number }> = [];
+  const mainLines = [...indexedRawLines];
   if (summarizeAtEnd && mainLines.length >= 2) {
     while (
       pendingOutroLines.length < 2 &&
       mainLines.length >= 2 &&
-      (isOutroTag(mainLines[mainLines.length - 1]) ||
-        isOutroCtaLine(stripNarrationTags(mainLines[mainLines.length - 1])))
+      (isOutroTag(mainLines[mainLines.length - 1].rawLine) ||
+        isOutroCtaLine(stripNarrationTags(mainLines[mainLines.length - 1].rawLine)))
     ) {
       pendingOutroLines.unshift(mainLines.pop()!);
     }
@@ -940,12 +942,13 @@ export function planNarrationSegments(
   };
 
   const processLine = (
-    rawLine: string,
+    lineEntry: { rawLine: string; origIdx: number },
     lineIdx: number,
     totalCount: number,
-    linesList: string[],
+    linesList: Array<{ rawLine: string; origIdx: number }>,
     batchKey = 'main'
   ) => {
+    const { rawLine, origIdx: origLineIndex } = lineEntry;
     const pauseMatch = rawLine.match(/\[PAUSE(?::(\d+(?:\.\d+)?))?\]/i);
     const explicitPauseSec = pauseMatch
       ? pauseMatch[1]
@@ -1047,7 +1050,7 @@ export function planNarrationSegments(
       }
     }
 
-    const nextLineRaw = lineIdx + 1 < linesList.length ? linesList[lineIdx + 1] : null;
+    const nextLineRaw = lineIdx + 1 < linesList.length ? linesList[lineIdx + 1].rawLine : null;
     const nextIsSecondary = nextLineRaw
       ? classifyLineSlot(nextLineRaw, lineIdx + 1).slot === 'secondary'
       : false;
@@ -1134,6 +1137,7 @@ export function planNarrationSegments(
             pauseAfterSec: pauseAfter,
             pauseKind,
             segmentKind: 'speech',
+            rawLineIndex: origLineIndex,
             roleKind: linePres.roleKind,
             roleLabel: linePres.roleLabel,
             contextLabel: linePres.contextLabel,
@@ -1165,6 +1169,7 @@ export function planNarrationSegments(
             pauseAfterSec: pauseAfter,
             pauseKind,
             segmentKind: 'speech',
+            rawLineIndex: origLineIndex,
             roleKind: linePres.roleKind,
             roleLabel: linePres.roleLabel,
             contextLabel: linePres.contextLabel,
@@ -1256,6 +1261,7 @@ export interface RawSegmentTiming {
   voiceSlot: 'primary' | 'secondary';
   segmentKind?: 'speech' | 'recap' | 'summary';
   isIntroOrOutro?: boolean;
+  rawLineIndex?: number;
   pauseAfterSec?: number;
   pauseKind?: 'thinking' | 'repeat' | 'recap';
   countdownStartSec?: number;
@@ -2384,7 +2390,7 @@ export function buildAssFromCues(
   ];
 
   const nonCountdownCues = cues.filter((c) => !c.isCountdown);
-  const showRoleBadges = subtitle.showRoleBadges !== false;
+  const showRoleBadges = subtitle.showRoleBadges === true;
   const cdCardPanelFill = adaptLight ? '&H00FFFFFF' : '&H140F172A';
   const cdCardPanelBorder = adaptLight ? hexToAssBgr('#C7D2FE') : highlightColour;
   const cdCardHeaderFill = adaptLight ? hexToAssBgr('#EEF2FF') : '&H001E293B';
@@ -2421,7 +2427,7 @@ export function buildAssFromCues(
       .map((other) => {
         const band = estimateCueBand(other);
         const hasBadge =
-          subtitle.showRoleBadges !== false &&
+          subtitle.showRoleBadges === true &&
           (other.roleKind === 'question' || other.roleKind === 'answer' || other.roleKind === 'title');
         return hasBadge
           ? { topPx: Math.max(0, band.topPx - Math.round(28 * latinBudget.resScale)), bottomPx: band.bottomPx }
@@ -3653,6 +3659,28 @@ export function resolveXfadeTransition(
   if (mode === 'random') {
     const idx = Math.abs((seed * 31 + cutIndex * 17) % RANDOM_XFADE_POOL.length);
     return RANDOM_XFADE_POOL[idx];
+  }
+  return mode;
+}
+
+export const SMOOTH_2411_XFADE_POOL = [
+  'fade',
+  'dissolve',
+  'smoothleft',
+  'smoothright',
+  'slideleft',
+] as const;
+
+export function resolveSmooth2411XfadeTransition(
+  mode: VideoTransitionMode,
+  cutIndex: number,
+  seed = 1337
+): string {
+  if (mode === 'none') return 'none';
+  if (mode === 'slide') return 'smoothleft';
+  if (mode === 'random' || mode === 'pixelize' || mode === 'radial' || mode === 'fadeblack') {
+    const idx = Math.abs((seed * 19 + cutIndex * 11) % SMOOTH_2411_XFADE_POOL.length);
+    return SMOOTH_2411_XFADE_POOL[idx];
   }
   return mode;
 }

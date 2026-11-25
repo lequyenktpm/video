@@ -208,8 +208,7 @@
 }
 
 @keyframes mpt2411PopUp {
-  0% { opacity: 0; transform: scale(0.86) translateY(12px); }
-  70% { opacity: 1; transform: scale(1.02) translateY(-1px); }
+  0% { opacity: 0; transform: scale(0.92) translateY(14px); }
   100% { opacity: 1; transform: scale(1) translateY(0); }
 }
 
@@ -219,26 +218,26 @@
 }
 
 @keyframes mpt2411DropIn {
-  0% { opacity: 0; transform: translateY(-18px) scale(0.96); }
+  0% { opacity: 0; transform: translateY(-16px) scale(0.97); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @keyframes mpt2411FadeScale {
-  0% { opacity: 0; transform: scale(1.05); }
+  0% { opacity: 0; transform: scale(1.03); }
   100% { opacity: 1; transform: scale(1); }
 }
 
 .animate-2411-pop-up {
-  animation: mpt2411PopUp 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: mpt2411PopUp 0.48s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .animate-2411-slide-up {
-  animation: mpt2411SlideUp 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: mpt2411SlideUp 0.48s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .animate-2411-drop-in {
-  animation: mpt2411DropIn 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: mpt2411DropIn 0.48s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .animate-2411-fade-scale {
-  animation: mpt2411FadeScale 0.4s ease-out both;
+  animation: mpt2411FadeScale 0.48s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes mpt2411CardExit {
@@ -253,7 +252,7 @@
 }
 
 .animate-2411-exit {
-  animation: mpt2411CardExit 0.34s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  animation: mpt2411CardExit 0.46s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 @keyframes mptThinkingDot {
@@ -284,38 +283,38 @@
 
 @keyframes mptMouthTalk {
   0%, 100% {
-    transform: scaleY(0.32) scaleX(0.92);
+    transform: scaleY(0.26) scaleX(0.94);
   }
   25% {
-    transform: scaleY(1.12) scaleX(1.04);
+    transform: scaleY(1.06) scaleX(1.02);
   }
   50% {
-    transform: scaleY(0.46) scaleX(0.96);
+    transform: scaleY(0.45) scaleX(0.97);
   }
   75% {
-    transform: scaleY(0.95) scaleX(1);
+    transform: scaleY(0.94) scaleX(1);
   }
 }
 
 .animate-2411-mouth-talk {
   transform-box: fill-box;
   transform-origin: center;
-  animation: mptMouthTalk 0.48s ease-in-out infinite;
+  animation: mptMouthTalk 0.54s ease-in-out infinite;
 }
 
 @keyframes mptHandWave {
   0%, 100% {
-    transform: rotate(-7deg) translateY(0);
+    transform: rotate(-4deg) translateY(0);
   }
   50% {
-    transform: rotate(12deg) translateY(-2.5px);
+    transform: rotate(5deg) translateY(-1.8px);
   }
 }
 
 .animate-2411-hand-wave {
   transform-box: fill-box;
   transform-origin: 20% 80%;
-  animation: mptHandWave 0.72s ease-in-out infinite;
+  animation: mptHandWave 1.15s ease-in-out infinite;
 }
 
 @keyframes mptHandThink {
@@ -323,14 +322,14 @@
     transform: translateY(0) rotate(0deg);
   }
   50% {
-    transform: translateY(-1.5px) rotate(-4deg);
+    transform: translateY(-1.5px) rotate(-3deg);
   }
 }
 
 .animate-2411-hand-think {
   transform-box: fill-box;
   transform-origin: bottom center;
-  animation: mptHandThink 1.3s ease-in-out infinite;
+  animation: mptHandThink 1.35s ease-in-out infinite;
 }
 
 

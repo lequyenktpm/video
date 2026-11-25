@@ -35,6 +35,7 @@ import {
   planNarrationSegments,
   planXfadeMergeBatches,
   RawSegmentTiming,
+  resolveSmooth2411XfadeTransition,
   resolveXfadeTransition,
   slugifyOutputFilename,
   splitCueIntoShortSubCues,
@@ -48,6 +49,7 @@ import {
   build2411CardSvg,
   buildContextualSceneComponentsForScript,
   getStudio2411ThemeMeta,
+  Studio2411CardSpec,
 } from './src/shared/studioComponents2411';
 import {
   CURATED_BACKGROUNDS,
@@ -102,10 +104,32 @@ const CACHE_DIR = path.join(DATA_DIR, 'cache');
 const BGM_DIR = path.join(DATA_DIR, 'bgm');
 const FONTS_DIR = path.join(ROOT_DIR, 'assets', 'fonts');
 const CURATED_BG_DIR = path.join(ROOT_DIR, 'assets', 'curated');
+const FONTCONFIG_PATH = path.join(DATA_DIR, 'fonts.conf');
 
 for (const dir of [DATA_DIR, UPLOADS_DIR, OUTPUTS_DIR, PROJECT_OUTPUT_ROOT, CACHE_DIR, BGM_DIR, FONTS_DIR, CURATED_BG_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
+
+function ensureBundledFontConfig(): string {
+  const fontDirNorm = FONTS_DIR.replace(/\\/g, '/');
+  const xml = `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <dir>${fontDirNorm}</dir>
+</fontconfig>
+`;
+  try {
+    if (!fs.existsSync(FONTCONFIG_PATH) || fs.readFileSync(FONTCONFIG_PATH, 'utf-8') !== xml) {
+      fs.writeFileSync(FONTCONFIG_PATH, xml, 'utf-8');
+    }
+  } catch {
+    // Ignore transient fontconfig write failures
+  }
+  return FONTCONFIG_PATH;
+}
+
+ensureBundledFontConfig();
 
 function sanitizeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -190,7 +214,11 @@ async function runFfmpeg(args: string[], timeoutMs = 120000): Promise<void> {
     const child = execFile(
       'ffmpeg',
       args,
-      { timeout: timeoutMs, maxBuffer: 48 * 1024 * 1024 },
+      {
+        timeout: timeoutMs,
+        maxBuffer: 48 * 1024 * 1024,
+        env: { ...process.env, FONTCONFIG_FILE: ensureBundledFontConfig() },
+      },
       (err) => {
         if (jobId) {
           activeJobProcesses.get(jobId)?.delete(child);
@@ -1546,6 +1574,7 @@ async function downloadRemoteMedia(
 
 interface ResolvedSceneAsset {
   index: number;
+  rawLineIndex?: number;
   sentence: string;
   prompt: string;
   kind: 'video' | 'image';
@@ -1555,6 +1584,7 @@ interface ResolvedSceneAsset {
   thumbUrl?: string;
   sourceLabel: string;
   componentSpec?: Studio2411SceneComponentOverride;
+  cardSpec?: Studio2411CardSpec;
 }
 
 function getMoodPromptSuffix(mood: VisualMood = 'auto'): string {
@@ -1796,6 +1826,7 @@ function getSceneCacheKey(params: {
   visualMood: VisualMood;
   aspectRatio: VideoAspectRatio;
   selectedMediaIds: string[];
+  subtitleFontName?: string;
 }): string {
   const raw = JSON.stringify({
     s: params.sentences,
@@ -1814,10 +1845,164 @@ function getSceneCacheKey(params: {
     vm: params.visualMood,
     a: params.aspectRatio,
     sel: params.selectedMediaIds,
+    sfn: params.subtitleFontName ?? 'M PLUS 1p',
     subj: params.subject,
-    v: 4,
+    v: 5,
   });
   return `scenes_${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12)}`;
+}
+
+async function renderAnimated2411CardClip(params: {
+  spec: Studio2411CardSpec;
+  width: number;
+  height: number;
+  fontFilePath?: string;
+  fontName?: string;
+  speakerAPose: 'talking' | 'thinking' | 'idle';
+  speakerBPose: 'talking' | 'thinking' | 'idle';
+  countdownActive: boolean;
+  workDir: string;
+  stateKey: string;
+  fallbackBgHex: string;
+  fallbackCardHex: string;
+  fallbackBorderHex: string;
+  fallbackAccentHex: string;
+}): Promise<string | null> {
+  const {
+    spec,
+    width,
+    height,
+    fontFilePath,
+    fontName,
+    speakerAPose,
+    speakerBPose,
+    countdownActive,
+    workDir,
+    stateKey,
+    fallbackBgHex,
+    fallbackCardHex,
+    fallbackBorderHex,
+    fallbackAccentHex,
+  } = params;
+  const outMp4Path = path.join(workDir, `anim2411_${stateKey}.mp4`);
+  if (fs.existsSync(outMp4Path) && fs.statSync(outMp4Path).size > 4000) {
+    return outMp4Path;
+  }
+
+  const hasDynamicAnim =
+    spec.variant === 'friends-chat' ||
+    spec.variant === 'avatar-speech' ||
+    speakerAPose !== 'idle' ||
+    speakerBPose !== 'idle' ||
+    countdownActive;
+  const frameIds: Array<0 | 1 | 2 | 3> = hasDynamicAnim ? [0, 1, 2, 3] : [0];
+  const pngPaths: string[] = [];
+
+  for (const frameIdx of frameIds) {
+    const svgPath = path.join(workDir, `anim2411_${stateKey}_f${frameIdx}.svg`);
+    const pngPath = path.join(workDir, `anim2411_${stateKey}_f${frameIdx}.png`);
+    if (!fs.existsSync(pngPath)) {
+      const svgContent = build2411CardSvg({
+        spec,
+        width,
+        height,
+        fontFilePath,
+        fontName,
+        animFrame: frameIdx,
+        speakerAPose,
+        speakerBPose,
+        countdownActive,
+      });
+      fs.writeFileSync(svgPath, svgContent, 'utf-8');
+      try {
+        await runFfmpeg(['-y', '-i', svgPath, '-frames:v', '1', pngPath], 15000);
+      } catch {
+        const cx = Math.round(width * 0.08);
+        const cy = Math.round(height * 0.10);
+        const cw = Math.round(width * 0.84);
+        const ch = Math.round(height * 0.25);
+        await runFfmpeg(
+          [
+            '-y',
+            '-f',
+            'lavfi',
+            '-i',
+            `color=c=0x${fallbackBgHex}:s=${width}x${height}:d=1`,
+            '-vf',
+            `drawgrid=width=40:height=40:thickness=1:color=0x${fallbackBorderHex}@0.35,drawbox=x=${cx}:y=${cy}:w=${cw}:h=${ch}:color=0x${fallbackCardHex}@0.96:t=fill,drawbox=x=${cx}:y=${cy}:w=${cw}:h=8:color=0x${fallbackAccentHex}@0.95:t=fill`,
+            '-frames:v',
+            '1',
+            pngPath,
+          ],
+          15000
+        );
+      }
+    }
+    pngPaths.push(pngPath);
+  }
+
+  try {
+    if (pngPaths.length === 1) {
+      await runFfmpeg(
+        [
+          '-y',
+          '-loop',
+          '1',
+          '-framerate',
+          '30',
+          '-i',
+          pngPaths[0],
+          '-t',
+          '2.4',
+          '-vf',
+          'fps=30,format=yuv420p',
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-pix_fmt',
+          'yuv420p',
+          outMp4Path,
+        ],
+        20000
+      );
+    } else {
+      const concatListPath = path.join(workDir, `anim2411_${stateKey}_frames.txt`);
+      const lines: string[] = [];
+      for (let cycle = 0; cycle < 3; cycle++) {
+        for (let fi = 0; fi < pngPaths.length; fi++) {
+          lines.push(`file '${pngPaths[fi].replace(/'/g, "'\\''")}'`);
+          lines.push('duration 0.18');
+        }
+      }
+      lines.push(`file '${pngPaths[0].replace(/'/g, "'\\''")}'`);
+      fs.writeFileSync(concatListPath, lines.join('\n'), 'utf-8');
+      await runFfmpeg(
+        [
+          '-y',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          concatListPath,
+          '-vf',
+          'fps=30,format=yuv420p',
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-pix_fmt',
+          'yuv420p',
+          outMp4Path,
+        ],
+        25000
+      );
+    }
+    return fs.existsSync(outMp4Path) && fs.statSync(outMp4Path).size > 4000 ? outMp4Path : null;
+  } catch {
+    return null;
+  }
 }
 
 async function resolveSceneAssets(params: {
@@ -1841,6 +2026,7 @@ async function resolveSceneAssets(params: {
   videoQuality?: VideoQuality;
   selectedMediaIds: string[];
   customScenes?: ScenePreviewItem[];
+  subtitleFontName?: string;
   onLog?: (msg: string) => void;
 }): Promise<{ cacheKey: string; assets: ResolvedSceneAsset[] }> {
   const mediaTypeFilter: MediaTypeFilter = params.mediaTypeFilter ?? 'all';
@@ -1852,17 +2038,18 @@ async function resolveSceneAssets(params: {
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean);
-  const sentenceEntries: Array<{ sentence: string; rawLine: string }> = [];
-  for (const line of rawLines) {
+  const sentenceEntries: Array<{ sentence: string; rawLine: string; rawLineIndex: number }> = [];
+  for (let rawIdx = 0; rawIdx < rawLines.length; rawIdx++) {
+    const line = rawLines[rawIdx];
     const splitParts = splitScriptSentences(line);
     if (splitParts.length === 0) {
       const cleaned = stripNarrationTags(line);
-      if (cleaned) sentenceEntries.push({ sentence: cleaned, rawLine: line });
+      if (cleaned) sentenceEntries.push({ sentence: cleaned, rawLine: line, rawLineIndex: rawIdx });
     } else {
       for (const part of splitParts) {
         const cleaned = stripNarrationTags(part);
         if (cleaned) {
-          sentenceEntries.push({ sentence: cleaned, rawLine: line });
+          sentenceEntries.push({ sentence: cleaned, rawLine: line, rawLineIndex: rawIdx });
         }
       }
     }
@@ -1926,6 +2113,7 @@ async function resolveSceneAssets(params: {
     visualMood,
     aspectRatio: params.aspectRatio,
     selectedMediaIds: params.selectedMediaIds,
+    subtitleFontName: params.subtitleFontName,
   });
 
   const sceneCacheDir = path.join(CACHE_DIR, cacheKey);
@@ -2034,11 +2222,18 @@ async function resolveSceneAssets(params: {
     return { cacheKey, assets: curatedAssets };
   }
 
-  // Component 2411 Study Card option: generates crisp vector flashcard & infographic PNGs/MP4s per line (supporting all 11 variants)
+  // Component 2411 Study Card option: generates crisp vector flashcard & infographic PNGs/MP4s per line (supporting all 14 variants)
   if (params.materialSource === 'studio_2411') {
     const themeMeta = getStudio2411ThemeMeta(params.studio2411Theme);
-    const jpFontPath = path.join(FONTS_DIR, 'MPLUS1p-Bold.ttf');
-    const fontFilePath = fs.existsSync(jpFontPath) ? jpFontPath : undefined;
+    const preferredFontFile =
+      params.subtitleFontName === 'BIZ UDPGothic' ? 'BIZUDPGothic-Bold.ttf' : 'MPLUS1p-Bold.ttf';
+    const jpFontPath = path.join(FONTS_DIR, preferredFontFile);
+    const fallbackFontPath = path.join(FONTS_DIR, 'MPLUS1p-Bold.ttf');
+    const fontFilePath = fs.existsSync(jpFontPath)
+      ? jpFontPath
+      : fs.existsSync(fallbackFontPath)
+      ? fallbackFontPath
+      : undefined;
     const assets2411: ResolvedSceneAsset[] = [];
     let prevVariant: Studio2411ComponentVariant | undefined;
     let lastTargetText: string | undefined;
@@ -2048,22 +2243,34 @@ async function resolveSceneAssets(params: {
       assertNotCancelled();
       const sentence = effectiveSentences[idx];
       const rawLine = sentenceRawLines[idx] ?? sentence;
+      const rawLineIdx = sentenceEntries[idx]?.rawLineIndex ?? idx;
       const linePres = analyzeScriptLinePresentation(rawLine, {
         scriptStyle: params.scriptStyle,
       });
       const isSecondary =
         linePres.roleKind === 'answer' ||
         /^\s*(?:English|Japanese|Vietnamese|\[EN\]|\[JA\]|\[VI\]|\[V2\])\s*[:：]?/i.test(rawLine);
+      const isIntroOrOutro = linePres.roleKind === 'title' || linePres.roleKind === 'outro';
       const showRecall = !isSecondary && linePres.roleKind !== 'title' ? lastTargetText : undefined;
       const promptPreviewText = isSecondary ? lastPrimaryText : undefined;
       const customComp = params.customScenes?.[idx]?.componentSpec;
-      const lineOverride = customComp ?? params.sceneComponents?.[idx];
+      const rawOverride = customComp ?? params.sceneComponents?.[rawLineIdx];
+      const lineOverride =
+        rawOverride &&
+        rawOverride.speechText &&
+        rawOverride.speechText === stripNarrationTags(rawLine) &&
+        sentence !== stripNarrationTags(rawLine) &&
+        rawOverride.speechText.includes(sentence)
+          ? { ...rawOverride, speechText: sentence }
+          : !rawOverride && sentence !== stripNarrationTags(rawLine) && stripNarrationTags(rawLine).includes(sentence)
+          ? { speechText: sentence }
+          : rawOverride;
       const spec = build2411CardSpecForLine({
         rawLine,
         lineIndex: idx,
         totalLines: effectiveSentences.length,
         isSecondarySlot: isSecondary,
-        isIntroOrOutro: linePres.roleKind === 'title' || linePres.roleKind === 'outro',
+        isIntroOrOutro,
         scriptStyle: params.scriptStyle,
         dualVoiceEnabled: effectiveDualVoice,
         themeId: themeMeta.id,
@@ -2076,7 +2283,7 @@ async function resolveSceneAssets(params: {
       prevVariant = spec.variant;
       if (isSecondary && linePres.cleanText) {
         lastTargetText = linePres.cleanText;
-      } else if (!isSecondary && linePres.roleKind !== 'title' && linePres.roleKind !== 'outro' && linePres.cleanText) {
+      } else if (!isSecondary && !isIntroOrOutro && linePres.cleanText) {
         lastPrimaryText = linePres.cleanText;
       }
 
@@ -2097,10 +2304,23 @@ async function resolveSceneAssets(params: {
         ...(spec.accentOverrideHex ? { accentColor: spec.accentOverrideHex } : {}),
       };
 
+      const activeSpeakerA: 'talking' | 'idle' = isSecondary && !isIntroOrOutro ? 'idle' : 'talking';
+      const activeSpeakerB: 'talking' | 'idle' = isSecondary && !isIntroOrOutro ? 'talking' : 'idle';
+
       const svgPath = path.join(sceneCacheDir, `card2411_${idx}_${spec.variant}.svg`);
       const pngPath = path.join(sceneCacheDir, `card2411_${idx}_${spec.variant}.png`);
       if (!fs.existsSync(pngPath)) {
-        const svgContent = build2411CardSvg({ spec, width, height, fontFilePath });
+        const svgContent = build2411CardSvg({
+          spec,
+          width,
+          height,
+          fontFilePath,
+          fontName: params.subtitleFontName,
+          animFrame: 0,
+          speakerAPose: activeSpeakerA,
+          speakerBPose: activeSpeakerB,
+          countdownActive: false,
+        });
         fs.writeFileSync(svgPath, svgContent, 'utf-8');
         try {
           await runFfmpeg(['-y', '-i', svgPath, '-frames:v', '1', pngPath], 15000);
@@ -2132,44 +2352,41 @@ async function resolveSceneAssets(params: {
       }
 
       if (mediaTypeFilter === 'video_only') {
-        const mp4Path = path.join(sceneCacheDir, `card2411_${idx}_${spec.variant}.mp4`);
-        if (!fs.existsSync(mp4Path)) {
-          await runFfmpeg(
-            [
-              '-y',
-              '-loop',
-              '1',
-              '-framerate',
-              '30',
-              '-i',
-              pngPath,
-              '-t',
-              '3',
-              '-c:v',
-              'libx264',
-              '-preset',
-              'ultrafast',
-              '-pix_fmt',
-              'yuv420p',
-              mp4Path,
-            ],
-            15000
-          );
-        }
+        const mp4Path =
+          (await renderAnimated2411CardClip({
+            spec,
+            width,
+            height,
+            fontFilePath,
+            fontName: params.subtitleFontName,
+            speakerAPose: activeSpeakerA,
+            speakerBPose: activeSpeakerB,
+            countdownActive: false,
+            workDir: sceneCacheDir,
+            stateKey: `preview_${idx}_${spec.variant}`,
+            fallbackBgHex: themeMeta.bgBottomHex.replace('#', ''),
+            fallbackCardHex: themeMeta.cardBgHex.replace('#', ''),
+            fallbackBorderHex: themeMeta.cardBorderHex.replace('#', ''),
+            fallbackAccentHex: themeMeta.accentHex.replace('#', ''),
+          })) ?? path.join(sceneCacheDir, `card2411_${idx}_${spec.variant}.mp4`);
+        const mp4Url = `/files/cache/${cacheKey}/${path.basename(mp4Path)}`;
         assets2411.push({
           index: idx,
+          rawLineIndex: rawLineIdx,
           sentence,
           prompt: `2411 ${spec.variant} (${themeMeta.label}) · ${spec.contextLabel}`,
           kind: 'video',
           localPath: mp4Path,
-          previewUrl: `/files/cache/${cacheKey}/card2411_${idx}_${spec.variant}.mp4`,
+          previewUrl: mp4Url,
           thumbUrl: `/files/cache/${cacheKey}/card2411_${idx}_${spec.variant}.png`,
           sourceLabel: `2411 · ${spec.variant}`,
           componentSpec: resolvedCompSpec,
+          cardSpec: spec,
         });
       } else {
         assets2411.push({
           index: idx,
+          rawLineIndex: rawLineIdx,
           sentence,
           prompt: `2411 ${spec.variant} (${themeMeta.label}) · ${spec.contextLabel}`,
           kind: 'image',
@@ -2178,6 +2395,7 @@ async function resolveSceneAssets(params: {
           thumbUrl: `/files/cache/${cacheKey}/card2411_${idx}_${spec.variant}.png`,
           sourceLabel: `2411 · ${spec.variant}`,
           componentSpec: resolvedCompSpec,
+          cardSpec: spec,
         });
       }
     }
@@ -3128,6 +3346,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         voiceSlot: seg.voiceSlot,
         segmentKind: seg.segmentKind,
         isIntroOrOutro: seg.isIntroOrOutro,
+        rawLineIndex: seg.rawLineIndex,
         pauseAfterSec: pauseDur,
         pauseKind: seg.pauseKind,
         countdownStartSec,
@@ -3201,6 +3420,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       videoQuality: config.videoQuality,
       selectedMediaIds: config.selectedMediaIds,
       customScenes: config.customScenes,
+      subtitleFontName: config.subtitle.fontName,
       onLog: (msg) => updateJob(jobId, {}, msg),
     });
 
@@ -3240,11 +3460,193 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     }));
 
     const usePerSentenceAlignment = config.concatMode === 'sequential';
-    const fadeDur = config.transitionMode !== 'none' && effectiveVisualCues.length > 1 ? 0.3 : 0;
+    const isStudio2411Export = config.materialSource === 'studio_2411';
+    const fadeDur =
+      config.transitionMode !== 'none' && effectiveVisualCues.length > 1
+        ? isStudio2411Export
+          ? 0.36
+          : 0.3
+        : 0;
 
-    let plannedEntries: Array<{ asset: ResolvedSceneAsset; baseDur: number; renderDur: number }> = [];
+    let plannedEntries: Array<{
+      asset: ResolvedSceneAsset;
+      baseDur: number;
+      renderDur: number;
+      sameCardContinuation?: boolean;
+      stateTag?: string;
+    }> = [];
 
-    if (usePerSentenceAlignment) {
+    if (usePerSentenceAlignment && isStudio2411Export) {
+      const themeMeta2411 = getStudio2411ThemeMeta(config.studio2411Theme);
+      const preferredFontFile =
+        config.subtitle.fontName === 'BIZ UDPGothic' ? 'BIZUDPGothic-Bold.ttf' : 'MPLUS1p-Bold.ttf';
+      const jpFontPath = path.join(FONTS_DIR, preferredFontFile);
+      const fallbackFontPath = path.join(FONTS_DIR, 'MPLUS1p-Bold.ttf');
+      const fontFilePath2411 = fs.existsSync(jpFontPath)
+        ? jpFontPath
+        : fs.existsSync(fallbackFontPath)
+        ? fallbackFontPath
+        : undefined;
+      const isDualVoiceExport =
+        Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language);
+      const summaryCardCache = new Map<string, Studio2411CardSpec>();
+
+      const rawBeats: Array<{
+        baseAsset: ResolvedSceneAsset;
+        cardSpec: Studio2411CardSpec;
+        baseDur: number;
+        speakerAPose: 'talking' | 'thinking' | 'idle';
+        speakerBPose: 'talking' | 'thinking' | 'idle';
+        countdownActive: boolean;
+        sameCardContinuation: boolean;
+        stateKey: string;
+      }> = [];
+
+      for (let idx = 0; idx < rawSegmentTimings.length; idx++) {
+        const rec = rawSegmentTimings[idx];
+        const isRecIntroOrOutro = Boolean(rec.isIntroOrOutro || rec.segmentKind === 'summary');
+        const isSecondaryRec = rec.voiceSlot === 'secondary' && !isRecIntroOrOutro;
+
+        let matchedAsset: ResolvedSceneAsset | undefined;
+        let cardSpec: Studio2411CardSpec | undefined;
+
+        if (rec.segmentKind === 'summary') {
+          matchedAsset =
+            assets.find((a) => a.sentence === rec.text) ?? assets[assets.length - 1] ?? assets[0];
+          cardSpec = summaryCardCache.get(rec.text);
+          if (!cardSpec) {
+            cardSpec = build2411CardSpecForLine({
+              rawLine: `Outro: ${rec.text}`,
+              lineIndex: Math.max(0, assets.length - 1),
+              totalLines: Math.max(1, assets.length),
+              isSecondarySlot: false,
+              isIntroOrOutro: true,
+              scriptStyle: config.scriptStyle,
+              dualVoiceEnabled: isDualVoiceExport,
+              themeId: themeMeta2411.id,
+              defaultPauseSec: config.pauseBetweenLinesSec ?? 5,
+              override: isDualVoiceExport ? { variant: 'friends-chat', progressPct: 95 } : { progressPct: 95 },
+            });
+            summaryCardCache.set(rec.text, cardSpec);
+          }
+        } else {
+          matchedAsset =
+            assets.find((a) => a.sentence === rec.text) ??
+            (rec.rawLineIndex !== undefined
+              ? assets.find((a) => a.rawLineIndex === rec.rawLineIndex)
+              : undefined) ??
+            assets[Math.min(idx, assets.length - 1)] ??
+            assets[0];
+          cardSpec =
+            matchedAsset?.cardSpec ??
+            build2411CardSpecForLine({
+              rawLine: rec.text,
+              lineIndex: matchedAsset?.index ?? idx,
+              totalLines: Math.max(1, assets.length),
+              isSecondarySlot: isSecondaryRec,
+              isIntroOrOutro: isRecIntroOrOutro,
+              scriptStyle: config.scriptStyle,
+              dualVoiceEnabled: isDualVoiceExport,
+              themeId: themeMeta2411.id,
+              defaultPauseSec: config.pauseBetweenLinesSec ?? 5,
+              override: matchedAsset?.componentSpec,
+            });
+        }
+
+        const totalRecDur = Math.max(
+          0.8,
+          (rec.countdownEndSec ?? rec.endSec + (rec.pauseAfterSec ?? 0)) - rec.startSec
+        );
+        const hasCdWindow =
+          rec.countdownStartSec !== undefined &&
+          rec.countdownEndSec !== undefined &&
+          rec.countdownEndSec > rec.countdownStartSec + 0.25 &&
+          rec.countdownStartSec > rec.startSec + 0.25;
+
+        if (hasCdWindow) {
+          const speechDur = Math.max(0.45, rec.countdownStartSec! - rec.startSec);
+          const thinkDur = Math.max(0.5, rec.countdownEndSec! - rec.countdownStartSec!);
+          const talkA: 'talking' | 'idle' = isSecondaryRec ? 'idle' : 'talking';
+          const talkB: 'talking' | 'idle' = isSecondaryRec ? 'talking' : 'idle';
+          rawBeats.push({
+            baseAsset: matchedAsset,
+            cardSpec,
+            baseDur: speechDur,
+            speakerAPose: talkA,
+            speakerBPose: talkB,
+            countdownActive: false,
+            sameCardContinuation: false,
+            stateKey: `b${matchedAsset.index}_${rec.segmentKind ?? 's'}_${talkA}_${talkB}_0`,
+          });
+          rawBeats.push({
+            baseAsset: matchedAsset,
+            cardSpec,
+            baseDur: thinkDur,
+            speakerAPose: 'idle',
+            speakerBPose: 'thinking',
+            countdownActive: true,
+            sameCardContinuation: true,
+            stateKey: `b${matchedAsset.index}_${rec.segmentKind ?? 's'}_idle_thinking_1`,
+          });
+        } else {
+          const poseA: 'talking' | 'idle' = isSecondaryRec ? 'idle' : 'talking';
+          const poseB: 'talking' | 'idle' = isSecondaryRec ? 'talking' : 'idle';
+          rawBeats.push({
+            baseAsset: matchedAsset,
+            cardSpec,
+            baseDur: totalRecDur,
+            speakerAPose: poseA,
+            speakerBPose: poseB,
+            countdownActive: false,
+            sameCardContinuation: false,
+            stateKey: `b${matchedAsset.index}_${rec.segmentKind ?? 's'}_${poseA}_${poseB}_0`,
+          });
+        }
+      }
+
+      for (let bi = 0; bi < rawBeats.length; bi++) {
+        assertNotCancelled(jobId);
+        const beat = rawBeats[bi];
+        const nextBeat = rawBeats[bi + 1];
+        const outFade = !nextBeat
+          ? 0.3
+          : nextBeat.sameCardContinuation
+          ? 0.05
+          : fadeDur;
+        let resolvedAsset = beat.baseAsset;
+        const animClipPath = await renderAnimated2411CardClip({
+          spec: beat.cardSpec,
+          width,
+          height,
+          fontFilePath: fontFilePath2411,
+          fontName: config.subtitle.fontName,
+          speakerAPose: beat.speakerAPose,
+          speakerBPose: beat.speakerBPose,
+          countdownActive: beat.countdownActive,
+          workDir,
+          stateKey: `${beat.stateKey}_${crypto.createHash('sha1').update(beat.cardSpec.speechText).digest('hex').slice(0, 6)}`,
+          fallbackBgHex: themeMeta2411.bgBottomHex.replace('#', ''),
+          fallbackCardHex: themeMeta2411.cardBgHex.replace('#', ''),
+          fallbackBorderHex: themeMeta2411.cardBorderHex.replace('#', ''),
+          fallbackAccentHex: themeMeta2411.accentHex.replace('#', ''),
+        });
+        if (animClipPath) {
+          resolvedAsset = {
+            ...beat.baseAsset,
+            kind: 'video',
+            localPath: animClipPath,
+            remoteUrl: undefined,
+          };
+        }
+        plannedEntries.push({
+          asset: resolvedAsset,
+          baseDur: beat.baseDur,
+          renderDur: beat.baseDur + outFade,
+          sameCardContinuation: beat.sameCardContinuation,
+          stateTag: beat.stateKey,
+        });
+      }
+    } else if (usePerSentenceAlignment) {
       let beatCursor = 0;
       effectiveVisualCues.forEach((cue, idx) => {
         const sentenceDur = Math.max(1.4, cue.endSec - cue.startSec);
@@ -3306,14 +3708,18 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       }
     }
 
-    const normalizedClips: Array<{ path: string; baseDur: number }> = [];
+    const normalizedClips: Array<{
+      path: string;
+      baseDur: number;
+      sameCardContinuation?: boolean;
+    }> = [];
     const normalizedClipCache = new Map<string, string>();
 
     for (let i = 0; i < plannedEntries.length; i++) {
       assertNotCancelled(jobId);
       const entry = plannedEntries[i];
       const normPath = path.join(workDir, `clip_norm_${i}.mp4`);
-      const dedupKey = `${entry.asset.localPath || entry.asset.remoteUrl || entry.asset.index}_${entry.renderDur.toFixed(1)}_${width}x${height}_${config.visualMood ?? 'auto'}`;
+      const dedupKey = `${entry.asset.localPath || entry.asset.remoteUrl || entry.asset.index}_${entry.stateTag ?? ''}_${entry.renderDur.toFixed(2)}_${width}x${height}_${config.visualMood ?? 'auto'}`;
       const cachedNorm = normalizedClipCache.get(dedupKey);
 
       let ok = false;
@@ -3378,7 +3784,11 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       }
 
       if (ok) {
-        normalizedClips.push({ path: normPath, baseDur: entry.baseDur });
+        normalizedClips.push({
+          path: normPath,
+          baseDur: entry.baseDur,
+          sameCardContinuation: entry.sameCardContinuation,
+        });
       }
 
       const pct = 55 + Math.round(((i + 1) / plannedEntries.length) * 18);
@@ -3449,18 +3859,36 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
 
           const filterParts: string[] = [];
           let prevLabel = '[0:v]';
-          let currentOffset = Math.max(0.5, Math.min(batch[0].baseDur, batch[0].actualDur - fadeDur - 0.08));
+          const firstStepFade = batch[1]?.sameCardContinuation
+            ? 0.05
+            : Math.max(0.15, Math.min(fadeDur, batch[1].actualDur * 0.35));
+          let currentOffset = Math.max(
+            0.35,
+            Math.min(batch[0].baseDur, batch[0].actualDur - firstStepFade - 0.04)
+          );
 
           for (let i = 1; i < batch.length; i++) {
-            const xfadeType = resolveXfadeTransition(config.transitionMode, bi * 6 + i - 1, xfadeSeed);
+            const isContinuation = Boolean(batch[i].sameCardContinuation);
+            const xfadeType = isContinuation
+              ? 'fade'
+              : isStudio2411Export
+              ? resolveSmooth2411XfadeTransition(config.transitionMode, bi * 6 + i - 1, xfadeSeed)
+              : resolveXfadeTransition(config.transitionMode, bi * 6 + i - 1, xfadeSeed);
             const nextLabel = `[v${i}]`;
             const outLabel = i === batch.length - 1 ? '[vout]' : nextLabel;
-            const safeStepFade = Math.max(0.15, Math.min(fadeDur, batch[i].actualDur * 0.35));
+            const safeStepFade = isContinuation
+              ? 0.05
+              : Math.max(0.15, Math.min(fadeDur, batch[i].actualDur * 0.35));
             filterParts.push(
               `${prevLabel}[${i}:v]xfade=transition=${xfadeType}:duration=${safeStepFade.toFixed(2)}:offset=${currentOffset.toFixed(2)}${outLabel}`
             );
             prevLabel = nextLabel;
-            currentOffset += Math.max(0.5, Math.min(batch[i].baseDur, batch[i].actualDur - safeStepFade - 0.05));
+            const nextStepFade =
+              i + 1 < batch.length && batch[i + 1]?.sameCardContinuation ? 0.05 : safeStepFade;
+            currentOffset += Math.max(
+              0.35,
+              Math.min(batch[i].baseDur, batch[i].actualDur - nextStepFade - 0.04)
+            );
           }
 
           const batchTotalDur = batch.reduce((sum, c) => sum + c.baseDur, 0) + 0.35;
@@ -4411,6 +4839,8 @@ async function startServer() {
     const selectedMediaIds = Array.isArray(req.body?.selectedMediaIds)
       ? req.body.selectedMediaIds.map(String)
       : [];
+    const subtitleFontName =
+      typeof req.body?.subtitleFontName === 'string' ? req.body.subtitleFontName : undefined;
 
     if (!script && !subject) {
       res.status(400).json({ error: 'Vui lòng nhập chủ đề hoặc lời thoại để tìm cảnh quay.' });
@@ -4438,6 +4868,7 @@ async function startServer() {
         aspectRatio,
         videoQuality,
         selectedMediaIds,
+        subtitleFontName,
       });
 
       const scenes: ScenePreviewItem[] = assets.map((a) => ({

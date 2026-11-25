@@ -73,7 +73,7 @@ const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
     strokeWidth: 2.0,
     boxStyle: 'outline',
     effect: 'karaoke',
-    showRoleBadges: true,
+    showRoleBadges: false,
   },
 };
 
@@ -142,7 +142,7 @@ const DEFAULT_LEARNING_CONFIG: RenderJobConfig = {
     strokeWidth: 2.0,
     boxStyle: 'outline',
     effect: 'karaoke',
-    showRoleBadges: true,
+    showRoleBadges: false,
   },
 };
 

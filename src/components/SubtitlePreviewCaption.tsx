@@ -111,7 +111,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   studio2411Theme,
 }) => {
   const effect = subtitle.effect ?? 'karaoke';
-  const showBadges = subtitle.showRoleBadges !== false;
+  const showBadges = subtitle.showRoleBadges === true;
 
   const presentation = useMemo(
     () =>
@@ -140,6 +140,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   );
   const [progress, setProgress] = useState(0);
   const subtitleBoxRef = useRef<HTMLDivElement | null>(null);
+  const lockedCountdownTopPctRef = useRef<number | null>(null);
   const [countdownTopPct, setCountdownTopPct] = useState<number>(53);
 
   useEffect(() => {
@@ -282,32 +283,36 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   const isCountdownActive = countdownNumber != null;
 
   useLayoutEffect(() => {
+    if (!isCountdownActive) {
+      lockedCountdownTopPctRef.current = null;
+    } else if (lockedCountdownTopPctRef.current !== null) {
+      return;
+    }
+
     const subEl = subtitleBoxRef.current;
     const stageEl = subEl?.offsetParent as HTMLElement | null;
     if (!subEl || !stageEl || stageEl.clientHeight <= 0) return;
     const stageH = stageEl.clientHeight;
     const subTop = subEl.offsetTop;
     const subBottom = subTop + subEl.offsetHeight;
-    const cdEl = stageEl.querySelector('[data-testid="studio-preview-countdown"]') as HTMLElement | null;
-    const measuredCdH = cdEl ? Math.round(cdEl.offsetHeight) : 0;
-    const cdHeightPx =
-      measuredCdH > 0
-        ? measuredCdH
-        : use2411CountdownStyle
-        ? aspectRatio === '16:9'
-          ? 42
-          : aspectRatio === '1:1'
-          ? 50
-          : 68
-        : Math.max(76, Math.round(countdownFontPx * 1.8));
+    const cdHeightPx = use2411CountdownStyle
+      ? aspectRatio === '16:9'
+        ? 46
+        : aspectRatio === '1:1'
+        ? 54
+        : 70
+      : Math.max(76, Math.round(countdownFontPx * 1.8));
     const bands = [{ topPx: subTop, bottomPx: subBottom }];
-    const cardInnerEl = stageEl.querySelector('[data-testid="studio-2411-stage-card"] > div:last-child');
+    const cardInnerEl = stageEl.querySelector(
+      '[data-testid="studio-2411-stage-card"] > div:last-child'
+    ) as HTMLElement | null;
     if (cardInnerEl) {
-      const sr = stageEl.getBoundingClientRect();
-      const cr = cardInnerEl.getBoundingClientRect();
+      // Use transform-free offsetTop/offsetHeight so enter/exit CSS transforms never shift countdown Y
+      const cardTop = cardInnerEl.offsetTop;
+      const cardBottom = cardTop + cardInnerEl.offsetHeight;
       bands.push({
-        topPx: Math.max(0, Math.round(cr.top - sr.top)),
-        bottomPx: Math.max(0, Math.round(cr.bottom - sr.top)),
+        topPx: Math.max(0, Math.round(cardTop)),
+        bottomPx: Math.max(0, Math.round(cardBottom)),
       });
     } else if (use2411CountdownStyle) {
       bands.push({
@@ -323,6 +328,9 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
       stageH
     );
     const nextPct = Math.max(18, Math.min(82, Number(((safeCenterY / stageH) * 100).toFixed(1))));
+    if (isCountdownActive) {
+      lockedCountdownTopPctRef.current = nextPct;
+    }
     setCountdownTopPct(nextPct);
   }, [
     isCountdownActive,

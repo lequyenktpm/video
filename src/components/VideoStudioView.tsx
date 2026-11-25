@@ -533,17 +533,20 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   };
 
   let pinnedSourceForPreview: string | null = null;
+  const activeRawLineIdx = findNonEmptyLineIndex(rawActiveSentence, safeActiveIdx);
   let activeSegIdx =
     previewBaseSegments[safeActiveIdx]?.text === rawActiveSentence
       ? safeActiveIdx
       : previewBaseSegments.findIndex((s) => s.text === rawActiveSentence);
+  if (activeSegIdx < 0 && activeRawLineIdx !== null) {
+    activeSegIdx = previewBaseSegments.findIndex((s) => s.rawLineIndex === activeRawLineIdx);
+  }
   if (activeSegIdx < 0 && previewBaseSegments.length > 0) {
     activeSegIdx = Math.min(safeActiveIdx, previewBaseSegments.length - 1);
   }
 
   let editTargetLineIdx: number | null = null;
   let editSourceLineIdx: number | null = null;
-  const activeRawLineIdx = findNonEmptyLineIndex(rawActiveSentence, safeActiveIdx);
 
   if (activeSegIdx >= 0 && previewBaseSegments[activeSegIdx]) {
     const activeSeg = previewBaseSegments[activeSegIdx];
@@ -610,6 +613,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     rawActive2411Override.speechText !== rawActiveSentence &&
     rawActive2411Override.speechText.includes(rawActiveSentence)
       ? { ...rawActive2411Override, speechText: rawActiveSentence }
+      : !rawActive2411Override &&
+        rawActiveSentence &&
+        rawActiveSentence !== stripNarrationTags(activeRawLine) &&
+        stripNarrationTags(activeRawLine).includes(rawActiveSentence)
+      ? { speechText: rawActiveSentence }
       : rawActive2411Override;
   let prevTargetForActive2411: string | undefined;
   let promptPreviewForActive2411: string | undefined;
@@ -697,7 +705,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       }
       exit2411TimerRef.current = window.setTimeout(() => {
         setExiting2411Card(null);
-      }, 340);
+      }, 460);
     }
     current2411SnapRef.current = nextSnap;
   }, [active2411CardKey]);
@@ -720,8 +728,15 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
 
       const lineText =
         stripNarrationTags(previewScenes[idx]?.sentence ?? previewLines[idx] ?? '') || '';
-      const rawLineForIdx = rawNonEmptyLines[idx] ?? lineText;
-      const segForIdx = previewBaseSegments[idx];
+      const matchedRawIdx = findNonEmptyLineIndex(lineText, idx);
+      const rawLineForIdx =
+        matchedRawIdx !== null ? rawNonEmptyLines[matchedRawIdx] : lineText;
+      const segForIdx =
+        previewBaseSegments.find((s) => s.text === lineText) ??
+        (matchedRawIdx !== null
+          ? previewBaseSegments.find((s) => s.rawLineIndex === matchedRawIdx)
+          : undefined) ??
+        previewBaseSegments[idx];
       const isSecondary = segForIdx?.voiceSlot === 'secondary';
       speakPreviewSlideText(lineText, isSecondary);
 
@@ -1037,6 +1052,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           aspectRatio: config.aspectRatio,
           videoQuality: config.videoQuality ?? '720p',
           selectedMediaIds: config.selectedMediaIds,
+          subtitleFontName: config.subtitle.fontName,
         }),
       });
       const data = await safeParseJsonResponse<{ scenes?: ScenePreviewItem[]; error?: string }>(
@@ -2388,7 +2404,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   <input
                     id="mpt-show-role-badges"
                     type="checkbox"
-                    checked={config.subtitle.showRoleBadges !== false}
+                    checked={config.subtitle.showRoleBadges === true}
                     onChange={(e) => updateSubtitle({ showRoleBadges: e.target.checked })}
                     className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
                   />

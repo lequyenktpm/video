@@ -9,6 +9,7 @@ import {
 import {
   build2411CardSpecForLine,
   getStudio2411ThemeMeta,
+  isGenericSpeakerLabel,
 } from '../shared/studioComponents2411';
 import { PresentationIcon } from './PresentationIcon';
 
@@ -664,61 +665,133 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
         const isOutro = spec.layoutKind === 'outro_recap';
         const isQuizPrompt = spec.layoutKind === 'quiz_prompt';
         const isAnswerReveal = spec.layoutKind === 'answer_reveal';
-        const spkA = spec.labels[0] ?? (isIntro ? 'Host' : isOutro ? 'Summary' : 'Prompt');
-        const spkB =
-          spec.labels[1] ??
-          (isIntro ? 'Challenge' : isOutro ? 'Practice' : isQuizPrompt ? 'Your Turn' : 'Reply');
+        const rawLabelA = spec.labels[0]?.trim() ?? '';
+        const rawLabelB = spec.labels[1]?.trim() ?? '';
+        const spkA = rawLabelA && !isGenericSpeakerLabel(rawLabelA) ? rawLabelA : '';
+        const spkB = rawLabelB && !isGenericSpeakerLabel(rawLabelB) ? rawLabelB : '';
         const promptBubbleText =
           isAnswerReveal && spec.promptPreviewText ? spec.promptPreviewText : spec.speechText;
-        const replyBubbleText = isIntro
-          ? `Listen & translate aloud in ${Math.max(1, spec.pauseSec || 5)}s!`
-          : isOutro
-          ? 'Save & repeat aloud daily for mastery!'
-          : isQuizPrompt
-          ? `Your turn · Translate in ${Math.max(1, spec.pauseSec || 5)}s`
-          : isAnswerReveal
+        const replyBubbleText = isAnswerReveal
           ? spec.speechText
           : spec.subtitle && spec.subtitle !== promptBubbleText
           ? spec.subtitle
           : spec.highlightWord;
 
-        const speakerAPose: 'talking' | 'idle' =
-          isIntro || isOutro || (isQuizPrompt && !countdownActive)
-            ? 'talking'
-            : 'idle';
-        const speakerBPose: 'talking' | 'thinking' | 'idle' =
-          isQuizPrompt ? 'thinking' : isAnswerReveal || isOutro ? 'talking' : 'idle';
+        if (isIntro || isOutro) {
+          return (
+            <div
+              className={`${isLandscape ? 'px-2.5 py-1.5' : isSquare ? 'px-2.5 py-2' : 'p-3'}`}
+              data-testid="studio-2411-friends-chat"
+            >
+              <div className="flex items-center gap-2">
+                <div className="flex flex-col items-center gap-0.5 shrink-0">
+                  <Animated2411Avatar
+                    shirtHex={primaryAccent}
+                    hairHex="#1E293B"
+                    hairStyle="short"
+                    pose="talking"
+                    side="left"
+                    className={isCompactStage ? 'w-7 h-7' : 'w-9 h-9'}
+                  />
+                  {spkA && (
+                    <span
+                      className="px-1.5 py-0.5 text-[8.5px] rounded-full font-bold text-white text-center leading-tight break-words"
+                      style={{ backgroundColor: primaryAccent }}
+                    >
+                      {spkA}
+                    </span>
+                  )}
+                </div>
+
+                <div
+                  className={`flex-1 min-w-0 rounded-xl rounded-tl-sm border ${
+                    isLandscape ? 'px-2.5 py-1.5' : isSquare ? 'px-2.5 py-2' : 'px-3 py-2.5'
+                  }`}
+                  style={{
+                    backgroundColor: theme.surfaceTintHex,
+                    borderColor: primaryAccent,
+                  }}
+                >
+                  <div
+                    className={`${dynamicTextCls(
+                      promptBubbleText,
+                      isLandscape ? 'text-[11px]' : isSquare ? 'text-[11.5px]' : 'text-[13px]',
+                      isLandscape ? 'text-[10px]' : 'text-[11.5px]'
+                    )} font-semibold leading-snug tracking-[0.015em] break-words whitespace-normal ${
+                      isCompactStage ? 'line-clamp-3' : ''
+                    }`}
+                    style={{ color: theme.textHex }}
+                  >
+                    {promptBubbleText}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        let speakerAPose: 'talking' | 'thinking' | 'idle' = 'idle';
+        let speakerBPose: 'talking' | 'thinking' | 'idle' = 'idle';
+        if (countdownActive) {
+          speakerAPose = 'idle';
+          speakerBPose = 'thinking';
+        } else if (isSecondarySlot || isAnswerReveal) {
+          speakerAPose = 'idle';
+          speakerBPose = 'talking';
+        } else {
+          speakerAPose = 'talking';
+          speakerBPose = 'idle';
+        }
+
+        const isAActive = speakerAPose !== 'idle';
+        const isBActive = speakerBPose !== 'idle';
 
         return (
-          <div className={`${isLandscape ? 'px-2 py-0.5 space-y-1' : isSquare ? 'px-2 py-1 space-y-1' : 'p-2 space-y-1.5'}`} data-testid="studio-2411-friends-chat">
+          <div
+            className={`${
+              isLandscape ? 'px-2 py-1 space-y-1.5' : isSquare ? 'px-2.5 py-1.5 space-y-1.5' : 'p-2.5 space-y-2'
+            }`}
+            data-testid="studio-2411-friends-chat"
+          >
             {/* Row 1: Speaker A source prompt bubble */}
-            <div className="flex items-center gap-1.5">
-              <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[40px] max-w-[54px]' : 'min-w-[46px] max-w-[64px]'}`}>
+            <div className={`flex items-center gap-2 transition-opacity duration-200 ${isAActive ? 'opacity-100' : 'opacity-90'}`}>
+              <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[34px]' : 'min-w-[40px]'}`}>
                 <Animated2411Avatar
                   shirtHex={primaryAccent}
                   hairHex="#1E293B"
                   hairStyle="short"
                   pose={speakerAPose}
                   side="left"
-                  className={isCompactStage ? 'w-6 h-6' : 'w-8 h-8'}
+                  className={isCompactStage ? 'w-6.5 h-6.5' : 'w-8.5 h-8.5'}
                 />
-                <span
-                  className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight break-words`}
-                  style={{ backgroundColor: primaryAccent }}
-                >
-                  {spkA}
-                </span>
+                {spkA && (
+                  <span
+                    className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight break-words`}
+                    style={{ backgroundColor: primaryAccent }}
+                  >
+                    {spkA}
+                  </span>
+                )}
               </div>
 
               <div
-                className={`flex-1 min-w-0 rounded-xl rounded-tl-sm border ${isLandscape ? 'px-2 py-0.5' : isSquare ? 'px-2 py-1' : 'px-2.5 py-1.5'}`}
+                className={`flex-1 min-w-0 rounded-xl rounded-tl-sm border ${
+                  isLandscape ? 'px-2.5 py-1' : isSquare ? 'px-2.5 py-1.5' : 'px-3 py-2'
+                }`}
                 style={{
                   backgroundColor: theme.surfaceTintHex,
                   borderColor: primaryAccent,
+                  borderWidth: isAActive ? '1.5px' : '1px',
                 }}
               >
                 <div
-                  className={`${dynamicTextCls(promptBubbleText, isLandscape ? 'text-[9.5px]' : isSquare ? 'text-[10px]' : 'text-[11.5px]', isLandscape ? 'text-[9px]' : 'text-[10px]')} font-bold leading-tight break-words whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
+                  className={`${dynamicTextCls(
+                    promptBubbleText,
+                    isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]',
+                    isLandscape ? 'text-[9.5px]' : 'text-[11px]'
+                  )} font-semibold leading-snug tracking-[0.015em] break-words whitespace-normal ${
+                    isCompactStage ? 'line-clamp-2' : ''
+                  }`}
                   style={{ color: theme.textHex }}
                 >
                   {promptBubbleText}
@@ -727,14 +800,15 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             </div>
 
             {/* Row 2: Speaker B animated 3-dot thinking bubble OR target answer bubble */}
-            <div className="flex items-center justify-end gap-1.5">
+            <div className={`flex items-center justify-end gap-2 transition-opacity duration-200 ${isBActive ? 'opacity-100' : 'opacity-90'}`}>
               <div
-                className={`flex-1 min-w-0 rounded-xl rounded-tr-sm border ${isLandscape ? 'px-2 py-0.5' : isSquare ? 'px-2 py-1' : 'px-2.5 py-1.5'} ${
-                  isQuizPrompt ? 'border-dashed' : ''
-                }`}
+                className={`flex-1 min-w-0 rounded-xl rounded-tr-sm border ${
+                  isLandscape ? 'px-2.5 py-1' : isSquare ? 'px-2.5 py-1.5' : 'px-3 py-2'
+                } ${isQuizPrompt ? 'border-dashed' : ''}`}
                 style={{
                   backgroundColor: `${secondaryAccent}1C`,
                   borderColor: secondaryAccent,
+                  borderWidth: isBActive ? '1.5px' : '1px',
                 }}
               >
                 {isQuizPrompt ? (
@@ -757,7 +831,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                       />
                     </div>
                     <span
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold shrink-0"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-bold shrink-0"
                       style={{
                         backgroundColor: `${secondaryAccent}22`,
                         color: secondaryAccent,
@@ -769,15 +843,21 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                   </div>
                 ) : (
                   <div
-                    className={`${dynamicTextCls(replyBubbleText, isLandscape ? 'text-[9.5px]' : isSquare ? 'text-[10px]' : 'text-[11.5px]', isLandscape ? 'text-[9px]' : 'text-[10px]')} font-bold leading-tight break-words whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
-                    style={{ color: isIntro ? secondaryAccent : theme.textHex }}
+                    className={`${dynamicTextCls(
+                      replyBubbleText,
+                      isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]',
+                      isLandscape ? 'text-[9.5px]' : 'text-[11px]'
+                    )} font-semibold leading-snug tracking-[0.015em] break-words whitespace-normal ${
+                      isCompactStage ? 'line-clamp-2' : ''
+                    }`}
+                    style={{ color: theme.textHex }}
                   >
                     {replyBubbleText}
                   </div>
                 )}
               </div>
 
-              <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[40px] max-w-[54px]' : 'min-w-[46px] max-w-[64px]'}`}>
+              <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[34px]' : 'min-w-[40px]'}`}>
                 <Animated2411Avatar
                   shirtHex={secondaryAccent}
                   hairHex="#78350F"
@@ -785,21 +865,26 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                   pose={speakerBPose}
                   side="right"
                   dotAccentHex={secondaryAccent}
-                  className={isCompactStage ? 'w-6 h-6' : 'w-8 h-8'}
+                  className={isCompactStage ? 'w-6.5 h-6.5' : 'w-8.5 h-8.5'}
                 />
-                <span
-                  className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight break-words`}
-                  style={{ backgroundColor: secondaryAccent }}
-                >
-                  {spkB}
-                </span>
+                {spkB && (
+                  <span
+                    className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight break-words`}
+                    style={{ backgroundColor: secondaryAccent }}
+                  >
+                    {spkB}
+                  </span>
+                )}
               </div>
             </div>
           </div>
         );
       }
 
-      case 'avatar-speech':
+      case 'avatar-speech': {
+        const rawAvatarLabel = spec.labels[0]?.trim() ?? '';
+        const avatarTag =
+          rawAvatarLabel && !isGenericSpeakerLabel(rawAvatarLabel) ? rawAvatarLabel : '';
         return (
           <div className={`${padCls} flex items-center gap-2`}>
             <div className="flex flex-col items-center gap-0.5 shrink-0">
@@ -816,12 +901,14 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                   className={isCompactStage ? 'w-6 h-6' : 'w-8 h-8'}
                 />
               </div>
-              <span
-                className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight`}
-                style={{ backgroundColor: primaryAccent }}
-              >
-                {spec.labels[0] ?? 'Speaker'}
-              </span>
+              {avatarTag && (
+                <span
+                  className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight`}
+                  style={{ backgroundColor: primaryAccent }}
+                >
+                  {avatarTag}
+                </span>
+              )}
             </div>
 
             <div className="relative min-w-0 flex-1">
@@ -833,7 +920,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
                 }}
               >
                 <div
-                  className={`${dynamicTextCls(spec.speechText, isLandscape ? 'text-[10px]' : isSquare ? 'text-[10.5px]' : 'text-[11.5px]', 'text-[9.5px]')} font-bold leading-tight break-words whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
+                  className={`${dynamicTextCls(spec.speechText, isLandscape ? 'text-[10.5px]' : isSquare ? 'text-[11px]' : 'text-[12.5px]', 'text-[10.5px]')} font-semibold leading-snug tracking-[0.015em] break-words whitespace-normal ${isCompactStage ? 'line-clamp-2' : ''}`}
                   style={{ color: theme.textHex }}
                 >
                   {spec.speechText}
@@ -853,6 +940,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             </div>
           </div>
         );
+      }
 
       case 'dialogue-upgrade':
         return (
@@ -980,20 +1068,12 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
       )}
 
       <div
-        className={`relative z-10 mx-auto transition-opacity duration-150 ${animClass} ${
-          countdownActive ? 'opacity-95' : 'opacity-100'
-        } ${
+        className={`relative z-10 mx-auto opacity-100 ${animClass} ${
           isLandscape
-            ? countdownActive
-              ? 'w-[74%] mt-[4%]'
-              : 'w-[74%] mt-[6.5%]'
+            ? 'w-[74%] mt-[5%]'
             : isSquare
-            ? countdownActive
-              ? 'w-[88%] mt-[5%]'
-              : 'w-[89%] mt-[7.5%]'
-            : countdownActive
-            ? 'w-[89%] mt-[7.5%]'
-            : 'w-[89%] mt-[10.5%]'
+            ? 'w-[89%] mt-[6.5%]'
+            : 'w-[89%] mt-[9%]'
         }`}
       >
         <div
@@ -1010,46 +1090,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             />
           )}
 
-          <div
-            className={`flex items-center justify-between gap-2 px-2.5 border-b ${
-              isCompactStage ? 'py-0.5' : 'py-1.5'
-            }`}
-            style={{
-              backgroundColor: theme.surfaceTintHex,
-              borderColor: theme.cardBorderHex,
-            }}
-          >
-            <div className="flex items-center gap-1 min-w-0">
-              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: primaryAccent }} />
-              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: secondaryAccent }} />
-              {spec.variant === 'css-browser-mockup' && (
-                <span className="w-2 h-2 rounded-full shrink-0 bg-emerald-500" />
-              )}
-              <span
-                className={`${isCompactStage ? 'text-[8.5px]' : 'text-[9px]'} font-bold tracking-wider uppercase whitespace-nowrap ml-0.5 truncate`}
-                style={{ color: primaryAccent }}
-              >
-                {spec.variant === 'css-browser-mockup'
-                  ? `studio://2411/${spec.layoutKind}`
-                  : spec.kickerLabel}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {isCompactStage && (
-                <span className="text-[8px] font-mono uppercase" style={{ color: primaryAccent }}>
-                  {spec.resolvedAnimationIn}
-                </span>
-              )}
-              <span
-                className={`${isCompactStage ? 'text-[8.5px]' : 'text-[9px]'} font-mono font-semibold tabular-nums`}
-                style={{ color: theme.mutedTextHex }}
-              >
-                {String(spec.stepIndex).padStart(2, '0')} / {String(spec.totalSteps).padStart(2, '0')}
-              </span>
-            </div>
-          </div>
-
-          <div className={isCompactStage ? 'py-0' : 'py-1'}>{renderVariantBody()}</div>
+          <div className={isCompactStage ? 'py-1' : 'py-2'}>{renderVariantBody()}</div>
 
           {(spec.prevTargetText || spec.exampleText) && (
             <div className={`${isCompactStage ? 'px-2 pb-1' : 'px-2.5 pb-1.5'}`}>
@@ -1106,17 +1147,7 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             </div>
           )}
 
-          <div className={`${isCompactStage ? 'px-2 pb-1' : 'px-2.5 pb-2 space-y-1'}`}>
-            {!isCompactStage && (
-              <div className="flex items-center justify-between gap-2 text-[9.5px]" style={{ color: theme.mutedTextHex }}>
-                <span className="font-semibold break-words min-w-0 truncate">{spec.title}</span>
-                <span className="font-mono uppercase shrink-0" style={{ color: primaryAccent }}>
-                  {spec.animationIn === 'random'
-                    ? `random → ${spec.resolvedAnimationIn}`
-                    : spec.animationIn}
-                </span>
-              </div>
-            )}
+          <div className={`${isCompactStage ? 'px-2 pb-1.5' : 'px-2.5 pb-2'}`}>
             <div
               className={`w-full ${isCompactStage ? 'h-1' : 'h-1.5'} rounded-full overflow-hidden`}
               style={{ backgroundColor: theme.cardBorderHex }}
