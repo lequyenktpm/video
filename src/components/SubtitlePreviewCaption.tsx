@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { SubtitleConfig, VideoAspectRatio } from '../shared/types';
 import {
   getCanvasDimensions,
   getSubtitleWrapBudget,
   hasCjkChars,
+  resolveCountdownCenterY,
   tokenizeSubtitleForEffect,
   wrapSubtitleLine,
 } from '../shared/mptEngine';
@@ -14,6 +15,7 @@ interface SubtitlePreviewCaptionProps {
   aspectRatio?: VideoAspectRatio;
   replayNonce: number;
   countdownNumber?: number | null;
+  pinnedSourceText?: string | null;
 }
 
 export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
@@ -22,6 +24,7 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   aspectRatio = '9:16',
   replayNonce,
   countdownNumber = null,
+  pinnedSourceText = null,
 }) => {
   const effect = subtitle.effect ?? 'karaoke';
 
@@ -36,10 +39,12 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
 
   const tokens = useMemo(() => tokenizeSubtitleForEffect(wrappedText), [wrappedText]);
   const [progress, setProgress] = useState(0);
+  const subtitleBoxRef = useRef<HTMLDivElement | null>(null);
+  const [countdownTopPct, setCountdownTopPct] = useState<number>(44);
 
   useEffect(() => {
     setProgress(0);
-    if (effect !== 'karaoke' && effect !== 'typewriter') {
+    if (effect !== 'karaoke' && effect !== 'typewriter' && effect !== 'laser') {
       return;
     }
 
@@ -64,21 +69,33 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
   const previewFontPx = Math.max(11, Math.min(24, Math.round(budget.scaledFontSize * previewScale)));
   const countdownFontPx = Math.max(38, Math.min(68, Math.round(previewFontPx * 2.55)));
 
-  const fontCss =
-    subtitle.fontName === 'JetBrains Mono'
-      ? 'var(--font-mono)'
-      : `'${subtitle.fontName}', 'Noto Sans', sans-serif`;
+  const resolveFontCss = (sampleText: string): string => {
+    if (subtitle.fontName === 'JetBrains Mono') {
+      return 'var(--font-mono)';
+    }
+    if (
+      hasCjkChars(sampleText) &&
+      subtitle.fontName !== 'M PLUS 1p' &&
+      subtitle.fontName !== 'BIZ UDPGothic'
+    ) {
+      return `'M PLUS 1p', 'BIZ UDPGothic', '${subtitle.fontName}', 'Noto Sans', sans-serif`;
+    }
+    return `'${subtitle.fontName}', 'M PLUS 1p', 'Noto Sans', sans-serif`;
+  };
+
+  const fontCss = resolveFontCss(text);
 
   const baseStyle: React.CSSProperties = {
     fontFamily: fontCss,
     fontSize: `${previewFontPx}px`,
+    letterSpacing: '0.015em',
     color: subtitle.textColor,
     overflowWrap: 'break-word',
     wordBreak: 'break-word',
     paintOrder: 'stroke fill',
     WebkitTextStroke:
       subtitle.boxStyle === 'outline' && subtitle.strokeWidth > 0
-        ? `${Math.max(1.2, subtitle.strokeWidth * 0.78)}px ${subtitle.strokeColor}`
+        ? `${Math.max(1.0, subtitle.strokeWidth * 0.62)}px ${subtitle.strokeColor}`
         : undefined,
     textShadow: '0 2px 5px rgba(0,0,0,0.92)',
   };
@@ -102,12 +119,212 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
       ? 'animate-mpt-slide'
       : '';
 
+  const sourceRawSize = Math.max(
+    18,
+    Math.min(58, Math.round(subtitle.sourceFontSize ?? subtitle.fontSize * 0.8))
+  );
+  const srcBudget = useMemo(() => {
+    const srcCjk = Boolean(
+      pinnedSourceText && hasCjkChars(pinnedSourceText) && !pinnedSourceText.includes(' ')
+    );
+    return getSubtitleWrapBudget(
+      { ...subtitle, fontSize: sourceRawSize },
+      width,
+      height,
+      srcCjk
+    );
+  }, [pinnedSourceText, subtitle, sourceRawSize, width, height]);
+
+  const wrappedPinnedSource = useMemo(() => {
+    if (!pinnedSourceText?.trim()) return '';
+    return wrapSubtitleLine(pinnedSourceText.trim(), srcBudget.maxCharsPerLine);
+  }, [pinnedSourceText, srcBudget.maxCharsPerLine]);
+
+  const stickyFontPx = Math.max(
+    10,
+    Math.min(24, Math.round(srcBudget.scaledFontSize * previewScale))
+  );
+  const stickyFontCss = resolveFontCss(pinnedSourceText ?? '');
+  const stickyStyle: React.CSSProperties = {
+    fontFamily: stickyFontCss,
+    fontSize: `${stickyFontPx}px`,
+    letterSpacing: '0.015em',
+    color: '#E2E8F0',
+    overflowWrap: 'break-word',
+    wordBreak: 'break-word',
+    paintOrder: 'stroke fill',
+    WebkitTextStroke:
+      subtitle.boxStyle === 'outline' && subtitle.strokeWidth > 0
+        ? `${Math.max(0.9, subtitle.strokeWidth * 0.56)}px ${subtitle.strokeColor}`
+        : undefined,
+    textShadow: '0 2px 5px rgba(0,0,0,0.92)',
+  };
+
+  const isTopPos = subtitle.position === 'top';
+
+  useLayoutEffect(() => {
+    const subEl = subtitleBoxRef.current;
+    const stageEl = subEl?.offsetParent as HTMLElement | null;
+    if (!subEl || !stageEl || stageEl.clientHeight <= 0) return;
+    const stageH = stageEl.clientHeight;
+    const subTop = subEl.offsetTop;
+    const subBottom = subTop + subEl.offsetHeight;
+    const cdHeightPx = Math.max(44, Math.round(countdownFontPx * 1.15));
+    const safeCenterY = resolveCountdownCenterY(
+      [{ topPx: subTop, bottomPx: subBottom }],
+      cdHeightPx,
+      stageH
+    );
+    const nextPct = Math.max(16, Math.min(82, Number(((safeCenterY / stageH) * 100).toFixed(1))));
+    setCountdownTopPct(nextPct);
+  }, [
+    countdownNumber,
+    wrappedText,
+    pinnedSourceText,
+    subtitle.position,
+    subtitle.customPositionPct,
+    subtitle.fontSize,
+    subtitle.sourceFontSize,
+    subtitle.boxStyle,
+    aspectRatio,
+    countdownFontPx,
+  ]);
+
+  const targetCaptionNode = (
+    <p
+      key={`${effect}_${wrappedText}_${replayNonce}`}
+      className={`text-center font-bold leading-snug max-w-[92%] ${animClass} ${
+        subtitle.boxStyle === 'dark_box' ? 'px-2.5 py-1 rounded bg-black/70' : ''
+      }`}
+      style={baseStyle}
+    >
+      {effect === 'karaoke' ? (
+        tokens.map((tok, i) => {
+          if (tok === '\n') return <br key={i} />;
+          const isHighlighted = i < activeWordCount;
+          const isCurrent = i === activeWordCount - 1;
+          const spaceMatch = tok.match(/^(.*?)(\s+)$/);
+          const wordPart = spaceMatch ? spaceMatch[1] : tok;
+          const spacePart = spaceMatch ? spaceMatch[2] : '';
+          return (
+            <React.Fragment key={i}>
+              <span
+                style={{
+                  color: isHighlighted ? subtitle.highlightColor || '#FACC15' : subtitle.textColor,
+                  display: 'inline-block',
+                  transform: isCurrent ? 'scale(1.03)' : 'scale(1)',
+                  transition: 'color 95ms linear, transform 95ms ease-out',
+                }}
+              >
+                {wordPart}
+              </span>
+              {spacePart}
+            </React.Fragment>
+          );
+        })
+      ) : effect === 'laser' ? (
+        tokens.map((tok, i) => {
+          if (tok === '\n') return <br key={i} />;
+          const isLit = i < activeWordCount;
+          const isHead = i === activeWordCount - 1;
+          const spaceMatch = tok.match(/^(.*?)(\s+)$/);
+          const wordPart = spaceMatch ? spaceMatch[1] : tok;
+          const spacePart = spaceMatch ? spaceMatch[2] : '';
+          const hi = subtitle.highlightColor || '#FACC15';
+          return (
+            <React.Fragment key={i}>
+              <span
+                style={{
+                  opacity: isLit ? 1 : 0.08,
+                  color: isHead ? '#FFFFFF' : isLit ? hi : subtitle.textColor,
+                  display: 'inline-block',
+                  transform: isHead ? 'scale(1.07)' : 'scale(1)',
+                  textShadow: isHead
+                    ? `0 0 10px ${hi}, 0 0 20px ${hi}, 0 2px 5px rgba(0,0,0,0.95)`
+                    : isLit
+                    ? `0 0 6px ${hi}66, 0 2px 5px rgba(0,0,0,0.92)`
+                    : '0 2px 5px rgba(0,0,0,0.92)',
+                  transition:
+                    'opacity 70ms linear, color 140ms ease-out, transform 120ms ease-out, text-shadow 140ms ease-out',
+                }}
+              >
+                {wordPart}
+              </span>
+              {spacePart}
+            </React.Fragment>
+          );
+        })
+      ) : effect === 'typewriter' ? (
+        <>
+          {tokens.map((tok, i) => {
+            if (tok === '\n') return <br key={i} />;
+            const visible = i < activeWordCount;
+            const isLastVisible = i === activeWordCount - 1;
+            const spaceMatch = tok.match(/^(.*?)(\s+)$/);
+            const wordPart = spaceMatch ? spaceMatch[1] : tok;
+            const spacePart = spaceMatch ? spaceMatch[2] : '';
+            return (
+              <React.Fragment key={i}>
+                <span
+                  style={{
+                    opacity: visible ? 1 : 0,
+                    transition: 'opacity 60ms ease-in',
+                  }}
+                >
+                  {wordPart}
+                </span>
+                {spacePart}
+                {isLastVisible && !isTypingFinished && (
+                  <span
+                    aria-hidden="true"
+                    className="animate-mpt-caret inline-block ml-0.5 font-normal"
+                    style={{ color: subtitle.highlightColor || '#FACC15' }}
+                  >
+                    |
+                  </span>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </>
+      ) : (
+        wrappedText.split('\n').map((line, li) => (
+          <React.Fragment key={li}>
+            {li > 0 && <br />}
+            {line}
+          </React.Fragment>
+        ))
+      )}
+    </p>
+  );
+
+  const pinnedSourceNode = wrappedPinnedSource ? (
+    <p
+      data-testid="studio-preview-sticky-source"
+      className={`text-center font-medium leading-snug max-w-[92%] ${
+        subtitle.boxStyle === 'dark_box' ? 'px-2 py-0.5 rounded bg-black/65' : ''
+      }`}
+      style={stickyStyle}
+    >
+      {wrappedPinnedSource.split('\n').map((line, li) => (
+        <React.Fragment key={li}>
+          {li > 0 && <br />}
+          {line}
+        </React.Fragment>
+      ))}
+    </p>
+  ) : null;
+
   return (
     <>
       {countdownNumber != null && (
         <div
           data-testid="studio-preview-countdown"
-          className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-20"
+          className="absolute left-0 right-0 flex flex-col items-center pointer-events-none z-20 transition-[top] duration-150 ease-out"
+          style={{
+            top: `${countdownTopPct}%`,
+            transform: 'translateY(-50%)',
+          }}
         >
           <span
             key={countdownNumber}
@@ -127,77 +344,16 @@ export const SubtitlePreviewCaption: React.FC<SubtitlePreviewCaptionProps> = ({
       )}
 
       <div
+        ref={subtitleBoxRef}
         data-testid="studio-preview-subtitle"
         data-effect={effect}
-        className="absolute left-3 right-3 flex justify-center pointer-events-none z-10"
+        className={`absolute left-3 right-3 flex flex-col items-center pointer-events-none z-10 ${
+          isTopPos ? 'gap-1.5' : 'gap-1.5'
+        }`}
         style={containerPosStyle}
       >
-        <p
-          key={`${effect}_${wrappedText}_${replayNonce}`}
-          className={`text-center font-bold leading-snug max-w-[92%] ${animClass} ${
-            subtitle.boxStyle === 'dark_box' ? 'px-2.5 py-1 rounded bg-black/70' : ''
-          }`}
-          style={baseStyle}
-        >
-          {effect === 'karaoke' ? (
-            tokens.map((tok, i) => {
-              if (tok === '\n') return <br key={i} />;
-              const isHighlighted = i < activeWordCount;
-              const isCurrent = i === activeWordCount - 1;
-              return (
-                <span
-                  key={i}
-                  style={{
-                    color: isHighlighted ? subtitle.highlightColor || '#FACC15' : subtitle.textColor,
-                    display: 'inline-block',
-                    whiteSpace: 'pre-wrap',
-                    transform: isCurrent ? 'scale(1.07)' : 'scale(1)',
-                    transition: 'color 95ms linear, transform 95ms ease-out',
-                  }}
-                >
-                  {tok}
-                </span>
-              );
-            })
-          ) : effect === 'typewriter' ? (
-            <>
-              {tokens.map((tok, i) => {
-                if (tok === '\n') return <br key={i} />;
-                const visible = i < activeWordCount;
-                const isLastVisible = i === activeWordCount - 1;
-                return (
-                  <React.Fragment key={i}>
-                    <span
-                      style={{
-                        opacity: visible ? 1 : 0,
-                        whiteSpace: 'pre-wrap',
-                        transition: 'opacity 60ms ease-in',
-                      }}
-                    >
-                      {tok}
-                    </span>
-                    {isLastVisible && !isTypingFinished && (
-                      <span
-                        aria-hidden="true"
-                        className="animate-mpt-caret inline-block ml-0.5 font-normal"
-                        style={{ color: subtitle.highlightColor || '#FACC15' }}
-                      >
-                        |
-                      </span>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-            </>
-          ) : (
-            wrappedText.split('\n').map((line, li) => (
-              <React.Fragment key={li}>
-                {li > 0 && <br />}
-                {line}
-              </React.Fragment>
-            ))
-          )}
-        </p>
+        {targetCaptionNode}
+        {pinnedSourceNode}
       </div>
     </>
   );

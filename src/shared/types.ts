@@ -32,6 +32,10 @@ export type MaterialSource =
   | 'stock_free'
   | 'local_upload';
 
+export type MediaTypeFilter = 'all' | 'video_only' | 'image_only';
+
+export type VisualMood = 'auto' | 'bright' | 'moody' | 'vibrant' | 'minimal' | 'cinematic';
+
 export type VideoAspectRatio = '9:16' | '16:9' | '1:1';
 
 export type VideoQuality = '480p' | '720p' | '1080p';
@@ -53,11 +57,23 @@ export type VideoTransitionMode =
 
 export type SubtitlePosition = 'bottom' | 'center' | 'top' | 'custom';
 
-export type SubtitleFont = 'DejaVu Sans' | 'Liberation Sans' | 'JetBrains Mono' | 'Noto Sans';
+export type SubtitleFont =
+  | 'DejaVu Sans'
+  | 'Liberation Sans'
+  | 'JetBrains Mono'
+  | 'Noto Sans'
+  | 'M PLUS 1p'
+  | 'BIZ UDPGothic';
 
 export type SubtitleBoxStyle = 'outline' | 'dark_box';
 
-export type SubtitleEffect = 'karaoke' | 'pop_zoom' | 'fade_slide' | 'typewriter' | 'static';
+export type SubtitleEffect =
+  | 'karaoke'
+  | 'laser'
+  | 'pop_zoom'
+  | 'fade_slide'
+  | 'typewriter'
+  | 'static';
 
 export type BgmPreset =
   | 'none'
@@ -73,9 +89,15 @@ export interface SubtitleCue {
   index: number;
   startSec: number;
   endSec: number;
+  animDurationSec?: number;
   text: string;
   voiceSlot?: 'primary' | 'secondary';
   isCountdown?: boolean;
+  isStickySource?: boolean;
+  isStaticHold?: boolean;
+  isIntroOrOutro?: boolean;
+  companionSourceLines?: number;
+  companionTargetLines?: number;
 }
 
 export interface SubtitleConfig {
@@ -84,6 +106,7 @@ export interface SubtitleConfig {
   position: SubtitlePosition;
   customPositionPct: number;
   fontSize: number;
+  sourceFontSize?: number;
   textColor: string;
   highlightColor: string;
   strokeColor: string;
@@ -124,6 +147,8 @@ export interface RenderJobConfig {
   terms: string[];
   scenePrompts: string[];
   materialSource: MaterialSource;
+  mediaTypeFilter?: MediaTypeFilter;
+  visualMood?: VisualMood;
   selectedMediaIds: string[];
   customScenes?: ScenePreviewItem[];
   aspectRatio: VideoAspectRatio;
@@ -141,6 +166,7 @@ export interface RenderJobConfig {
   targetRepeatPauseSec?: number;
   fullAnswerRecapMode?: FullAnswerRecapMode;
   summarizeAtEnd?: boolean;
+  stickyDualSubtitle?: boolean;
   outputDir?: string;
   outputFilename?: string;
   voiceRate: number;

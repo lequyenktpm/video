@@ -10,6 +10,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import {
   buildAssFromCues,
   buildCountdownCues,
+  buildDualSubtitleCues,
   buildMediaClipsPlan,
   buildMoneyPrinterPrompt,
   buildScenePromptsFromScript,
@@ -27,6 +28,7 @@ import {
   normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
   planNarrationSegments,
+  RawSegmentTiming,
   resolveXfadeTransition,
   slugifyOutputFilename,
   splitCueIntoShortSubCues,
@@ -40,6 +42,7 @@ import {
   LanguageCode,
   MaterialSource,
   MediaAssetItem,
+  MediaTypeFilter,
   RenderJobConfig,
   RenderJobStatus,
   ScenePreviewItem,
@@ -49,6 +52,7 @@ import {
   TtsProvider,
   VideoAspectRatio,
   VideoQuality,
+  VisualMood,
   VoiceOptionId,
 } from './src/shared/types';
 
@@ -74,8 +78,9 @@ const OUTPUTS_DIR = path.join(DATA_DIR, 'outputs');
 const PROJECT_OUTPUT_ROOT = path.join(ROOT_DIR, 'output');
 const CACHE_DIR = path.join(DATA_DIR, 'cache');
 const BGM_DIR = path.join(DATA_DIR, 'bgm');
+const FONTS_DIR = path.join(ROOT_DIR, 'assets', 'fonts');
 
-for (const dir of [DATA_DIR, UPLOADS_DIR, OUTPUTS_DIR, PROJECT_OUTPUT_ROOT, CACHE_DIR, BGM_DIR]) {
+for (const dir of [DATA_DIR, UPLOADS_DIR, OUTPUTS_DIR, PROJECT_OUTPUT_ROOT, CACHE_DIR, BGM_DIR, FONTS_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -116,7 +121,7 @@ function listProjectOutputSubfolders(): string[] {
 }
 
 function allocateUniqueBaseName(absDir: string, rawBase: string): string {
-  const base = rawBase || 'video_ngan';
+  const base = rawBase || '🚀 Video học tập';
   if (
     !fs.existsSync(path.join(absDir, `${base}.mp4`)) &&
     !fs.existsSync(path.join(absDir, `${base}.srt`))
@@ -124,7 +129,7 @@ function allocateUniqueBaseName(absDir: string, rawBase: string): string {
     return base;
   }
   for (let n = 2; n <= 999; n++) {
-    const candidate = `${base}_${n}`;
+    const candidate = `${base} (${n})`;
     if (
       !fs.existsSync(path.join(absDir, `${candidate}.mp4`)) &&
       !fs.existsSync(path.join(absDir, `${candidate}.srt`))
@@ -132,7 +137,7 @@ function allocateUniqueBaseName(absDir: string, rawBase: string): string {
       return candidate;
     }
   }
-  return `${base}_${Date.now()}`;
+  return `${base} (${Date.now()})`;
 }
 
 async function runFfmpeg(args: string[], timeoutMs = 90000): Promise<void> {
@@ -365,6 +370,84 @@ async function createClockTickTockMp3(durationSec: number, outPath: string): Pro
       '-b:a',
       '96k',
       outPath,
+    ],
+    12000
+  );
+}
+
+async function normalizeSpeechAudioToWav(inPath: string, outWavPath: string): Promise<void> {
+  const rawDur = await probeDurationSec(inPath);
+  try {
+    await runFfmpeg(
+      [
+        '-y',
+        '-i',
+        inPath,
+        '-af',
+        'silenceremove=start_periods=1:start_duration=0:start_threshold=-42dB,areverse,silenceremove=start_periods=1:start_duration=0:start_threshold=-42dB,areverse,apad=pad_dur=0.04',
+        '-ar',
+        '24000',
+        '-ac',
+        '1',
+        '-c:a',
+        'pcm_s16le',
+        outWavPath,
+      ],
+      15000
+    );
+    const trimmedDur = await probeDurationSec(outWavPath);
+    if (trimmedDur >= Math.max(0.25, rawDur * 0.28)) {
+      return;
+    }
+  } catch {
+    // Fall back to direct resample without aggressive silence trim
+  }
+  await runFfmpeg(
+    ['-y', '-i', inPath, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', outWavPath],
+    15000
+  );
+}
+
+async function createSilenceWav(durationSec: number, outWavPath: string): Promise<void> {
+  const safeDur = Math.max(0.25, Math.min(10.0, durationSec));
+  await runFfmpeg(
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'anullsrc=r=24000:cl=mono',
+      '-t',
+      safeDur.toFixed(3),
+      '-c:a',
+      'pcm_s16le',
+      outWavPath,
+    ],
+    12000
+  );
+}
+
+async function createClockTickTockWav(durationSec: number, outWavPath: string): Promise<void> {
+  const safeDur = Math.max(0.5, Math.min(10.0, durationSec));
+  const rawExpr =
+    'if(lt(mod(t,1),0.036),exp(-mod(t,1)*155)*(if(eq(mod(floor(t),2),0),0.50*sin(2*PI*2450*mod(t,1))+0.34*sin(2*PI*1150*mod(t,1))+0.16*sin(2*PI*4600*mod(t,1)),0.48*sin(2*PI*1760*mod(t,1))+0.38*sin(2*PI*820*mod(t,1))+0.14*sin(2*PI*3300*mod(t,1)))),0)+if(between(mod(t,1),0.011,0.022),exp(-(mod(t,1)-0.011)*240)*0.20*sin(2*PI*3100*(mod(t,1)-0.011)),0)';
+  const escapedExpr = rawExpr.replace(/,/g, '\\,');
+  await runFfmpeg(
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      `aevalsrc=${escapedExpr}:s=24000:d=${safeDur.toFixed(3)}`,
+      '-af',
+      'highpass=f=380,lowpass=f=6800,volume=1.95',
+      '-ar',
+      '24000',
+      '-ac',
+      '1',
+      '-c:a',
+      'pcm_s16le',
+      outWavPath,
     ],
     12000
   );
@@ -1180,13 +1263,23 @@ function buildFallbackTopics(query: string, language: LanguageCode): TopicSugges
 /**
  * Searches Wikimedia Commons for crisp real photographs AND videos (excluding collages/diagrams/SVGs).
  */
-async function searchWikimediaCommons(terms: string[], limit = 10): Promise<MediaAssetItem[]> {
+async function searchWikimediaCommons(
+  terms: string[],
+  limit = 10,
+  mediaTypeFilter: MediaTypeFilter = 'all'
+): Promise<MediaAssetItem[]> {
   const results: MediaAssetItem[] = [];
   const seenUrls = new Set<string>();
   const queries = terms.length > 0 ? terms : ['ocean waves', 'nature landscape'];
+  const typeFilters =
+    mediaTypeFilter === 'image_only'
+      ? ['filetype:bitmap']
+      : mediaTypeFilter === 'video_only'
+      ? ['filetype:video']
+      : ['filetype:bitmap', 'filetype:video'];
 
-  for (const term of queries.slice(0, 3)) {
-    for (const typeFilter of ['filetype:bitmap', 'filetype:video']) {
+  for (const term of queries.slice(0, 4)) {
+    for (const typeFilter of typeFilters) {
       if (results.length >= limit) break;
       try {
         const q = encodeURIComponent(`${term} ${typeFilter}`);
@@ -1339,20 +1432,81 @@ interface ResolvedSceneAsset {
   sourceLabel: string;
 }
 
+function getMoodPromptSuffix(mood: VisualMood = 'auto'): string {
+  switch (mood) {
+    case 'bright':
+      return 'bright natural daylight, airy warm uplifting atmosphere, crisp highlights';
+    case 'moody':
+      return 'moody dramatic low-key lighting, deep shadows, rich contrast';
+    case 'vibrant':
+      return 'vibrant energetic colors, dynamic lively composition, rich saturation';
+    case 'minimal':
+      return 'minimalist clean modern composition, calm neutral tones, uncluttered';
+    case 'cinematic':
+      return 'cinematic 35mm film aesthetic, shallow depth of field, golden hour lighting';
+    default:
+      return 'photorealistic cinematic lighting, natural color grading';
+  }
+}
+
+function getVisualMoodGradeFilter(mood: VisualMood = 'auto'): string {
+  switch (mood) {
+    case 'bright':
+      return 'eq=brightness=0.06:contrast=1.06:saturation=1.12';
+    case 'moody':
+      return 'eq=brightness=-0.06:contrast=1.18:saturation=0.82';
+    case 'vibrant':
+      return 'eq=contrast=1.10:saturation=1.28';
+    case 'minimal':
+      return 'eq=contrast=1.02:saturation=0.88:brightness=0.02';
+    case 'cinematic':
+      return 'eq=contrast=1.12:saturation=0.95:gamma=0.96';
+    default:
+      return 'eq=contrast=1.05:saturation=1.10';
+  }
+}
+
+function tokenizeEnglishContextWords(text: string): string[] {
+  const stop = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'about', 'what',
+    'when', 'how', 'please', 'tell', 'have', 'they', 'there', 'were', 'also', 'first',
+    'scene', 'shot', 'view', 'wide', 'close', 'cinematic', 'photorealistic', 'lighting',
+    'high', 'contrast', 'text', 'watermark', 'no', 'mood', 'look', 'depth', 'field',
+  ]);
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !stop.has(w));
+}
+
+function scoreAssetContextRelevance(assetName: string, contextKeywords: string[]): number {
+  const lower = assetName.toLowerCase();
+  let score = 0;
+  for (const kw of contextKeywords) {
+    if (lower.includes(kw)) score += 3;
+  }
+  return score;
+}
+
 /**
  * Searches Mixkit free stock videos (zero API key, zero watermark, 720p HD MP4s)
  * by extracting JSON-LD VideoObject records from Mixkit tag/keyword pages.
  */
-async function searchMixkitVideos(terms: string[], limit = 14): Promise<MediaAssetItem[]> {
+async function searchMixkitVideos(
+  terms: string[],
+  limit = 14,
+  visualMood: VisualMood = 'auto'
+): Promise<MediaAssetItem[]> {
   const results: MediaAssetItem[] = [];
   const seenUrls = new Set<string>();
   const ua =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36';
 
   const slugSet = new Set<string>();
-  const stopWords = new Set(['the', 'and', 'with', 'from', 'into', 'for', 'shot', 'view', 'deep', 'high', 'free']);
+  const stopWords = new Set(['the', 'and', 'with', 'from', 'into', 'for', 'shot', 'view', 'deep', 'high', 'free', 'scene']);
 
-  for (const term of terms.slice(0, 5)) {
+  for (const term of terms.slice(0, 8)) {
     const words = term
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, ' ')
@@ -1368,11 +1522,11 @@ async function searchMixkitVideos(terms: string[], limit = 14): Promise<MediaAss
   }
 
   if (slugSet.size === 0) {
-    slugSet.add('nature');
-    slugSet.add('ocean');
+    slugSet.add('office');
+    slugSet.add('city');
   }
 
-  const slugs = Array.from(slugSet).slice(0, 6);
+  const slugs = Array.from(slugSet).slice(0, 8);
 
   await Promise.all(
     slugs.map(async (slug) => {
@@ -1408,7 +1562,7 @@ async function searchMixkitVideos(terms: string[], limit = 14): Promise<MediaAss
               const idMatch = mp4720.match(/\/(\d+)(?:-video)?-\d+\.mp4/i);
               results.push({
                 id: `mixkit_${idMatch?.[1] ?? seenUrls.size}`,
-                name: item.name || `${slug} B-roll`,
+                name: `${item.name || slug} (${slug})`,
                 kind: 'video',
                 source: 'mixkit_free',
                 url: mp4720,
@@ -1447,11 +1601,22 @@ async function searchMixkitVideos(terms: string[], limit = 14): Promise<MediaAss
     })
   );
 
-  // Broad aesthetic fallback if obscure query yielded too few clips
+  // Context-aware fallback (never inject waterfalls/forests for office/interview/city topics!)
   if (results.length < 4) {
+    const joinedTerms = terms.join(' ').toLowerCase();
+    const isHumanOrWork = /(office|interview|meeting|business|student|retail|store|desk|city|team|work|present|speech|people)/i.test(
+      joinedTerms
+    );
+    const fallbackSlug = isHumanOrWork
+      ? 'business'
+      : visualMood === 'minimal'
+      ? 'minimal'
+      : visualMood === 'moody'
+      ? 'night'
+      : 'city';
     try {
       const fbRes = await fetchWithTimeout(
-        'https://mixkit.co/free-stock-video/nature/',
+        `https://mixkit.co/free-stock-video/${fallbackSlug}/`,
         { headers: { 'User-Agent': ua } },
         4500
       );
@@ -1465,7 +1630,7 @@ async function searchMixkitVideos(terms: string[], limit = 14): Promise<MediaAss
           const idMatch = mp4720.match(/\/(\d+)-\d+\.mp4/i);
           results.push({
             id: `mixkit_fb_${idMatch?.[1] ?? seenUrls.size}`,
-            name: 'Cinematic B-roll',
+            name: `${fallbackSlug} B-roll`,
             kind: 'video',
             source: 'mixkit_free',
             url: mp4720,
@@ -1488,6 +1653,8 @@ function getSceneCacheKey(params: {
   terms: string[];
   scenePrompts: string[];
   materialSource: MaterialSource;
+  mediaTypeFilter: MediaTypeFilter;
+  visualMood: VisualMood;
   aspectRatio: VideoAspectRatio;
   selectedMediaIds: string[];
 }): string {
@@ -1496,6 +1663,8 @@ function getSceneCacheKey(params: {
     t: params.terms,
     p: params.scenePrompts,
     m: params.materialSource,
+    mt: params.mediaTypeFilter,
+    vm: params.visualMood,
     a: params.aspectRatio,
     sel: params.selectedMediaIds,
     subj: params.subject,
@@ -1509,26 +1678,44 @@ async function resolveSceneAssets(params: {
   terms: string[];
   scenePrompts: string[];
   materialSource: MaterialSource;
+  mediaTypeFilter?: MediaTypeFilter;
+  visualMood?: VisualMood;
   aspectRatio: VideoAspectRatio;
   videoQuality?: VideoQuality;
   selectedMediaIds: string[];
   customScenes?: ScenePreviewItem[];
   onLog?: (msg: string) => void;
 }): Promise<{ cacheKey: string; assets: ResolvedSceneAsset[] }> {
+  const mediaTypeFilter: MediaTypeFilter = params.mediaTypeFilter ?? 'all';
+  const visualMood: VisualMood = params.visualMood ?? 'auto';
+  const moodSuffix = getMoodPromptSuffix(visualMood);
+
   const rawSentences = splitScriptSentences(params.script)
     .map((s) => stripNarrationTags(s))
     .filter(Boolean);
   const effectiveSentences =
     rawSentences.length > 0 ? rawSentences : [params.subject || 'Khám phá điều kỳ diệu quanh ta'];
 
-  // Preserve user/AI-provided English terms directly! Only translate if empty or non-ASCII.
-  let searchTerms = params.terms.map((t) => t.trim()).filter((t) => t.length >= 2 && /^[\x00-\x7F\s,.-]+$/.test(t));
+  // Preserve user/AI-provided English terms and merge per-sentence context terms so every part of the script finds matching scenes
+  const sentenceExtractedTerms = effectiveSentences.flatMap((sent) =>
+    extractEnglishSearchTerms(sent, '')
+  );
+  const explicitAsciiTerms = params.terms
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && /^[\x00-\x7F\s,.-]+$/.test(t) && !t.includes('cinematic nature landscape'));
+  let searchTerms = Array.from(
+    new Set([
+      ...explicitAsciiTerms,
+      ...sentenceExtractedTerms.filter((t) => !t.includes('cinematic nature landscape')),
+    ])
+  ).slice(0, 8);
+
   if (searchTerms.length === 0) {
     const translatedSubject = await translateToEn(params.subject);
     if (translatedSubject) {
       searchTerms = [translatedSubject];
     } else {
-      searchTerms = extractEnglishSearchTerms(params.subject, '');
+      searchTerms = extractEnglishSearchTerms(params.subject, params.script);
     }
   }
 
@@ -1543,6 +1730,8 @@ async function resolveSceneAssets(params: {
     terms: searchTerms,
     scenePrompts: effectivePrompts,
     materialSource: params.materialSource,
+    mediaTypeFilter,
+    visualMood,
     aspectRatio: params.aspectRatio,
     selectedMediaIds: params.selectedMediaIds,
   });
@@ -1647,11 +1836,15 @@ async function resolveSceneAssets(params: {
     }
   }
 
-  // Local upload mode
+  // Filter uploaded local files by mediaTypeFilter if needed
   if (params.materialSource === 'local_upload') {
     const files = fs
       .readdirSync(UPLOADS_DIR)
-      .filter((f) => /\.(mp4|webm|mov|jpg|jpeg|png)$/i.test(f));
+      .filter((f) => {
+        if (mediaTypeFilter === 'image_only') return /\.(jpg|jpeg|png)$/i.test(f);
+        if (mediaTypeFilter === 'video_only') return /\.(mp4|webm|mov)$/i.test(f);
+        return /\.(mp4|webm|mov|jpg|jpeg|png)$/i.test(f);
+      });
     const selected =
       params.selectedMediaIds.length > 0
         ? files.filter((f) => params.selectedMediaIds.includes(f))
@@ -1674,58 +1867,240 @@ async function resolveSceneAssets(params: {
       params.onLog?.(`Đã nạp ${selected.length} tệp tư liệu từ máy cho ${assets.length} phân cảnh.`);
       return { cacheKey, assets };
     }
-    params.onLog?.('Chưa có tệp tải lên từ máy -> tự động chuyển sang tìm cảnh B-roll HD miễn phí.');
+    params.onLog?.('Chưa có tệp tải lên khớp loại tư liệu -> tự động tìm từ kho trực tuyến.');
   }
 
-  // Primary: Mixkit 720p real moving B-roll stock videos (fast HTTP range clipping, zero watermark)
   const desiredClipCount = Math.max(8, effectiveSentences.length * 2);
   let mixkitVideos: MediaAssetItem[] = [];
-  if (params.materialSource === 'mixkit_video' || params.materialSource === 'hybrid_real') {
-    params.onLog?.(`Đang tìm video B-roll HD chuyển động mượt cho: ${searchTerms.slice(0, 3).join(', ')}...`);
-    mixkitVideos = await searchMixkitVideos(searchTerms, desiredClipCount + 4);
+  if (
+    mediaTypeFilter !== 'image_only' &&
+    (params.materialSource === 'mixkit_video' ||
+      params.materialSource === 'hybrid_real' ||
+      params.materialSource === 'local_upload')
+  ) {
+    params.onLog?.(`Đang tìm video B-roll HD sát ngữ cảnh cho: ${searchTerms.slice(0, 4).join(', ')}...`);
+    mixkitVideos = await searchMixkitVideos(searchTerms, desiredClipCount + 8, visualMood);
     if (mixkitVideos.length > 0) {
       params.onLog?.(`Đã tìm thấy ${mixkitVideos.length} video B-roll HD thực tế từ Mixkit.`);
     }
   }
 
-  // If Mixkit returned abundant real moving B-roll clips and user selected mixkit_video or hybrid_real,
-  // build a rich pool of distinct moving video assets (2 clips per sentence for crisp ~3s cuts!)
-  if (mixkitVideos.length >= 3 && (params.materialSource === 'mixkit_video' || params.materialSource === 'hybrid_real')) {
-    const assets: ResolvedSceneAsset[] = [];
-    const poolCount = Math.max(effectiveSentences.length, Math.min(mixkitVideos.length, desiredClipCount));
-    for (let i = 0; i < poolCount; i++) {
-      const clip = mixkitVideos[i % mixkitVideos.length];
-      const sentIdx = Math.min(effectiveSentences.length - 1, Math.floor((i * effectiveSentences.length) / poolCount));
-      assets.push({
-        index: i,
-        sentence: effectiveSentences[sentIdx],
-        prompt: clip.name,
-        kind: 'video',
-        localPath: '',
-        remoteUrl: clip.url,
-        previewUrl: clip.url,
-        thumbUrl: clip.previewThumbUrl,
-        sourceLabel: 'Mixkit Stock HD',
-      });
+  const [archiveItems, wmItems] = await Promise.all([
+    mediaTypeFilter === 'image_only' ? Promise.resolve([]) : searchArchiveOrgMp4s(searchTerms, 4),
+    searchWikimediaCommons(searchTerms, 12, mediaTypeFilter),
+  ]);
+  const stockImages = mediaTypeFilter === 'video_only' ? [] : wmItems.filter((i) => i.kind === 'image');
+  const stockVideos =
+    mediaTypeFilter === 'image_only'
+      ? []
+      : [...mixkitVideos, ...wmItems.filter((i) => i.kind === 'video'), ...archiveItems];
+
+  const getSentenceContextKeywords = (sentence: string, prompt: string): string[] => {
+    const mapped = extractEnglishSearchTerms(sentence, '');
+    return Array.from(
+      new Set([
+        ...tokenizeEnglishContextWords(prompt),
+        ...tokenizeEnglishContextWords(sentence),
+        ...mapped.flatMap((m) => tokenizeEnglishContextWords(m)),
+      ])
+    );
+  };
+
+  // Image-only mode: use context-matched Wikimedia photos or AI mood-matched illustrations per sentence
+  if (mediaTypeFilter === 'image_only') {
+    let imgUseCount = 0;
+    const usedImgUrls = new Set<string>();
+    const resolvedImages = await Promise.all(
+      effectiveSentences.map(async (sentence, idx): Promise<ResolvedSceneAsset | null> => {
+        const prompt = effectivePrompts[idx] ?? searchTerms[idx % searchTerms.length] ?? 'scene';
+        const ctxWords = getSentenceContextKeywords(sentence, prompt);
+        const scored = stockImages
+          .map((item) => ({
+            item,
+            score: scoreAssetContextRelevance(item.name, ctxWords) - (usedImgUrls.has(item.url) ? 2 : 0),
+          }))
+          .sort((a, b) => b.score - a.score);
+        const bestPhoto = scored[0];
+
+        if (bestPhoto && (bestPhoto.score > 0 || params.materialSource === 'stock_free')) {
+          usedImgUrls.add(bestPhoto.item.url);
+          const wmFile = `wm_photo_${idx}.jpg`;
+          const wmPath = path.join(sceneCacheDir, wmFile);
+          const ok = await downloadRemoteMedia(bestPhoto.item.url, 'image', wmPath);
+          if (ok) {
+            imgUseCount++;
+            return {
+              index: idx,
+              sentence,
+              prompt,
+              kind: 'image',
+              localPath: wmPath,
+              previewUrl: `/files/cache/${cacheKey}/${wmFile}`,
+              sourceLabel: 'Wikimedia Ảnh thật',
+            };
+          }
+        }
+
+        const aiFile = `scene_${idx}_ai.jpg`;
+        const aiPath = path.join(sceneCacheDir, aiFile);
+        const aiPrompt = `${prompt}, ${moodSuffix}, no text`;
+        const aiOk = await fetchPollinationsSceneImage({
+          prompt: aiPrompt,
+          width,
+          height,
+          outPath: aiPath,
+          seed: 4200 + idx * 17,
+        });
+        if (aiOk) {
+          return {
+            index: idx,
+            sentence,
+            prompt: aiPrompt,
+            kind: 'image',
+            localPath: aiPath,
+            previewUrl: `/files/cache/${cacheKey}/${aiFile}`,
+            sourceLabel: 'Ảnh AI Theo Ngữ Cảnh',
+          };
+        }
+
+        if (stockImages.length > 0) {
+          const fallbackImg = stockImages[idx % stockImages.length];
+          const wmFile = `wm_fb_${idx}.jpg`;
+          const wmPath = path.join(sceneCacheDir, wmFile);
+          if (await downloadRemoteMedia(fallbackImg.url, 'image', wmPath)) {
+            return {
+              index: idx,
+              sentence,
+              prompt,
+              kind: 'image',
+              localPath: wmPath,
+              previewUrl: `/files/cache/${cacheKey}/${wmFile}`,
+              sourceLabel: 'Wikimedia Ảnh thật',
+            };
+          }
+        }
+        return null;
+      })
+    );
+
+    const validImgs = resolvedImages.filter((a): a is ResolvedSceneAsset => a !== null);
+    if (validImgs.length > 0) {
+      params.onLog?.(
+        `Đã chuẩn bị ${validImgs.length} ảnh tĩnh khớp ngữ cảnh & phong cách "${visualMood}" (${imgUseCount} ảnh Wikimedia).`
+      );
+      return { cacheKey, assets: validImgs };
     }
-    return { cacheKey, assets };
   }
 
-  // Fallback stock / AI scenes when user explicitly chose stock_free or pollinations_scene or Mixkit unavailable
-  params.onLog?.(`Đang tìm thêm cảnh từ Wikimedia & Archive.org cho: ${searchTerms.slice(0, 3).join(', ')}...`);
-  const [archiveItems, wmItems] = await Promise.all([
-    searchArchiveOrgMp4s(searchTerms, 4),
-    searchWikimediaCommons(searchTerms, 10),
-  ]);
-  const stockImages = wmItems.filter((i) => i.kind === 'image');
-  const stockVideos = [...mixkitVideos, ...wmItems.filter((i) => i.kind === 'video'), ...archiveItems];
+  // Video-first or Mixed mode: assign each sentence the highest context-scoring distinct video/image
+  if (
+    stockVideos.length >= 2 &&
+    (mediaTypeFilter === 'video_only' ||
+      params.materialSource === 'mixkit_video' ||
+      params.materialSource === 'hybrid_real')
+  ) {
+    const usedVideoUrls = new Set<string>();
+    const assets: ResolvedSceneAsset[] = [];
+
+    for (let i = 0; i < effectiveSentences.length; i++) {
+      const sentence = effectiveSentences[i];
+      const prompt = effectivePrompts[i] ?? searchTerms[i % searchTerms.length] ?? 'scene';
+      const ctxWords = getSentenceContextKeywords(sentence, prompt);
+      const ranked = stockVideos
+        .map((item) => ({
+          item,
+          score: scoreAssetContextRelevance(item.name, ctxWords) - (usedVideoUrls.has(item.url) ? 3 : 0),
+        }))
+        .sort((a, b) => b.score - a.score);
+      const top = ranked[0];
+
+      // In hybrid_real + all mode, if stock video score <= 0 and scene index alternates, generate crisp context-exact AI scene image
+      if (
+        mediaTypeFilter === 'all' &&
+        params.materialSource === 'hybrid_real' &&
+        top.score <= 0 &&
+        i % 2 === 1 &&
+        i < 8
+      ) {
+        const aiFile = `scene_${i}_ai.jpg`;
+        const aiPath = path.join(sceneCacheDir, aiFile);
+        const aiPrompt = `${prompt}, ${moodSuffix}, no text`;
+        const aiOk = await fetchPollinationsSceneImage({
+          prompt: aiPrompt,
+          width,
+          height,
+          outPath: aiPath,
+          seed: 5100 + i * 23,
+        });
+        if (aiOk) {
+          assets.push({
+            index: i,
+            sentence,
+            prompt: aiPrompt,
+            kind: 'image',
+            localPath: aiPath,
+            previewUrl: `/files/cache/${cacheKey}/${aiFile}`,
+            sourceLabel: 'Ảnh AI Theo Ngữ Cảnh',
+          });
+          continue;
+        }
+      }
+
+      const chosen = top.item;
+      usedVideoUrls.add(chosen.url);
+      if (chosen.source === 'mixkit_free') {
+        assets.push({
+          index: i,
+          sentence,
+          prompt: chosen.name,
+          kind: 'video',
+          localPath: '',
+          remoteUrl: chosen.url,
+          previewUrl: chosen.url,
+          thumbUrl: chosen.previewThumbUrl,
+          sourceLabel: 'Mixkit Stock HD',
+        });
+      } else {
+        const ext = chosen.mimeType?.includes('ogg') ? '.ogv' : '.mp4';
+        const vidFile = `stock_vid_${i}${ext}`;
+        const vidPath = path.join(sceneCacheDir, vidFile);
+        const ok = await downloadRemoteMedia(chosen.url, 'video', vidPath);
+        if (ok) {
+          assets.push({
+            index: i,
+            sentence,
+            prompt,
+            kind: 'video',
+            localPath: vidPath,
+            previewUrl: `/files/cache/${cacheKey}/${vidFile}`,
+            sourceLabel: chosen.source === 'archive_free' ? 'Archive.org MP4' : 'Wikimedia Video',
+          });
+        } else {
+          assets.push({
+            index: i,
+            sentence,
+            prompt: mixkitVideos[i % Math.max(1, mixkitVideos.length)]?.name ?? prompt,
+            kind: 'video',
+            localPath: '',
+            remoteUrl: mixkitVideos[i % Math.max(1, mixkitVideos.length)]?.url ?? chosen.url,
+            previewUrl: mixkitVideos[i % Math.max(1, mixkitVideos.length)]?.url ?? chosen.url,
+            sourceLabel: 'Mixkit Stock HD',
+          });
+        }
+      }
+    }
+
+    if (assets.length > 0) {
+      return { cacheKey, assets };
+    }
+  }
 
   let hookAiAsset: ResolvedSceneAsset | null = null;
-  if (params.materialSource === 'pollinations_scene') {
+  if (mediaTypeFilter !== 'video_only' && params.materialSource === 'pollinations_scene') {
     const hookFile = 'scene_0_ai.jpg';
     const hookPath = path.join(sceneCacheDir, hookFile);
     const aiOk = await fetchPollinationsSceneImage({
-      prompt: effectivePrompts[0] ?? `${searchTerms[0]}, cinematic dramatic 8k, no text`,
+      prompt: `${effectivePrompts[0] ?? searchTerms[0]}, ${moodSuffix}, no text`,
       width,
       height,
       outPath: hookPath,
@@ -1749,10 +2124,13 @@ async function resolveSceneAssets(params: {
 
   const resolvedList = await Promise.all(
     effectiveSentences.map(async (sentence, idx): Promise<ResolvedSceneAsset | null> => {
-      const prompt = effectivePrompts[idx] ?? searchTerms[idx % searchTerms.length] ?? 'cinematic nature scene';
+      const prompt = effectivePrompts[idx] ?? searchTerms[idx % searchTerms.length] ?? 'scene';
       if (idx === 0 && hookAiAsset) return hookAiAsset;
 
-      if (stockVideos.length > 0 && (params.materialSource === 'stock_free' || idx % 2 === 0)) {
+      if (
+        stockVideos.length > 0 &&
+        (mediaTypeFilter === 'video_only' || params.materialSource === 'stock_free' || idx % 2 === 0)
+      ) {
         const vidCandidate = stockVideos[vidCursor++ % stockVideos.length];
         if (vidCandidate.source === 'mixkit_free') {
           return {
@@ -1783,7 +2161,7 @@ async function resolveSceneAssets(params: {
         }
       }
 
-      if (stockImages.length > 0) {
+      if (mediaTypeFilter !== 'video_only' && stockImages.length > 0) {
         const wmImg = stockImages[imgCursor++ % stockImages.length];
         const wmFile = `wm_photo_${idx}.jpg`;
         const wmPath = path.join(sceneCacheDir, wmFile);
@@ -1808,7 +2186,7 @@ async function resolveSceneAssets(params: {
 
   if (validAssets.length === 0) {
     params.onLog?.('Mạng ngoài không phản hồi -> tạo khung hình dự phòng có lưới ánh sáng.');
-    const emergencyPath = path.join(sceneCacheDir, 'offline_scene_0.jpg');
+    const emergencyImgPath = path.join(sceneCacheDir, 'offline_scene_0.jpg');
     await runFfmpeg(
       [
         '-y',
@@ -1820,10 +2198,46 @@ async function resolveSceneAssets(params: {
         `drawgrid=width=64:height=64:thickness=1:color=0x38bdf8@0.22`,
         '-frames:v',
         '1',
-        emergencyPath,
+        emergencyImgPath,
       ],
       10000
     );
+    if (mediaTypeFilter === 'video_only') {
+      const emergencyVidPath = path.join(sceneCacheDir, 'offline_scene_0.mp4');
+      await runFfmpeg(
+        [
+          '-y',
+          '-loop',
+          '1',
+          '-framerate',
+          '30',
+          '-i',
+          emergencyImgPath,
+          '-t',
+          '3',
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-pix_fmt',
+          'yuv420p',
+          emergencyVidPath,
+        ],
+        10000
+      );
+      return {
+        cacheKey,
+        assets: effectiveSentences.map((sentence, idx) => ({
+          index: idx,
+          sentence,
+          prompt: effectivePrompts[idx] ?? 'offline',
+          kind: 'video',
+          localPath: emergencyVidPath,
+          previewUrl: `/files/cache/${cacheKey}/offline_scene_0.mp4`,
+          sourceLabel: 'Video Dự phòng Offline',
+        })),
+      };
+    }
     return {
       cacheKey,
       assets: effectiveSentences.map((sentence, idx) => ({
@@ -1831,7 +2245,7 @@ async function resolveSceneAssets(params: {
         sentence,
         prompt: effectivePrompts[idx] ?? 'offline',
         kind: 'image',
-        localPath: emergencyPath,
+        localPath: emergencyImgPath,
         previewUrl: `/files/cache/${cacheKey}/offline_scene_0.jpg`,
         sourceLabel: 'Dự phòng Offline',
       })),
@@ -1862,10 +2276,21 @@ async function normalizeMediaToClip(params: {
   height: number;
   durationSec: number;
   motionVariant: number;
+  visualMood?: VisualMood;
 }): Promise<boolean> {
-  const { sourcePath, remoteUrl, kind, outPath, width, height, durationSec, motionVariant } = params;
+  const {
+    sourcePath,
+    remoteUrl,
+    kind,
+    outPath,
+    width,
+    height,
+    durationSec,
+    motionVariant,
+    visualMood = 'auto',
+  } = params;
   const safeDur = Math.max(1.2, durationSec);
-  const colorGrade = 'eq=contrast=1.05:saturation=1.10';
+  const colorGrade = getVisualMoodGradeFilter(visualMood);
 
   try {
     if (kind === 'image') {
@@ -2015,21 +2440,23 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       );
     }
 
-    // 1. Synthesize each segment with its resolved voiceId & insert thinking pauses where specified
-    const cues: SubtitleCue[] = [];
+    // 1. Synthesize each segment with its resolved voiceId -> trim silence & convert to sample-accurate 24kHz mono WAV
+    // so concatenated audio matches subtitle cue timestamps to the millisecond (zero cumulative MP3 padding drift).
+    const rawSegmentTimings: RawSegmentTiming[] = [];
     const audioParts: string[] = [];
     let cursorSec = 0;
     let loggedRecovery = false;
 
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
-      const partPath = path.join(workDir, `tts_${i}.mp3`);
+      const partMp3Path = path.join(workDir, `tts_${i}.mp3`);
+      const partWavPath = path.join(workDir, `tts_${i}.wav`);
       const ttsRes = await synthesizeChunkWithFallback({
         text: seg.text,
         voiceId: seg.voiceId,
         ttsProvider: config.ttsProvider,
         voiceRate: config.voiceRate,
-        outPath: partPath,
+        outPath: partMp3Path,
       });
 
       if ((ttsRes.recoveredFromEdgeError || ttsRes.fallbackNote) && !loggedRecovery) {
@@ -2042,41 +2469,55 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         );
       }
 
-      const dur = await probeDurationSec(partPath);
-      cues.push({
-        index: cues.length + 1,
-        startSec: cursorSec,
-        endSec: cursorSec + dur,
-        text: seg.text,
-        voiceSlot: seg.voiceSlot,
-      });
-      audioParts.push(partPath);
-      cursorSec += dur;
+      await normalizeSpeechAudioToWav(partMp3Path, partWavPath);
+      const dur = await probeDurationSec(partWavPath);
+      const segStartSec = cursorSec;
+      const segEndSec = cursorSec + dur;
+      audioParts.push(partWavPath);
+      cursorSec = segEndSec;
+
+      let pauseDur = 0;
+      let countdownStartSec: number | undefined;
+      let countdownEndSec: number | undefined;
 
       if (seg.pauseAfterSec > 0) {
-        const pausePath = path.join(workDir, `pause_${i}.mp3`);
+        const pauseWavPath = path.join(workDir, `pause_${i}.wav`);
         const isThinkingCountdown =
           seg.pauseKind !== 'repeat' &&
           seg.pauseKind !== 'recap' &&
           seg.pauseAfterSec >= 1.5;
         const useClockTick = config.clockTickEnabled !== false && isThinkingCountdown;
         if (useClockTick) {
-          await createClockTickTockMp3(seg.pauseAfterSec, pausePath);
+          await createClockTickTockWav(seg.pauseAfterSec, pauseWavPath);
         } else {
-          await createSilenceMp3(seg.pauseAfterSec, pausePath);
+          await createSilenceWav(seg.pauseAfterSec, pauseWavPath);
         }
-        const pauseDur = await probeDurationSec(pausePath);
-        audioParts.push(pausePath);
+        pauseDur = await probeDurationSec(pauseWavPath);
+        audioParts.push(pauseWavPath);
         if (
           isThinkingCountdown &&
           (config.scriptStyle === 'language_challenge' ||
             config.scriptStyle === 'quiz_riddle' ||
             config.clockTickEnabled)
         ) {
-          cues.push(...buildCountdownCues(cursorSec, pauseDur, cues.length + 1));
+          countdownStartSec = cursorSec;
+          countdownEndSec = cursorSec + pauseDur;
         }
         cursorSec += pauseDur;
       }
+
+      rawSegmentTimings.push({
+        text: seg.text,
+        startSec: segStartSec,
+        endSec: segEndSec,
+        voiceSlot: seg.voiceSlot,
+        segmentKind: seg.segmentKind,
+        isIntroOrOutro: seg.isIntroOrOutro,
+        pauseAfterSec: pauseDur,
+        pauseKind: seg.pauseKind,
+        countdownStartSec,
+        countdownEndSec,
+      });
 
       const pct = 8 + Math.round(((i + 1) / segments.length) * 20);
       updateJob(jobId, {
@@ -2091,8 +2532,8 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       audioParts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'),
       'utf-8'
     );
-    const voiceAllPath = path.join(workDir, 'voice_all.mp3');
-    // Re-encode mono 24kHz so multiple TTS voices & silence segments merge cleanly with exact timing
+    const voiceAllPath = path.join(workDir, 'voice_all.wav');
+    // Sample-accurate WAV concatenation eliminates MP3 frame delay / drift across segments
     await runFfmpeg(
       [
         '-y',
@@ -2107,9 +2548,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         '-ac',
         '1',
         '-c:a',
-        'libmp3lame',
-        '-b:a',
-        '96k',
+        'pcm_s16le',
         voiceAllPath,
       ],
       30000
@@ -2129,6 +2568,8 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       terms: config.terms,
       scenePrompts: config.scenePrompts ?? [],
       materialSource: config.materialSource,
+      mediaTypeFilter: config.mediaTypeFilter ?? 'all',
+      visualMood: config.visualMood ?? 'auto',
       aspectRatio: config.aspectRatio,
       videoQuality: config.videoQuality,
       selectedMediaIds: config.selectedMediaIds,
@@ -2162,17 +2603,13 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       config.videoQuality ?? '720p'
     );
     const qualityParams = getQualityEncodingParams(config.videoQuality ?? '720p');
-    const visualCues: SubtitleCue[] = [];
-    for (const c of cues) {
-      if (c.isCountdown) {
-        if (visualCues.length > 0) {
-          visualCues[visualCues.length - 1].endSec = c.endSec;
-        }
-      } else {
-        visualCues.push({ ...c });
-      }
-    }
-    const effectiveVisualCues = visualCues.length > 0 ? visualCues : cues;
+    const effectiveVisualCues: SubtitleCue[] = rawSegmentTimings.map((rec, idx) => ({
+      index: idx + 1,
+      startSec: rec.startSec,
+      endSec: rec.countdownEndSec ?? rec.endSec + (rec.pauseAfterSec ?? 0),
+      text: rec.text,
+      voiceSlot: rec.voiceSlot,
+    }));
 
     const usePerSentenceAlignment = config.concatMode === 'sequential';
     const fadeDur = config.transitionMode !== 'none' && effectiveVisualCues.length > 1 ? 0.3 : 0;
@@ -2236,6 +2673,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
         height,
         durationSec: entry.renderDur,
         motionVariant: i,
+        visualMood: config.visualMood ?? 'auto',
       });
 
       if (ok) {
@@ -2252,6 +2690,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           height,
           durationSec: entry.renderDur,
           motionVariant: i + 1,
+          visualMood: config.visualMood ?? 'auto',
         });
         if (retryOk) {
           normalizedClips.push({ path: normPath, baseDur: entry.baseDur });
@@ -2340,15 +2779,30 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     updateJob(jobId, { progressPct: 82, stepLabel: 'Đang gắn phụ đề tiếng Việt & trộn nhạc nền...' });
 
     const { relDir: targetRelDir, absDir: targetAbsDir } = resolveProjectOutputDir(config.outputDir);
+    const customName = config.outputFilename?.trim();
     const rawBaseName = slugifyOutputFilename(
-      config.outputFilename?.trim() || config.subject,
-      jobId
+      customName || config.subject,
+      `🚀 ${jobId.replace(/_/g, ' ')}`,
+      {
+        script: config.script,
+        scriptStyle: config.scriptStyle,
+        language: config.language,
+        includeEmoji: !customName,
+      }
     );
     const uniqueBaseName = allocateUniqueBaseName(targetAbsDir, rawBaseName);
 
-    const hasCjkSub = cues.some((c) => hasCjkChars(c.text));
-    const wrapBudget = getSubtitleWrapBudget(config.subtitle, width, height, hasCjkSub);
-    const shortSubCues = splitCueIntoShortSubCues(cues, wrapBudget.maxCueChars);
+    const latinSubBudget = getSubtitleWrapBudget(config.subtitle, width, height, false);
+    const cjkSubBudget = getSubtitleWrapBudget(config.subtitle, width, height, true);
+
+    const cues = buildDualSubtitleCues(rawSegmentTimings, {
+      stickyDualSubtitle: config.stickyDualSubtitle !== false,
+      maxSourceCharsPerLine: Math.round(latinSubBudget.maxCharsPerLine * 1.12),
+      maxCjkSourceCharsPerLine: Math.round(cjkSubBudget.maxCharsPerLine * 1.12),
+      maxTargetCharsPerLine: latinSubBudget.maxCharsPerLine,
+      maxCjkTargetCharsPerLine: cjkSubBudget.maxCharsPerLine,
+    });
+    const shortSubCues = splitCueIntoShortSubCues(cues, latinSubBudget.maxCueChars);
     const srtContent = buildSrtFromCues(shortSubCues);
     const srtFilename = `${uniqueBaseName}.srt`;
     const srtOutPath = path.join(targetAbsDir, srtFilename);
@@ -2377,6 +2831,8 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     const bgmVol = Math.max(0.0, Math.min(1.0, config.bgmVolume));
 
     const escapedAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+    const escapedFontsDir = FONTS_DIR.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+    const assFilterExpr = `ass='${escapedAss}':fontsdir='${escapedFontsDir}'`;
     const finalArgs: string[] = ['-y', '-i', visualTrackPath, '-i', voiceAllPath];
 
     if (bgmPath) {
@@ -2386,7 +2842,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
     if (bgmPath) {
       const filters: string[] = [];
       if (config.subtitle.enabled) {
-        filters.push(`[0:v]ass='${escapedAss}'[vout]`);
+        filters.push(`[0:v]${assFilterExpr}[vout]`);
       }
       filters.push(
         `[1:a]volume=${voiceVol.toFixed(2)}[va]`,
@@ -2403,7 +2859,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
       );
     } else {
       if (config.subtitle.enabled) {
-        finalArgs.push('-vf', `ass='${escapedAss}'`);
+        finalArgs.push('-vf', assFilterExpr);
       }
       finalArgs.push('-af', `volume=${voiceVol.toFixed(2)}`, '-map', '0:v', '-map', '1:a');
     }
@@ -2898,6 +3354,9 @@ async function startServer() {
       scriptStyle,
       sentenceCount,
       verifiedFacts,
+      rawScript: typeof req.body?.rawScript === 'string' ? req.body.rawScript : undefined,
+      mediaTypeFilter: (req.body?.mediaTypeFilter ?? 'all') as MediaTypeFilter,
+      visualMood: (req.body?.visualMood ?? 'auto') as VisualMood,
     });
 
     const accurateEnglishTerms = Array.from(
@@ -3124,6 +3583,8 @@ async function startServer() {
       ? req.body.scenePrompts.map(String)
       : [];
     const materialSource = (req.body?.materialSource ?? 'hybrid_real') as MaterialSource;
+    const mediaTypeFilter = (req.body?.mediaTypeFilter ?? 'all') as MediaTypeFilter;
+    const visualMood = (req.body?.visualMood ?? 'auto') as VisualMood;
     const aspectRatio = (req.body?.aspectRatio ?? '9:16') as VideoAspectRatio;
     const videoQuality = (req.body?.videoQuality ?? '720p') as VideoQuality;
     const selectedMediaIds = Array.isArray(req.body?.selectedMediaIds)
@@ -3142,6 +3603,8 @@ async function startServer() {
         terms,
         scenePrompts,
         materialSource,
+        mediaTypeFilter,
+        visualMood,
         aspectRatio,
         videoQuality,
         selectedMediaIds,
@@ -3166,9 +3629,12 @@ async function startServer() {
 
   // 3b. Search alternative replacement clips/images for a single scene
   app.post('/api/scenes/alternatives', async (req, res) => {
-    const query = String(req.body?.query ?? '').trim() || 'nature landscape';
+    const query = String(req.body?.query ?? '').trim() || 'office workplace';
     const aspectRatio = (req.body?.aspectRatio ?? '9:16') as VideoAspectRatio;
     const videoQuality = (req.body?.videoQuality ?? '720p') as VideoQuality;
+    const mediaTypeFilter = (req.body?.mediaTypeFilter ?? 'all') as MediaTypeFilter;
+    const visualMood = (req.body?.visualMood ?? 'auto') as VisualMood;
+    const moodSuffix = getMoodPromptSuffix(visualMood);
 
     let searchTerms = extractEnglishSearchTerms(query, '');
     if (/^[a-zA-Z0-9\s,.-]{2,}$/.test(query)) {
@@ -3180,15 +3646,21 @@ async function startServer() {
 
     try {
       const [mixkitItems, wmItems, archiveItems] = await Promise.all([
-        searchMixkitVideos(searchTerms.slice(0, 3), 8),
-        searchWikimediaCommons(searchTerms.slice(0, 2), 6),
-        searchArchiveOrgMp4s(searchTerms.slice(0, 2), 3),
+        mediaTypeFilter === 'image_only'
+          ? Promise.resolve([])
+          : searchMixkitVideos(searchTerms.slice(0, 3), 8, visualMood),
+        searchWikimediaCommons(searchTerms.slice(0, 2), 8, mediaTypeFilter),
+        mediaTypeFilter === 'image_only'
+          ? Promise.resolve([])
+          : searchArchiveOrgMp4s(searchTerms.slice(0, 2), 3),
       ]);
 
       const candidates: ScenePreviewItem[] = [];
       const seen = new Set<string>();
 
       for (const item of [...mixkitItems, ...wmItems, ...archiveItems]) {
+        if (mediaTypeFilter === 'video_only' && item.kind !== 'video') continue;
+        if (mediaTypeFilter === 'image_only' && item.kind !== 'image') continue;
         if (seen.has(item.url)) continue;
         seen.add(item.url);
         candidates.push({
@@ -3210,30 +3682,32 @@ async function startServer() {
         if (candidates.length >= 10) break;
       }
 
-      // Also provide 1 AI generated image candidate cached locally if user wants illustration
-      const { width, height } = getCanvasDimensions(aspectRatio, videoQuality);
-      const aiCacheDir = path.join(CACHE_DIR, 'scene_alts');
-      fs.mkdirSync(aiCacheDir, { recursive: true });
-      const aiFile = `ai_${crypto.createHash('sha1').update(`${query}_${width}_${height}_${Date.now()}`).digest('hex').slice(0, 10)}.jpg`;
-      const aiPath = path.join(aiCacheDir, aiFile);
-      const aiPrompt = `${searchTerms[0] ?? query}, photorealistic cinematic 8k, no text`;
-      const aiOk = await fetchPollinationsSceneImage({
-        prompt: aiPrompt,
-        width,
-        height,
-        outPath: aiPath,
-        seed: Math.floor(Math.random() * 99999),
-      });
-      if (aiOk) {
-        candidates.unshift({
-          index: 0,
-          sentence: '',
+      // Also provide 1 AI generated image candidate cached locally if image output is allowed
+      if (mediaTypeFilter !== 'video_only') {
+        const { width, height } = getCanvasDimensions(aspectRatio, videoQuality);
+        const aiCacheDir = path.join(CACHE_DIR, 'scene_alts');
+        fs.mkdirSync(aiCacheDir, { recursive: true });
+        const aiFile = `ai_${crypto.createHash('sha1').update(`${query}_${width}_${height}_${Date.now()}`).digest('hex').slice(0, 10)}.jpg`;
+        const aiPath = path.join(aiCacheDir, aiFile);
+        const aiPrompt = `${searchTerms[0] ?? query}, ${moodSuffix}, no text`;
+        const aiOk = await fetchPollinationsSceneImage({
           prompt: aiPrompt,
-          kind: 'image',
-          previewUrl: `/files/cache/scene_alts/${aiFile}`,
-          thumbUrl: `/files/cache/scene_alts/${aiFile}`,
-          sourceLabel: 'Ảnh AI Pollinations',
+          width,
+          height,
+          outPath: aiPath,
+          seed: Math.floor(Math.random() * 99999),
         });
+        if (aiOk) {
+          candidates.unshift({
+            index: 0,
+            sentence: '',
+            prompt: aiPrompt,
+            kind: 'image',
+            previewUrl: `/files/cache/scene_alts/${aiFile}`,
+            thumbUrl: `/files/cache/scene_alts/${aiFile}`,
+            sourceLabel: 'Ảnh AI Pollinations',
+          });
+        }
       }
 
       res.json({ candidates });
@@ -3246,15 +3720,17 @@ async function startServer() {
 
   // 3c. Generate a single replacement AI scene image for a prompt
   app.post('/api/scenes/ai-image', async (req, res) => {
-    const prompt = String(req.body?.prompt ?? '').trim() || 'cinematic nature landscape';
+    const prompt = String(req.body?.prompt ?? '').trim() || 'cinematic office meeting';
     const aspectRatio = (req.body?.aspectRatio ?? '9:16') as VideoAspectRatio;
     const videoQuality = (req.body?.videoQuality ?? '720p') as VideoQuality;
+    const visualMood = (req.body?.visualMood ?? 'auto') as VisualMood;
+    const moodSuffix = getMoodPromptSuffix(visualMood);
     const { width, height } = getCanvasDimensions(aspectRatio, videoQuality);
 
     let cleanEn = prompt;
     if (!/^[a-zA-Z0-9\s,.-]{2,}$/.test(prompt)) {
       const translated = await translateToEn(prompt);
-      cleanEn = translated || extractEnglishSearchTerms(prompt, '')[0] || 'cinematic nature scene';
+      cleanEn = translated || extractEnglishSearchTerms(prompt, '')[0] || 'cinematic scene';
     }
 
     const aiCacheDir = path.join(CACHE_DIR, 'scene_alts');
@@ -3262,7 +3738,7 @@ async function startServer() {
     const aiFile = `ai_${Date.now()}_${Math.floor(Math.random() * 999)}.jpg`;
     const aiPath = path.join(aiCacheDir, aiFile);
     const ok = await fetchPollinationsSceneImage({
-      prompt: `${cleanEn}, photorealistic cinematic lighting 8k, no text`,
+      prompt: `${cleanEn}, ${moodSuffix}, no text`,
       width,
       height,
       outPath: aiPath,

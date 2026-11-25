@@ -8,9 +8,9 @@ interface TopBarProps {
 
 export const TopBar: React.FC<TopBarProps> = ({ activeTab, onSelectTab }) => {
   const anchorLinks = [
-    { href: '#sec-script', label: '1. Kịch bản' },
-    { href: '#sec-visuals', label: '2. Cảnh quay' },
-    { href: '#sec-audio', label: '3. Giọng & Phụ đề' },
+    { href: '#sec-visuals', label: '1. Cảnh quay' },
+    { href: '#sec-audio', label: '2. Giọng & Phụ đề' },
+    { href: '#sec-script', label: '3. Kịch bản & Prompt AI' },
   ];
 
   const tabs: Array<{ id: StudioTab; label: string }> = [

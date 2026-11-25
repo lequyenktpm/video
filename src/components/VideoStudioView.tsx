@@ -32,6 +32,7 @@ import {
   LlmProvider,
   MaterialSource,
   MediaAssetItem,
+  MediaTypeFilter,
   RenderJobConfig,
   RenderJobStatus,
   ScenePreviewItem,
@@ -46,6 +47,7 @@ import {
   VideoConcatMode,
   VideoQuality,
   VideoTransitionMode,
+  VisualMood,
   VoiceOptionId,
 } from '../shared/types';
 import {
@@ -54,22 +56,22 @@ import {
   doesVoiceMatchLanguage,
   extractEnglishSearchTerms,
   generateOfflineVietnameseScript,
-  getCanvasDimensions,
   getDefaultSecondaryVoiceForLanguage,
   getDefaultVoiceForLanguage,
   getPresetsForLanguage,
   getScriptLengthSummary,
-  getSubtitleWrapBudget,
   hasCjkChars,
+  hasVietnameseDiacritics,
   isBilingualLanguage,
   isKnownPresetSubject,
   normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
+  planNarrationSegments,
   safeParseJsonResponse,
   slugifyOutputFilename,
-  splitCueIntoShortSubCues,
   splitScriptSentences,
   stripNarrationTags,
+  updateScriptLinePreservingTag,
 } from '../shared/mptEngine';
 import { TopicDiscoveryBar } from './TopicDiscoveryBar';
 import { SubtitlePreviewCaption } from './SubtitlePreviewCaption';
@@ -153,8 +155,10 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const [scriptError, setScriptError] = useState<string | null>(null);
 
   const [showQuickPaste, setShowQuickPaste] = useState(false);
-  const [showAiWebPanel, setShowAiWebPanel] = useState(false);
-  const [aiWebPromptMode, setAiWebPromptMode] = useState<'all_in_one' | 'from_subject'>('all_in_one');
+  const [showAiWebPanel, setShowAiWebPanel] = useState(true);
+  const [aiWebPromptMode, setAiWebPromptMode] = useState<
+    'from_user_script' | 'from_subject' | 'all_in_one'
+  >('from_user_script');
   const [autoFetchScenesOnPaste, setAutoFetchScenesOnPaste] = useState(true);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [aiWebPasteText, setAiWebPasteText] = useState('');
@@ -328,11 +332,19 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const uploadedVisuals = uploadedMedia.filter((m) => m.kind === 'video' || m.kind === 'image');
   const uploadedAudios = uploadedMedia.filter((m) => m.kind === 'audio');
 
+  const rawNonEmptyLines = config.script
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
   const previewLines = splitScriptSentences(config.script, 140)
     .map((l) => stripNarrationTags(l))
     .filter(Boolean);
+  const totalPreviewItems =
+    previewScenes.length > 0 ? previewScenes.length : previewLines.length;
   const safeActiveIdx =
-    previewScenes.length > 0 ? Math.min(activeSceneIdx, previewScenes.length - 1) : 0;
+    totalPreviewItems > 0 ? Math.min(activeSceneIdx, totalPreviewItems - 1) : 0;
   const activeScene = previewScenes[safeActiveIdx] ?? null;
 
   useEffect(() => {
@@ -353,18 +365,96 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         'Phụ đề trắng viền đen sắc nét hiển thị tại đây.'
     ) || 'Phụ đề trắng viền đen sắc nét hiển thị tại đây.';
 
-  const previewCanvas = getCanvasDimensions(config.aspectRatio, config.videoQuality ?? '720p');
-  const previewBudget = getSubtitleWrapBudget(
-    config.subtitle,
-    previewCanvas.width,
-    previewCanvas.height,
-    hasCjkChars(rawActiveSentence)
-  );
-  const previewSubChunks = splitCueIntoShortSubCues(
-    [{ index: 1, startSec: 0, endSec: 4, text: rawActiveSentence }],
-    previewBudget.maxCueChars
-  );
-  const activePreviewCaption = previewSubChunks[0]?.text ?? rawActiveSentence;
+  const previewBaseSegments = planNarrationSegments({
+    script: config.script,
+    language: config.language,
+    scriptStyle: config.scriptStyle,
+    voiceId: config.voiceId,
+    dualVoiceEnabled: config.dualVoiceEnabled,
+    secondaryVoiceId: config.secondaryVoiceId,
+    pauseBetweenLinesSec: 0,
+    targetRepeatCount: 0,
+    fullAnswerRecapMode: 'off',
+    summarizeAtEnd: false,
+  });
+
+  const findNonEmptyLineIndex = (cleanTarget: string, hintIdx = 0): number | null => {
+    if (!cleanTarget) return null;
+    if (
+      hintIdx >= 0 &&
+      hintIdx < rawNonEmptyLines.length &&
+      stripNarrationTags(rawNonEmptyLines[hintIdx]) === cleanTarget
+    ) {
+      return hintIdx;
+    }
+    const exactIdx = rawNonEmptyLines.findIndex((l) => stripNarrationTags(l) === cleanTarget);
+    if (exactIdx >= 0) return exactIdx;
+    const partialIdx = rawNonEmptyLines.findIndex((l) => {
+      const stripped = stripNarrationTags(l);
+      return stripped.includes(cleanTarget) || cleanTarget.includes(stripped);
+    });
+    return partialIdx >= 0 ? partialIdx : null;
+  };
+
+  let pinnedSourceForPreview: string | null = null;
+  let activeSegIdx =
+    previewBaseSegments[safeActiveIdx]?.text === rawActiveSentence
+      ? safeActiveIdx
+      : previewBaseSegments.findIndex((s) => s.text === rawActiveSentence);
+  if (activeSegIdx < 0 && previewBaseSegments.length > 0) {
+    activeSegIdx = Math.min(safeActiveIdx, previewBaseSegments.length - 1);
+  }
+
+  let editTargetLineIdx: number | null = null;
+  let editSourceLineIdx: number | null = null;
+  const activeRawLineIdx = findNonEmptyLineIndex(rawActiveSentence, safeActiveIdx);
+
+  if (activeSegIdx >= 0 && previewBaseSegments[activeSegIdx]) {
+    const activeSeg = previewBaseSegments[activeSegIdx];
+    if (activeSeg.voiceSlot === 'secondary' && !activeSeg.isIntroOrOutro) {
+      editTargetLineIdx = activeRawLineIdx;
+      for (let p = activeSegIdx - 1; p >= 0; p--) {
+        if (previewBaseSegments[p].voiceSlot === 'primary' && !previewBaseSegments[p].isIntroOrOutro) {
+          const srcText = previewBaseSegments[p].text;
+          if (config.stickyDualSubtitle !== false) {
+            pinnedSourceForPreview = srcText;
+          }
+          editSourceLineIdx = findNonEmptyLineIndex(srcText, p);
+          break;
+        }
+      }
+    } else if (activeSeg.voiceSlot === 'secondary') {
+      editTargetLineIdx = activeRawLineIdx;
+    } else {
+      editSourceLineIdx = activeRawLineIdx;
+      const nextSeg = previewBaseSegments[activeSegIdx + 1];
+      if (!activeSeg.isIntroOrOutro && nextSeg && nextSeg.voiceSlot === 'secondary' && !nextSeg.isIntroOrOutro) {
+        editTargetLineIdx = findNonEmptyLineIndex(nextSeg.text, activeSegIdx + 1);
+      }
+    }
+  } else {
+    editSourceLineIdx = activeRawLineIdx;
+  }
+
+  const handleInlineEditSubtitleLine = (lineIdx: number, nextCleanText: string) => {
+    const oldClean = stripNarrationTags(rawNonEmptyLines[lineIdx] ?? '');
+    const nextScript = updateScriptLinePreservingTag(config.script, lineIdx, nextCleanText);
+    const updatedScenes =
+      previewScenes.length > 0
+        ? previewScenes.map((s) =>
+            stripNarrationTags(s.sentence) === oldClean ? { ...s, sentence: nextCleanText } : s
+          )
+        : undefined;
+    if (updatedScenes) {
+      setPreviewScenes(updatedScenes);
+    }
+    onChangeConfig({
+      script: nextScript,
+      ...(updatedScenes ? { customScenes: updatedScenes } : {}),
+    });
+  };
+
+  const activePreviewCaption = rawActiveSentence;
 
   const promptSubjectInput =
     aiWebPromptMode === 'all_in_one' && isKnownPresetSubject(config.subject)
@@ -377,6 +467,17 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     scriptStyle: config.scriptStyle,
     sentenceCount: config.sentenceCount,
     mode: aiWebPromptMode,
+    rawScript: config.script,
+    mediaTypeFilter: config.mediaTypeFilter ?? 'all',
+    visualMood: config.visualMood ?? 'auto',
+    aspectRatio: config.aspectRatio,
+    dualVoiceEnabled: Boolean(config.dualVoiceEnabled) || isBilingualLanguage(config.language),
+    pauseBetweenLinesSec: config.pauseBetweenLinesSec ?? 0,
+    targetRepeatCount: config.targetRepeatCount ?? 0,
+    fullAnswerRecapMode: config.fullAnswerRecapMode ?? 'off',
+    summarizeAtEnd: Boolean(config.summarizeAtEnd),
+    stickyDualSubtitle: config.stickyDualSubtitle !== false,
+    subtitleEffect: config.subtitle.effect,
   });
 
   const applyPastedContent = (rawText: string, sourceHint = 'Clipboard') => {
@@ -389,6 +490,55 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     }
     const nextSubject = parsed.subject || config.subject;
     const count = splitScriptSentences(parsed.script).length;
+    const pastedLines = parsed.script.split('\n').map((l) => l.trim()).filter(Boolean);
+    const hasQaTags = pastedLines.some((l) =>
+      /^\s*(?:Tiêu\s*đề(?:\s*nhỏ)?|Title|Subtitle|Subheading|Heading|Q|A|Question|Answer|English|Japanese|Vietnamese|\[VI\]|\[EN\]|\[JA\])\s*[:：]?/i.test(
+        l
+      )
+    );
+    const hasJa = pastedLines.some((l) => hasCjkChars(stripNarrationTags(l)));
+    const hasVi = pastedLines.some(
+      (l) =>
+        !/^\s*(?:Tiêu\s*đề(?:\s*nhỏ)?|Title|Subtitle)\s*[:：]/i.test(l) &&
+        hasVietnameseDiacritics(stripNarrationTags(l))
+    );
+    const hasEnTarget = pastedLines.some((l) =>
+      /^\s*(?:English|Tiếng\s*Anh|\[EN\])\s*[:：]?/i.test(l)
+    );
+
+    const autoLangPatch: Partial<RenderJobConfig> = {};
+    if (hasQaTags || (hasJa && hasEnTarget)) {
+      autoLangPatch.dualVoiceEnabled = true;
+      autoLangPatch.stickyDualSubtitle = true;
+      autoLangPatch.pauseBetweenLinesSec =
+        (config.pauseBetweenLinesSec ?? 0) > 0 ? config.pauseBetweenLinesSec : 5;
+      autoLangPatch.clockTickEnabled = config.clockTickEnabled !== false;
+      if (hasJa && !hasVi) {
+        autoLangPatch.language = 'ja_en';
+        autoLangPatch.voiceId = 'ja-JP-NanamiNeural';
+        autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
+      } else if (hasVi && hasJa) {
+        autoLangPatch.language = 'vi_ja';
+        autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
+        autoLangPatch.secondaryVoiceId = 'ja-JP-NanamiNeural';
+      } else if (hasVi && hasEnTarget) {
+        autoLangPatch.language = 'bilingual';
+        autoLangPatch.voiceId = 'vi-VN-HoaiMyNeural';
+        autoLangPatch.secondaryVoiceId = 'en-US-JennyNeural';
+      }
+      if (pastedLines.some((l) => /^\s*(?:A|Answer)\s*[:：]/i.test(l))) {
+        autoLangPatch.fullAnswerRecapMode =
+          config.fullAnswerRecapMode === 'off' ? 'target_full' : config.fullAnswerRecapMode;
+      }
+    }
+
+    if (parsed.visualMood) autoLangPatch.visualMood = parsed.visualMood;
+    if (parsed.mediaTypeFilter) autoLangPatch.mediaTypeFilter = parsed.mediaTypeFilter;
+
+    if (!rawText.trim().startsWith('{')) {
+      setAiWebPromptMode('from_user_script');
+    }
+
     setTermsInput(parsed.terms.join(', '));
     setScriptSources([]);
     setPreviewScenes([]);
@@ -396,6 +546,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     onChangeConfig({
       ...(parsed.subject ? { subject: parsed.subject } : {}),
       ...(count >= 2 && count <= 25 ? { sentenceCount: count } : {}),
+      ...autoLangPatch,
       script: parsed.script,
       terms: parsed.terms,
       scenePrompts: parsed.scenePrompts,
@@ -534,6 +685,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           terms: effTerms,
           scenePrompts: nextScenePrompts,
           materialSource: config.materialSource,
+          mediaTypeFilter: config.mediaTypeFilter ?? 'all',
+          visualMood: config.visualMood ?? 'auto',
           aspectRatio: config.aspectRatio,
           videoQuality: config.videoQuality ?? '720p',
           selectedMediaIds: config.selectedMediaIds,
@@ -586,6 +739,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           query: sceneEditQuery.trim() || activeScene.prompt || config.subject,
           aspectRatio: config.aspectRatio,
           videoQuality: config.videoQuality ?? '720p',
+          mediaTypeFilter: config.mediaTypeFilter ?? 'all',
+          visualMood: config.visualMood ?? 'auto',
         }),
       });
       const data = await safeParseJsonResponse<{ candidates?: ScenePreviewItem[]; error?: string }>(
@@ -618,6 +773,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           prompt: sceneEditQuery.trim() || activeScene.prompt || config.subject,
           aspectRatio: config.aspectRatio,
           videoQuality: config.videoQuality ?? '720p',
+          visualMood: config.visualMood ?? 'auto',
         }),
       });
       const data = await safeParseJsonResponse<{ scene?: ScenePreviewItem; error?: string }>(
@@ -779,9 +935,16 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   };
 
   const resolvedOutputDir = normalizeOutputSubdir(config.outputDir);
+  const customOutName = config.outputFilename?.trim();
   const expectedBaseFilename = slugifyOutputFilename(
-    config.outputFilename?.trim() || config.subject,
-    'video_ngan'
+    customOutName || config.subject,
+    '🚀 Video học tập',
+    {
+      script: config.script,
+      scriptStyle: config.scriptStyle,
+      language: config.language,
+      includeEmoji: !customOutName,
+    }
   );
 
   const activeBgmUrl =
@@ -795,578 +958,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       {/* Left Column: Focused 3-Step Video Studio */}
       <div className="lg:col-span-7 space-y-5">
-        {/* 1. Script, One-Click Paste & AI Web Prompt */}
-        <section id="sec-script" className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
-            <div>
-              <h2 className="text-base font-semibold text-slate-900">
-                1. Chủ đề, Kịch bản &amp; Từ khóa cảnh quay
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Tạo tự động bằng AI, hoặc dán trực tiếp kịch bản / JSON từ ChatGPT &amp; Gemini.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setPreviewScenes([]);
-                setScriptSources([]);
-                setScriptNote(null);
-                setScriptError(null);
-                setActiveSceneIdx(0);
-                onResetForm();
-              }}
-              className="text-xs font-medium text-slate-600 hover:text-slate-900 underline whitespace-nowrap shrink-0"
-            >
-              Đặt lại mặc định
-            </button>
-          </div>
-
-          <div>
-            <label htmlFor="mpt-subject" className="block text-xs font-medium text-slate-700 mb-1.5">
-              Chủ đề video
-            </label>
-            <input
-              id="mpt-subject"
-              type="text"
-              value={config.subject}
-              onChange={(e) => onChangeConfig({ subject: e.target.value })}
-              placeholder="VD: Khoa học đằng sau tách cà phê Espresso hoàn hảo..."
-              className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
-            />
-            <div className="flex flex-wrap items-center gap-2 mt-2">
-              <span className="text-xs text-slate-500">Mẫu nhanh:</span>
-              {topicPresets.map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => onChangeConfig({ subject: preset })}
-                  className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors text-left"
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <TopicDiscoveryBar
-            currentSubject={config.subject}
-            language={config.language}
-            onSelectTopic={(title) => onChangeConfig({ subject: title })}
-          />
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="mpt-language" className="block text-xs font-medium text-slate-700 mb-1">
-                Ngôn ngữ
-              </label>
-              <select
-                id="mpt-language"
-                value={config.language}
-                onChange={(e) => {
-                  const nextLang = e.target.value as LanguageCode;
-                  const isBilingual = isBilingualLanguage(nextLang);
-                  const isInteractiveStyle =
-                    config.scriptStyle === 'language_challenge' ||
-                    config.scriptStyle === 'bilingual_dialogue' ||
-                    config.scriptStyle === 'quiz_riddle';
-                  const patch: Partial<RenderJobConfig> = {
-                    language: nextLang,
-                    customScenes: undefined,
-                    dualVoiceEnabled: isBilingual || isInteractiveStyle,
-                    secondaryVoiceId: getDefaultSecondaryVoiceForLanguage(nextLang),
-                    pauseBetweenLinesSec:
-                      config.scriptStyle === 'language_challenge' ||
-                      config.scriptStyle === 'quiz_riddle'
-                        ? Math.max(1.0, config.pauseBetweenLinesSec || 5)
-                        : config.pauseBetweenLinesSec ?? 0,
-                    clockTickEnabled:
-                      config.scriptStyle === 'language_challenge' ||
-                      config.scriptStyle === 'quiz_riddle'
-                        ? config.clockTickEnabled !== false
-                        : config.clockTickEnabled,
-                  };
-                  if (!doesVoiceMatchLanguage(config.voiceId, nextLang) || isBilingual) {
-                    patch.voiceId = getDefaultVoiceForLanguage(nextLang);
-                  }
-                  if (isKnownPresetSubject(config.subject)) {
-                    const nextPreset = getPresetsForLanguage(nextLang)[0];
-                    const starter = generateOfflineVietnameseScript(
-                      nextPreset,
-                      nextLang,
-                      config.sentenceCount,
-                      undefined,
-                      config.scriptStyle
-                    );
-                    patch.subject = nextPreset;
-                    patch.script = starter.script;
-                    patch.terms = starter.terms;
-                    patch.scenePrompts = starter.scenePrompts;
-                    setTermsInput(starter.terms.join(', '));
-                    setPreviewScenes([]);
-                  }
-                  onChangeConfig(patch);
-                }}
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-              >
-                {studioTab === 'learning' ? (
-                  <>
-                    <option value="bilingual">Song ngữ Việt – Anh (Học Tiếng Anh)</option>
-                    <option value="vi_ja">Song ngữ Việt – Nhật (Học Tiếng Nhật)</option>
-                    <option value="ja_en">Song ngữ Nhật – Anh (瞬間英作文)</option>
-                    <option value="en">Tiếng Anh (English)</option>
-                    <option value="ja">Tiếng Nhật (日本語)</option>
-                    <option value="vi">Tiếng Việt</option>
-                  </>
-                ) : (
-                  <>
-                    <option value="vi">Tiếng Việt</option>
-                    <option value="en">Tiếng Anh (English)</option>
-                    <option value="ja">Tiếng Nhật (日本語)</option>
-                  </>
-                )}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="mpt-style" className="block text-xs font-medium text-slate-700 mb-1">
-                Phong cách
-              </label>
-              <select
-                id="mpt-style"
-                value={config.scriptStyle}
-                onChange={(e) => {
-                  const nextStyle = e.target.value as ScriptStyle;
-                  const wantsDual =
-                    nextStyle === 'language_challenge' ||
-                    nextStyle === 'bilingual_dialogue' ||
-                    nextStyle === 'quiz_riddle' ||
-                    isBilingualLanguage(config.language);
-                  const defaultSec =
-                    nextStyle === 'language_challenge' && !isBilingualLanguage(config.language)
-                      ? config.voiceId.startsWith('en-')
-                        ? 'vi-VN-HoaiMyNeural'
-                        : 'en-US-JennyNeural'
-                      : getDefaultSecondaryVoiceForLanguage(config.language);
-                  const isChallengeOrQuiz =
-                    nextStyle === 'language_challenge' || nextStyle === 'quiz_riddle';
-                  const patch: Partial<RenderJobConfig> = {
-                    scriptStyle: nextStyle,
-                    customScenes: undefined,
-                    dualVoiceEnabled: wantsDual,
-                    secondaryVoiceId:
-                      wantsDual &&
-                      (!config.secondaryVoiceId ||
-                        (!isBilingualLanguage(config.language) &&
-                          nextStyle === 'language_challenge' &&
-                          config.secondaryVoiceId.slice(0, 2) === config.voiceId.slice(0, 2)))
-                        ? defaultSec
-                        : config.secondaryVoiceId ?? defaultSec,
-                    pauseBetweenLinesSec: isChallengeOrQuiz ? 5 : 0,
-                    clockTickEnabled: isChallengeOrQuiz ? true : false,
-                  };
-                  if (isKnownPresetSubject(config.subject)) {
-                    const starter = generateOfflineVietnameseScript(
-                      config.subject,
-                      config.language,
-                      config.sentenceCount,
-                      undefined,
-                      nextStyle
-                    );
-                    patch.script = starter.script;
-                    patch.terms = starter.terms;
-                    patch.scenePrompts = starter.scenePrompts;
-                    setTermsInput(starter.terms.join(', '));
-                    setPreviewScenes([]);
-                  }
-                  onChangeConfig(patch);
-                }}
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-              >
-                {studioTab === 'learning' ? (
-                  <>
-                    <option value="language_challenge">Học ngoại ngữ / Phản xạ 5s (2 giọng)</option>
-                    <option value="bilingual_dialogue">Hội thoại / Podcast 2 người</option>
-                    <option value="quiz_riddle">Đố vui / Thử thách đáp nhanh 5s</option>
-                  </>
-                ) : (
-                  <>
-                    <option value="curious_facts">Sự thật tò mò (Hook 3s)</option>
-                    <option value="storytelling">Kể chuyện cuốn hút</option>
-                    <option value="tips_howto">Mẹo nhanh &amp; Thực tế</option>
-                    <option value="news_fast">Tin nhanh súc tích</option>
-                    <option value="motivational">Truyền cảm hứng / Triết lý</option>
-                    <option value="top_list">Top xếp hạng / Danh sách nổi bật</option>
-                  </>
-                )}
-              </select>
-            </div>
-
-            <div className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <label htmlFor="mpt-count" className="font-medium text-slate-700">
-                  Độ dài kịch bản (Ngắn → Dài)
-                </label>
-                <span className="font-mono tabular-nums text-slate-900">
-                  {config.sentenceCount} câu · {getScriptLengthSummary(config.sentenceCount).tierLabel} (~
-                  {getScriptLengthSummary(config.sentenceCount).estSec}s)
-                </span>
-              </div>
-              <input
-                id="mpt-count"
-                type="range"
-                min={2}
-                max={25}
-                step={1}
-                value={config.sentenceCount}
-                onChange={(e) => onChangeConfig({ sentenceCount: Number(e.target.value) })}
-                className="w-full accent-slate-900"
-              />
-              <div className="flex flex-wrap items-center justify-between gap-1.5">
-                {[
-                  { count: 3, label: 'Rất ngắn (3 câu)' },
-                  { count: 5, label: 'Ngắn (5 câu)' },
-                  { count: 9, label: 'Trung bình (9 câu)' },
-                  { count: 14, label: 'Dài (14 câu)' },
-                  { count: 20, label: 'Rất dài (20 câu)' },
-                ].map((preset) => (
-                  <button
-                    key={preset.count}
-                    type="button"
-                    onClick={() => onChangeConfig({ sentenceCount: preset.count })}
-                    className={`px-2 py-1 text-[11px] font-medium rounded border transition-colors ${
-                      config.sentenceCount === preset.count
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="sm:col-span-2">
-              <label htmlFor="mpt-llm" className="block text-xs font-medium text-slate-700 mb-1">
-                Nguồn viết kịch bản
-              </label>
-              <select
-                id="mpt-llm"
-                value={config.llmProvider}
-                onChange={(e) => onChangeConfig({ llmProvider: e.target.value as LlmProvider })}
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
-              >
-                <option value="pollinations">AI Tự động + Wikipedia (Việt / Anh / Nhật)</option>
-                <option value="gemini_search">Gemini AI + Tìm kiếm Google</option>
-                <option value="ollama">Ollama Local (11434)</option>
-                <option value="offline_vi">Mẫu Offline (Tức thì · 0ms)</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Primary Script Actions Toolbar with Prominent Paste Button */}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={isGeneratingScript}
-              onClick={() => void handleGenerateScript()}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
-            >
-              {isGeneratingScript ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
-              )}
-              <span>{isGeneratingScript ? 'Đang tạo kịch bản...' : 'Tạo kịch bản AI'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void handleOneClickPaste()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-900 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              <ClipboardPaste className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Dán kịch bản / JSON</span>
-            </button>
-
-            <button
-              type="button"
-              aria-expanded={showAiWebPanel}
-              onClick={() => setShowAiWebPanel((v) => !v)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              <span>Copy Prompt ChatGPT / Gemini</span>
-              {showAiWebPanel ? (
-                <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" />
-              ) : (
-                <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
-              )}
-            </button>
-          </div>
-
-          {(scriptNote || scriptError) && (
-            <div className={`text-xs ${scriptError ? 'text-rose-700' : 'text-emerald-700'}`}>
-              {scriptError ?? scriptNote}
-            </div>
-          )}
-
-          {scriptSources.length > 0 && (
-            <div
-              data-testid="script-grounding-sources"
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600 bg-emerald-50/70 border border-emerald-200 rounded-lg px-3 py-2"
-            >
-              <span className="font-medium text-emerald-900">Nguồn thực tế đối chiếu:</span>
-              {scriptSources.slice(0, 4).map((src, idx) => (
-                <a
-                  key={`${src.url}_${idx}`}
-                  href={src.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-indigo-700 hover:underline max-w-[220px]"
-                >
-                  <span className="truncate">{src.title}</span>
-                  <ExternalLink className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
-                </a>
-              ))}
-            </div>
-          )}
-
-          {/* Quick Inline Paste Box (triggers cleanly if browser clipboard requires manual Ctrl+V) */}
-          {showQuickPaste && (
-            <div
-              data-testid="quick-paste-bar"
-              className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <label htmlFor="mpt-quick-paste" className="text-xs font-semibold text-slate-900">
-                  Dán (Ctrl+V) văn bản kịch bản hoặc JSON vào đây — tự động tách lời thoại &amp; từ khóa
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setShowQuickPaste(false)}
-                  className="text-xs text-slate-500 hover:text-slate-900"
-                >
-                  Đóng
-                </button>
-              </div>
-              <textarea
-                id="mpt-quick-paste"
-                ref={quickPasteRef}
-                rows={3}
-                value={aiWebPasteText}
-                onChange={(e) => setAiWebPasteText(e.target.value)}
-                onPaste={(e) => {
-                  const pasted = e.clipboardData?.getData('text');
-                  if (pasted && pasted.trim().length > 4) {
-                    e.preventDefault();
-                    applyPastedContent(pasted, 'Paste');
-                  }
-                }}
-                placeholder='Bấm Ctrl+V để dán văn bản hoặc {"script": "...", "terms": [...]}'
-                className="w-full px-3 py-2 text-xs font-mono bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
-              />
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  disabled={!aiWebPasteText.trim()}
-                  onClick={() => applyPastedContent(aiWebPasteText, 'Paste')}
-                  className="px-3.5 py-1.5 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-45 whitespace-nowrap shrink-0"
-                >
-                  Áp dụng nội dung đã dán
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Collapsible External AI Web Prompt & JSON Importer */}
-          {showAiWebPanel && (
-            <div
-              data-testid="ai-web-prompt-panel"
-              className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs font-semibold text-slate-900">
-                  Prompt cho ChatGPT / Gemini Web (Trả về Chủ đề + Kịch bản + Từ khóa Tìm Ảnh/Video)
-                </div>
-                <div className="flex items-center gap-2">
-                  <a
-                    href="https://chatgpt.com/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-100 whitespace-nowrap"
-                  >
-                    <span>ChatGPT</span>
-                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                  </a>
-                  <a
-                    href="https://gemini.google.com/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-100 whitespace-nowrap"
-                  >
-                    <span>Gemini</span>
-                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                  </a>
-                  <button
-                    type="button"
-                    onClick={() => void handleCopyPromptForWeb()}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-white bg-slate-900 rounded hover:bg-slate-800 whitespace-nowrap"
-                  >
-                    {copiedPrompt ? (
-                      <Check className="w-3 h-3 text-emerald-400" aria-hidden="true" />
-                    ) : (
-                      <Copy className="w-3 h-3" aria-hidden="true" />
-                    )}
-                    <span>{copiedPrompt ? 'Đã copy Prompt' : 'Copy Prompt'}</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setAiWebPromptMode('all_in_one')}
-                    className={`px-2.5 py-1 text-[11px] font-medium rounded border transition-colors ${
-                      aiWebPromptMode === 'all_in_one'
-                        ? 'bg-indigo-600 text-white border-indigo-600'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    All-in-One (AI tự chọn Chủ đề + Nội dung + Ảnh/Video)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAiWebPromptMode('from_subject')}
-                    className={`px-2.5 py-1 text-[11px] font-medium rounded border transition-colors ${
-                      aiWebPromptMode === 'from_subject'
-                        ? 'bg-indigo-600 text-white border-indigo-600'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    Viết theo chủ đề đang nhập
-                  </button>
-                </div>
-
-                <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={autoFetchScenesOnPaste}
-                    onChange={(e) => setAutoFetchScenesOnPaste(e.target.checked)}
-                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
-                  />
-                  <span>Tự tìm ảnh/video ngay khi dán JSON</span>
-                </label>
-              </div>
-
-              <textarea
-                readOnly
-                rows={5}
-                value={generatedPromptForWeb}
-                aria-label="Prompt chuẩn MoneyPrinterTurbo để dán vào ChatGPT hoặc Gemini Web"
-                className="w-full px-3 py-2 text-xs font-mono bg-white border border-slate-200 rounded-lg text-slate-700"
-              />
-
-              <div className="space-y-1.5 pt-1">
-                <label htmlFor="mpt-ai-web-paste" className="block text-[11px] font-medium text-slate-700">
-                  Dán kết quả JSON từ ChatGPT / Gemini Web vào đây để tự điền Chủ đề, Kịch bản &amp; Tìm Ảnh/Video:
-                </label>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <textarea
-                    id="mpt-ai-web-paste"
-                    rows={2}
-                    value={aiWebPasteText}
-                    onChange={(e) => setAiWebPasteText(e.target.value)}
-                    placeholder='{"subject": "...", "script": "...", "terms": [...], "scenePrompts": [...]}'
-                    className="flex-1 px-3 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
-                  />
-                  <button
-                    type="button"
-                    disabled={!aiWebPasteText.trim()}
-                    onClick={() => applyPastedContent(aiWebPasteText, 'Web AI')}
-                    className="px-3.5 py-2 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-45 whitespace-nowrap self-end sm:self-stretch"
-                  >
-                    Áp dụng &amp; Tìm cảnh
-                  </button>
-                </div>
-              </div>
-              {aiWebStatus && <div className="text-xs text-slate-700">{aiWebStatus}</div>}
-            </div>
-          )}
-
-          <div>
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <label htmlFor="mpt-script" className="text-xs font-medium text-slate-700">
-                Nội dung lời thoại (mỗi dòng là 1 nhịp đọc)
-              </label>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => void handleOneClickPaste()}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:underline whitespace-nowrap shrink-0"
-                >
-                  <ClipboardPaste className="w-3 h-3" aria-hidden="true" />
-                  <span>Dán nhanh</span>
-                </button>
-                <span className="text-xs text-slate-500 tabular-nums whitespace-nowrap">
-                  {previewLines.length} câu · {config.script.trim().length} ký tự
-                </span>
-              </div>
-            </div>
-            <textarea
-              id="mpt-script"
-              rows={4}
-              value={config.script}
-              onChange={(e) => onChangeConfig({ script: e.target.value })}
-              onPaste={(e) => {
-                const pasted = e.clipboardData?.getData('text');
-                if (pasted && pasted.trim().startsWith('{') && pasted.includes('"script"')) {
-                  e.preventDefault();
-                  applyPastedContent(pasted, 'Paste JSON');
-                }
-              }}
-              placeholder="Mỗi câu nằm trên 1 dòng để đồng bộ giọng đọc và cắt cảnh quay mượt mà..."
-              className="w-full px-3.5 py-2.5 text-sm leading-relaxed border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <label htmlFor="mpt-terms" className="text-xs font-medium text-slate-700">
-                Từ khóa tìm cảnh quay B-roll (tiếng Anh)
-              </label>
-              <button
-                type="button"
-                onClick={handleSuggestTermsAndScenes}
-                className="text-xs font-medium text-indigo-700 hover:underline whitespace-nowrap shrink-0"
-              >
-                Tự gợi ý từ kịch bản
-              </button>
-            </div>
-            <input
-              id="mpt-terms"
-              type="text"
-              value={termsInput}
-              onChange={(e) => {
-                setTermsInput(e.target.value);
-                onChangeConfig({
-                  terms: e.target.value
-                    .split(',')
-                    .map((s) => s.trim())
-                    .filter(Boolean),
-                });
-              }}
-              placeholder="coffee espresso, ocean waves, mountain sunset"
-              className="w-full px-3.5 py-2 text-xs font-mono border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
-            />
-          </div>
-        </section>
-
-        {/* 2. Real HD Video B-Roll & Framing Settings */}
+        {/* 1. Real HD Video B-Roll & Framing Settings */}
         <section id="sec-visuals" className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
             <h2 className="text-base font-semibold text-slate-900">
-              2. Nguồn cảnh quay HD &amp; Nhịp chuyển cảnh
+              1. Nguồn cảnh quay HD &amp; Nhịp chuyển cảnh
             </h2>
             <button
               type="button"
@@ -1416,6 +1012,53 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               <p className="text-[11px] text-slate-500 mt-1 leading-snug">
                 B-roll là video/ảnh nền minh họa chạy sau chữ. Nên chọn <strong>Mixkit Free</strong> để có video thật chuyển động mượt, hoặc <strong>B-roll HD + AI</strong> khi cần ảnh sát nội dung từng câu.
               </p>
+            </div>
+
+            <div>
+              <label htmlFor="mpt-media-filter" className="block text-xs font-medium text-slate-700 mb-1">
+                Loại tư liệu nền (Chỉ Ảnh / Chỉ Video)
+              </label>
+              <select
+                id="mpt-media-filter"
+                value={config.mediaTypeFilter ?? 'all'}
+                onChange={(e) => {
+                  setPreviewScenes([]);
+                  onChangeConfig({
+                    mediaTypeFilter: e.target.value as MediaTypeFilter,
+                    customScenes: undefined,
+                  });
+                }}
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+              >
+                <option value="all">Video + Ảnh kết hợp (Mặc định)</option>
+                <option value="video_only">Chỉ tìm Video chuyển động (MP4)</option>
+                <option value="image_only">Chỉ tìm Ảnh tĩnh / Minh họa (JPG/PNG)</option>
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="mpt-visual-mood" className="block text-xs font-medium text-slate-700 mb-1">
+                Phong cách hình ảnh &amp; Màu sắc (Mood)
+              </label>
+              <select
+                id="mpt-visual-mood"
+                value={config.visualMood ?? 'auto'}
+                onChange={(e) => {
+                  setPreviewScenes([]);
+                  onChangeConfig({
+                    visualMood: e.target.value as VisualMood,
+                    customScenes: undefined,
+                  });
+                }}
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+              >
+                <option value="auto">Tự động khớp ngữ cảnh nội dung</option>
+                <option value="bright">Tươi sáng · Rạng rỡ (Bright Daylight)</option>
+                <option value="moody">U tối · Sâu lắng · Kịch tính (Moody)</option>
+                <option value="vibrant">Sinh động · Giàu năng lượng (Vibrant)</option>
+                <option value="minimal">Tối giản · Hiện đại · Gọn gàng (Minimal)</option>
+                <option value="cinematic">Điện ảnh · Chiều sâu 35mm (Cinematic)</option>
+              </select>
             </div>
 
             <div>
@@ -1572,11 +1215,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
           )}
         </section>
 
-        {/* 3. Voiceover, BGM & Clean Subtitles */}
+        {/* 2. Voiceover, BGM & Clean Subtitles */}
         <section id="sec-audio" className="bg-white border border-slate-200 rounded-xl p-5 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
             <h2 className="text-base font-semibold text-slate-900">
-              3. Giọng đọc, Nhạc nền &amp; Phụ đề
+              2. Giọng đọc, Nhạc nền &amp; Phụ đề
             </h2>
             <button
               type="button"
@@ -1809,6 +1452,22 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                       </option>
                     </select>
                   </div>
+                  <div className="sm:col-span-2 pt-0.5">
+                    <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+                      <input
+                        id="mpt-sticky-dual-sub"
+                        type="checkbox"
+                        checked={config.stickyDualSubtitle !== false}
+                        onChange={(e) =>
+                          onChangeConfig({ stickyDualSubtitle: e.target.checked })
+                        }
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                      />
+                      <span>
+                        Giữ câu ngôn ngữ gốc ở dưới khi câu đích đọc (Câu đích ở trên · Ẩn gốc cũ khi sang câu gốc mới)
+                      </span>
+                    </label>
+                  </div>
                 </div>
               )}
             </div>
@@ -1950,6 +1609,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
                 >
                   <option value="karaoke">Karaoke chạy chữ theo lời đọc</option>
+                  <option value="laser">Chữ chạy Laser phát sáng (Neon Sweep)</option>
                   <option value="typewriter">Gõ chữ từng từ (Typewriter)</option>
                   <option value="pop_zoom">Bật nảy phóng to (TikTok Pop)</option>
                   <option value="fade_slide">Trượt lên &amp; mờ dần (Fade Slide)</option>
@@ -1982,7 +1642,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   onChange={(e) => updateSubtitle({ fontName: e.target.value as SubtitleFont })}
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
                 >
-                  <option value="Noto Sans">Noto Sans (Chuẩn nét, Việt-Anh-Nhật)</option>
+                  <option value="M PLUS 1p">M PLUS 1p (Tiếng Nhật nét tròn sắc nét · Khuyên dùng)</option>
+                  <option value="BIZ UDPGothic">BIZ UDPGothic (Tiếng Nhật chuẩn công sở · Dễ đọc)</option>
+                  <option value="Noto Sans">Noto Sans (Tiếng Việt / Anh chuẩn nét)</option>
                   <option value="DejaVu Sans">DejaVu Sans (Đậm nét, rõ dấu)</option>
                   <option value="Liberation Sans">Liberation Sans (Hiện đại, gọn)</option>
                   <option value="JetBrains Mono">JetBrains Mono (Kỹ thuật)</option>
@@ -2009,7 +1671,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
               <div>
                 <div className="flex items-center justify-between text-xs mb-1">
                   <label htmlFor="mpt-sub-size" className="font-medium text-slate-700">
-                    Cỡ chữ phụ đề
+                    Cỡ chữ chính / Ngôn ngữ đích (trên)
                   </label>
                   <span className="font-mono tabular-nums">{config.subtitle.fontSize}px</span>
                 </div>
@@ -2020,6 +1682,26 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   max={62}
                   value={config.subtitle.fontSize}
                   onChange={(e) => updateSubtitle({ fontSize: Number(e.target.value) })}
+                  className="w-full accent-slate-900"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <label htmlFor="mpt-sub-source-size" className="font-medium text-slate-700">
+                    Cỡ chữ ngôn ngữ gốc (dưới)
+                  </label>
+                  <span className="font-mono tabular-nums">
+                    {config.subtitle.sourceFontSize ?? Math.round(config.subtitle.fontSize * 0.8)}px
+                  </span>
+                </div>
+                <input
+                  id="mpt-sub-source-size"
+                  type="range"
+                  min={18}
+                  max={56}
+                  value={config.subtitle.sourceFontSize ?? Math.round(config.subtitle.fontSize * 0.8)}
+                  onChange={(e) => updateSubtitle({ sourceFontSize: Number(e.target.value) })}
                   className="w-full accent-slate-900"
                 />
               </div>
@@ -2126,17 +1808,19 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   className="w-8 h-7 p-0 border border-slate-200 rounded cursor-pointer"
                 />
               </div>
-              {config.subtitle.effect === 'karaoke' && (
+              {(config.subtitle.effect === 'karaoke' || config.subtitle.effect === 'laser') && (
                 <div className="sm:col-span-2 flex flex-wrap items-center justify-between gap-3 pt-1">
                   <label htmlFor="mpt-sub-highlight" className="text-xs font-medium text-slate-700">
-                    Màu chữ chạy Karaoke
+                    {config.subtitle.effect === 'laser'
+                      ? 'Màu tia Laser phát sáng'
+                      : 'Màu chữ chạy Karaoke'}
                   </label>
                   <div className="flex flex-wrap items-center gap-1.5">
                     {KARAOKE_COLOR_SWATCHES.map((c) => (
                       <button
                         key={c}
                         type="button"
-                        aria-label={`Chọn màu Karaoke ${c}`}
+                        aria-label={`Chọn màu nổi bật ${c}`}
                         onClick={() => updateSubtitle({ highlightColor: c })}
                         className={`w-6 h-6 rounded border ${
                           (config.subtitle.highlightColor || '#FACC15').toUpperCase() === c
@@ -2157,6 +1841,623 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                 </div>
               )}
             </div>
+          </div>
+        </section>
+
+        {/* 3. Unified Subject, Script Input & External AI Web Prompt + JSON Sync (placed AFTER options 1 & 2) */}
+        <section id="sec-script" className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">
+                3. Chủ đề, Kịch bản &amp; Tạo Prompt AI Web (JSON)
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Nhập chủ đề / nội dung lời thoại tự do, tạo Prompt đồng bộ các tùy chọn ở trên cho ChatGPT/Gemini Web, rồi dán JSON trả về.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setPreviewScenes([]);
+                setScriptSources([]);
+                setScriptNote(null);
+                setScriptError(null);
+                setActiveSceneIdx(0);
+                onResetForm();
+              }}
+              className="text-xs font-medium text-slate-600 hover:text-slate-900 underline whitespace-nowrap shrink-0"
+            >
+              Đặt lại mặc định
+            </button>
+          </div>
+
+          <div>
+            <label htmlFor="mpt-subject" className="block text-xs font-medium text-slate-700 mb-1.5">
+              Chủ đề video
+            </label>
+            <input
+              id="mpt-subject"
+              type="text"
+              value={config.subject}
+              onChange={(e) => onChangeConfig({ subject: e.target.value })}
+              placeholder="VD: Khoa học đằng sau tách cà phê Espresso hoàn hảo..."
+              className="w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
+            />
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <span className="text-xs text-slate-500">Mẫu nhanh:</span>
+              {topicPresets.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => onChangeConfig({ subject: preset })}
+                  className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors text-left"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <TopicDiscoveryBar
+            currentSubject={config.subject}
+            language={config.language}
+            onSelectTopic={(title) => onChangeConfig({ subject: title })}
+          />
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="mpt-language" className="block text-xs font-medium text-slate-700 mb-1">
+                Ngôn ngữ
+              </label>
+              <select
+                id="mpt-language"
+                value={config.language}
+                onChange={(e) => {
+                  const nextLang = e.target.value as LanguageCode;
+                  const isBilingual = isBilingualLanguage(nextLang);
+                  const isInteractiveStyle =
+                    config.scriptStyle === 'language_challenge' ||
+                    config.scriptStyle === 'bilingual_dialogue' ||
+                    config.scriptStyle === 'quiz_riddle';
+                  const patch: Partial<RenderJobConfig> = {
+                    language: nextLang,
+                    customScenes: undefined,
+                    dualVoiceEnabled: isBilingual || isInteractiveStyle,
+                    secondaryVoiceId: getDefaultSecondaryVoiceForLanguage(nextLang),
+                    pauseBetweenLinesSec:
+                      config.scriptStyle === 'language_challenge' ||
+                      config.scriptStyle === 'quiz_riddle'
+                        ? Math.max(1.0, config.pauseBetweenLinesSec || 5)
+                        : config.pauseBetweenLinesSec ?? 0,
+                    clockTickEnabled:
+                      config.scriptStyle === 'language_challenge' ||
+                      config.scriptStyle === 'quiz_riddle'
+                        ? config.clockTickEnabled !== false
+                        : config.clockTickEnabled,
+                  };
+                  if (!doesVoiceMatchLanguage(config.voiceId, nextLang) || isBilingual) {
+                    patch.voiceId = getDefaultVoiceForLanguage(nextLang);
+                  }
+                  if (isKnownPresetSubject(config.subject)) {
+                    const nextPreset = getPresetsForLanguage(nextLang)[0];
+                    const starter = generateOfflineVietnameseScript(
+                      nextPreset,
+                      nextLang,
+                      config.sentenceCount,
+                      undefined,
+                      config.scriptStyle
+                    );
+                    patch.subject = nextPreset;
+                    patch.script = starter.script;
+                    patch.terms = starter.terms;
+                    patch.scenePrompts = starter.scenePrompts;
+                    setTermsInput(starter.terms.join(', '));
+                    setPreviewScenes([]);
+                  }
+                  onChangeConfig(patch);
+                }}
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+              >
+                {studioTab === 'learning' ? (
+                  <>
+                    <option value="ja_en">Song ngữ Nhật – Anh (瞬間英作文)</option>
+                    <option value="bilingual">Song ngữ Việt – Anh (Học Tiếng Anh)</option>
+                    <option value="vi_ja">Song ngữ Việt – Nhật (Học Tiếng Nhật)</option>
+                    <option value="en">Tiếng Anh (English)</option>
+                    <option value="ja">Tiếng Nhật (日本語)</option>
+                    <option value="vi">Tiếng Việt</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="vi">Tiếng Việt</option>
+                    <option value="en">Tiếng Anh (English)</option>
+                    <option value="ja">Tiếng Nhật (日本語)</option>
+                    <option value="bilingual">Song ngữ Việt – Anh</option>
+                    <option value="vi_ja">Song ngữ Việt – Nhật</option>
+                    <option value="ja_en">Song ngữ Nhật – Anh (瞬間英作文)</option>
+                  </>
+                )}
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="mpt-style" className="block text-xs font-medium text-slate-700 mb-1">
+                Phong cách
+              </label>
+              <select
+                id="mpt-style"
+                value={config.scriptStyle}
+                onChange={(e) => {
+                  const nextStyle = e.target.value as ScriptStyle;
+                  const wantsDual =
+                    nextStyle === 'language_challenge' ||
+                    nextStyle === 'bilingual_dialogue' ||
+                    nextStyle === 'quiz_riddle' ||
+                    isBilingualLanguage(config.language);
+                  const defaultSec = getDefaultSecondaryVoiceForLanguage(config.language);
+                  const isChallengeOrQuiz =
+                    nextStyle === 'language_challenge' || nextStyle === 'quiz_riddle';
+                  const patch: Partial<RenderJobConfig> = {
+                    scriptStyle: nextStyle,
+                    customScenes: undefined,
+                    dualVoiceEnabled: wantsDual,
+                    secondaryVoiceId:
+                      wantsDual &&
+                      (!config.secondaryVoiceId ||
+                        config.secondaryVoiceId === config.voiceId ||
+                        (!isBilingualLanguage(config.language) &&
+                          config.secondaryVoiceId.slice(0, 2) !== config.voiceId.slice(0, 2)))
+                        ? defaultSec
+                        : config.secondaryVoiceId ?? defaultSec,
+                    pauseBetweenLinesSec: isChallengeOrQuiz ? 5 : 0,
+                    clockTickEnabled: isChallengeOrQuiz ? true : false,
+                  };
+                  if (isKnownPresetSubject(config.subject)) {
+                    const starter = generateOfflineVietnameseScript(
+                      config.subject,
+                      config.language,
+                      config.sentenceCount,
+                      undefined,
+                      nextStyle
+                    );
+                    patch.script = starter.script;
+                    patch.terms = starter.terms;
+                    patch.scenePrompts = starter.scenePrompts;
+                    setTermsInput(starter.terms.join(', '));
+                    setPreviewScenes([]);
+                  }
+                  onChangeConfig(patch);
+                }}
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+              >
+                {studioTab === 'learning' ? (
+                  <>
+                    <option value="language_challenge">Học ngoại ngữ / Phản xạ 5s (2 giọng)</option>
+                    <option value="bilingual_dialogue">Hội thoại / Podcast 2 người</option>
+                    <option value="quiz_riddle">Đố vui / Thử thách đáp nhanh 5s</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="curious_facts">Sự thật tò mò (Hook 3s)</option>
+                    <option value="storytelling">Kể chuyện cuốn hút</option>
+                    <option value="tips_howto">Mẹo nhanh &amp; Thực tế</option>
+                    <option value="news_fast">Tin nhanh súc tích</option>
+                    <option value="motivational">Truyền cảm hứng / Triết lý</option>
+                    <option value="top_list">Top xếp hạng / Danh sách nổi bật</option>
+                  </>
+                )}
+              </select>
+              {!isBilingualLanguage(config.language) &&
+                (config.scriptStyle === 'language_challenge' ||
+                  config.scriptStyle === 'bilingual_dialogue' ||
+                  config.scriptStyle === 'quiz_riddle') && (
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Đang dùng 2 giọng cùng ngôn ngữ (Giọng 1 hỏi / Giọng 2 trả lời luân phiên).
+                  </p>
+                )}
+            </div>
+
+            <div className="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <label htmlFor="mpt-count" className="font-medium text-slate-700">
+                  Độ dài kịch bản (Ngắn → Dài)
+                </label>
+                <span className="font-mono tabular-nums text-slate-900">
+                  {config.sentenceCount} câu · {getScriptLengthSummary(config.sentenceCount).tierLabel} (~
+                  {getScriptLengthSummary(config.sentenceCount).estSec}s)
+                </span>
+              </div>
+              <input
+                id="mpt-count"
+                type="range"
+                min={2}
+                max={25}
+                step={1}
+                value={config.sentenceCount}
+                onChange={(e) => onChangeConfig({ sentenceCount: Number(e.target.value) })}
+                className="w-full accent-slate-900"
+              />
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                {[
+                  { count: 3, label: 'Rất ngắn (3 câu)' },
+                  { count: 5, label: 'Ngắn (5 câu)' },
+                  { count: 9, label: 'Trung bình (9 câu)' },
+                  { count: 14, label: 'Dài (14 câu)' },
+                  { count: 20, label: 'Rất dài (20 câu)' },
+                ].map((preset) => (
+                  <button
+                    key={preset.count}
+                    type="button"
+                    onClick={() => onChangeConfig({ sentenceCount: preset.count })}
+                    className={`px-2 py-1 text-[11px] font-medium rounded border transition-colors ${
+                      config.sentenceCount === preset.count
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="sm:col-span-2">
+              <label htmlFor="mpt-llm" className="block text-xs font-medium text-slate-700 mb-1">
+                Nguồn viết kịch bản
+              </label>
+              <select
+                id="mpt-llm"
+                value={config.llmProvider}
+                onChange={(e) => onChangeConfig({ llmProvider: e.target.value as LlmProvider })}
+                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900"
+              >
+                <option value="pollinations">AI Tự động + Wikipedia (Việt / Anh / Nhật)</option>
+                <option value="gemini_search">Gemini AI + Tìm kiếm Google</option>
+                <option value="ollama">Ollama Local (11434)</option>
+                <option value="offline_vi">Mẫu Offline (Tức thì · 0ms)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Primary Script Actions Toolbar */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={isGeneratingScript}
+              onClick={() => void handleGenerateScript()}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
+            >
+              {isGeneratingScript ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+              )}
+              <span>{isGeneratingScript ? 'Đang tạo kịch bản...' : 'Tạo kịch bản AI'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void handleOneClickPaste()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-900 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Dán kịch bản / JSON</span>
+            </button>
+          </div>
+
+          {(scriptNote || scriptError) && (
+            <div className={`text-xs ${scriptError ? 'text-rose-700' : 'text-emerald-700'}`}>
+              {scriptError ?? scriptNote}
+            </div>
+          )}
+
+          {scriptSources.length > 0 && (
+            <div
+              data-testid="script-grounding-sources"
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600 bg-emerald-50/70 border border-emerald-200 rounded-lg px-3 py-2"
+            >
+              <span className="font-medium text-emerald-900">Nguồn thực tế đối chiếu:</span>
+              {scriptSources.slice(0, 4).map((src, idx) => (
+                <a
+                  key={`${src.url}_${idx}`}
+                  href={src.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-indigo-700 hover:underline max-w-[220px]"
+                >
+                  <span className="truncate">{src.title}</span>
+                  <ExternalLink className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                </a>
+              ))}
+            </div>
+          )}
+
+          {showQuickPaste && (
+            <div
+              data-testid="quick-paste-bar"
+              className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="mpt-quick-paste" className="text-xs font-semibold text-slate-900">
+                  Dán (Ctrl+V) văn bản kịch bản hoặc JSON vào đây — tự động tách lời thoại &amp; từ khóa
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowQuickPaste(false)}
+                  className="text-xs text-slate-500 hover:text-slate-900"
+                >
+                  Đóng
+                </button>
+              </div>
+              <textarea
+                id="mpt-quick-paste"
+                ref={quickPasteRef}
+                rows={3}
+                value={aiWebPasteText}
+                onChange={(e) => setAiWebPasteText(e.target.value)}
+                onPaste={(e) => {
+                  const pasted = e.clipboardData?.getData('text');
+                  if (pasted && pasted.trim().length > 4) {
+                    e.preventDefault();
+                    applyPastedContent(pasted, 'Paste');
+                  }
+                }}
+                placeholder='Bấm Ctrl+V để dán văn bản hoặc {"script": "...", "terms": [...]}'
+                className="w-full px-3 py-2 text-xs font-mono bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
+              />
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={!aiWebPasteText.trim()}
+                  onClick={() => applyPastedContent(aiWebPasteText, 'Paste')}
+                  className="px-3.5 py-1.5 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-45 whitespace-nowrap shrink-0"
+                >
+                  Áp dụng nội dung đã dán
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label htmlFor="mpt-script" className="text-xs font-medium text-slate-700">
+                Nội dung lời thoại
+              </label>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void handleOneClickPaste()}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:underline whitespace-nowrap shrink-0"
+                >
+                  <ClipboardPaste className="w-3 h-3" aria-hidden="true" />
+                  <span>Dán nhanh</span>
+                </button>
+                <span className="text-xs text-slate-500 tabular-nums whitespace-nowrap">
+                  {previewLines.length} câu · {config.script.trim().length} ký tự
+                </span>
+              </div>
+            </div>
+            <textarea
+              id="mpt-script"
+              rows={6}
+              value={config.script}
+              onChange={(e) => onChangeConfig({ script: e.target.value })}
+              onPaste={(e) => {
+                const pasted = e.clipboardData?.getData('text');
+                if (!pasted) return;
+                const trimmed = pasted.trim();
+                const isReplacingAll =
+                  e.currentTarget.value.trim() === '' ||
+                  (e.currentTarget.selectionStart === 0 &&
+                    e.currentTarget.selectionEnd === e.currentTarget.value.length);
+                const looksLikeQaOrTagged =
+                  trimmed.includes('\n') &&
+                  trimmed
+                    .split('\n')
+                    .some((l) =>
+                      /^\s*(?:Tiêu\s*đề(?:\s*nhỏ)?|Title|Subtitle|Subheading|Heading|Intro|Outro|Q|A|Question|Answer|English|Japanese|Vietnamese|\[VI\]|\[EN\]|\[JA\])\s*[:：]/i.test(
+                        l
+                      )
+                    );
+                if (
+                  (trimmed.startsWith('{') && trimmed.includes('"script"')) ||
+                  (isReplacingAll && looksLikeQaOrTagged)
+                ) {
+                  e.preventDefault();
+                  applyPastedContent(pasted, 'Dán trực tiếp');
+                }
+              }}
+              placeholder="Nhập hoặc dán lời thoại bất kỳ (đoạn văn, phỏng vấn, hội thoại...). Dùng mục Tạo Prompt AI Web ngay bên dưới để AI tự tách câu, gắn thẻ, chèn [PAUSE] 5s và xuất JSON."
+              className="w-full px-3.5 py-2.5 text-sm leading-relaxed border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label htmlFor="mpt-terms" className="text-xs font-medium text-slate-700">
+                Từ khóa tìm cảnh quay B-roll (tiếng Anh)
+              </label>
+              <button
+                type="button"
+                onClick={handleSuggestTermsAndScenes}
+                className="text-xs font-medium text-indigo-700 hover:underline whitespace-nowrap shrink-0"
+              >
+                Tự gợi ý từ kịch bản
+              </button>
+            </div>
+            <input
+              id="mpt-terms"
+              type="text"
+              value={termsInput}
+              onChange={(e) => {
+                setTermsInput(e.target.value);
+                onChangeConfig({
+                  terms: e.target.value
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                });
+              }}
+              placeholder="coffee espresso, ocean waves, mountain sunset"
+              className="w-full px-3.5 py-2 text-xs font-mono border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
+            />
+          </div>
+
+          {/* Integrated AI Web Prompt Generator & JSON Importer */}
+          <div
+            id="sec-ai-prompt"
+            data-testid="ai-web-prompt-panel"
+            className="pt-4 border-t border-slate-200 space-y-3"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Tạo Prompt AI Web &amp; Đồng bộ JSON (ChatGPT / Gemini)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Prompt tự động lấy Nội dung lời thoại ở trên + toàn bộ tùy chọn Bước 1–2 để AI Web phân tích, tách câu, gắn thẻ (Tiêu đề:, Q:, A:, English:, [VI]/[EN]/[JA]), chèn [PAUSE] 5s và xuất file JSON.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-expanded={showAiWebPanel}
+                onClick={() => setShowAiWebPanel((v) => !v)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg whitespace-nowrap shrink-0"
+              >
+                <span>{showAiWebPanel ? 'Thu gọn' : 'Mở rộng'}</span>
+                {showAiWebPanel ? (
+                  <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+              </button>
+            </div>
+
+            {showAiWebPanel && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setAiWebPromptMode('from_user_script')}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded border transition-colors ${
+                        aiWebPromptMode === 'from_user_script'
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      Từ kịch bản đã nhập + Tùy chọn trên
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAiWebPromptMode('from_subject')}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded border transition-colors ${
+                        aiWebPromptMode === 'from_subject'
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      Viết mới theo chủ đề
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAiWebPromptMode('all_in_one')}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded border transition-colors ${
+                        aiWebPromptMode === 'all_in_one'
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      All-in-One (AI tự chọn tất cả)
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <a
+                      href="https://chatgpt.com/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-100 whitespace-nowrap"
+                    >
+                      <span>ChatGPT</span>
+                      <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                    </a>
+                    <a
+                      href="https://gemini.google.com/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-100 whitespace-nowrap"
+                    >
+                      <span>Gemini</span>
+                      <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyPromptForWeb()}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-white bg-slate-900 rounded hover:bg-slate-800 whitespace-nowrap"
+                    >
+                      {copiedPrompt ? (
+                        <Check className="w-3 h-3 text-emerald-400" aria-hidden="true" />
+                      ) : (
+                        <Copy className="w-3 h-3" aria-hidden="true" />
+                      )}
+                      <span>{copiedPrompt ? 'Đã copy Prompt' : 'Copy Prompt'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                  <span className="font-mono">
+                    Đã đồng bộ: {config.aspectRatio} · {config.mediaTypeFilter ?? 'all'} · mood{' '}
+                    {config.visualMood ?? 'auto'} · {config.subtitle.effect} · chờ{' '}
+                    {config.pauseBetweenLinesSec ?? 0}s · lặp {config.targetRepeatCount ?? 0}x
+                  </span>
+                  <label className="inline-flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoFetchScenesOnPaste}
+                      onChange={(e) => setAutoFetchScenesOnPaste(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                    />
+                    <span>Tự tìm ảnh/video khi dán JSON</span>
+                  </label>
+                </div>
+
+                <textarea
+                  id="mpt-generated-prompt"
+                  readOnly
+                  rows={5}
+                  value={generatedPromptForWeb}
+                  aria-label="Prompt chuẩn MoneyPrinterTurbo đồng bộ đầy đủ tùy chọn để dán vào ChatGPT hoặc Gemini Web"
+                  className="w-full px-3 py-2 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                />
+
+                <div className="space-y-1.5 pt-1">
+                  <label htmlFor="mpt-ai-web-paste" className="block text-[11px] font-medium text-slate-700">
+                    Dán kết quả JSON từ ChatGPT / Gemini Web vào đây để cập nhật Kịch bản &amp; Tìm Ảnh/Video:
+                  </label>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <textarea
+                      id="mpt-ai-web-paste"
+                      rows={2}
+                      value={aiWebPasteText}
+                      onChange={(e) => setAiWebPasteText(e.target.value)}
+                      placeholder='{"subject": "...", "script": "...", "terms": [...], "scenePrompts": [...]}'
+                      className="flex-1 px-3 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-slate-900"
+                    />
+                    <button
+                      type="button"
+                      disabled={!aiWebPasteText.trim()}
+                      onClick={() => applyPastedContent(aiWebPasteText, 'Web AI')}
+                      className="px-3.5 py-2 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-45 whitespace-nowrap self-end sm:self-stretch"
+                    >
+                      Áp dụng &amp; Tìm cảnh
+                    </button>
+                  </div>
+                </div>
+                {aiWebStatus && <div className="text-xs text-slate-700">{aiWebStatus}</div>}
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -2202,10 +2503,34 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   <span>Chạy lại chữ</span>
                 </button>
               )}
-              {previewScenes.length > 0 && (
-                <span className="text-xs font-mono text-emerald-700 tabular-nums">
-                  Cảnh {safeActiveIdx + 1}/{previewScenes.length}
-                </span>
+              {totalPreviewItems > 1 && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label="Câu xem trước trước"
+                    onClick={() =>
+                      setActiveSceneIdx((idx) =>
+                        idx <= 0 ? totalPreviewItems - 1 : idx - 1
+                      )
+                    }
+                    className="px-1.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded"
+                  >
+                    ‹
+                  </button>
+                  <span className="text-[11px] font-mono text-slate-600 tabular-nums">
+                    {safeActiveIdx + 1}/{totalPreviewItems}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Câu xem trước tiếp theo"
+                    onClick={() =>
+                      setActiveSceneIdx((idx) => (idx + 1) % totalPreviewItems)
+                    }
+                    className="px-1.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded"
+                  >
+                    ›
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -2275,10 +2600,69 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   aspectRatio={config.aspectRatio}
                   replayNonce={captionReplayNonce}
                   countdownNumber={previewCountdown}
+                  pinnedSourceText={pinnedSourceForPreview}
                 />
               )}
             </div>
           </div>
+
+          {(editTargetLineIdx !== null || editSourceLineIdx !== null) && (
+            <div
+              data-testid="preview-inline-subtitle-editor"
+              className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-800">
+                  Sửa nhanh phụ đề ngay tại Preview (đồng bộ thẳng vào kịch bản)
+                </span>
+                <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                  Dòng {safeActiveIdx + 1}/{Math.max(1, totalPreviewItems)}
+                </span>
+              </div>
+
+              {editTargetLineIdx !== null && (
+                <div>
+                  <label
+                    htmlFor="mpt-preview-edit-target"
+                    className="block text-[11px] font-medium text-indigo-700 mb-1"
+                  >
+                    Ngôn ngữ đích (hiển thị bên trên)
+                  </label>
+                  <input
+                    id="mpt-preview-edit-target"
+                    type="text"
+                    value={stripNarrationTags(rawNonEmptyLines[editTargetLineIdx] ?? '')}
+                    onChange={(e) =>
+                      handleInlineEditSubtitleLine(editTargetLineIdx, e.target.value)
+                    }
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md text-slate-900 focus:outline-none focus:border-indigo-600"
+                  />
+                </div>
+              )}
+
+              {editSourceLineIdx !== null && (
+                <div>
+                  <label
+                    htmlFor="mpt-preview-edit-source"
+                    className="block text-[11px] font-medium text-slate-700 mb-1"
+                  >
+                    {editTargetLineIdx !== null
+                      ? 'Ngôn ngữ gốc (ghim bên dưới)'
+                      : 'Nội dung phụ đề dòng đang xem'}
+                  </label>
+                  <input
+                    id="mpt-preview-edit-source"
+                    type="text"
+                    value={stripNarrationTags(rawNonEmptyLines[editSourceLineIdx] ?? '')}
+                    onChange={(e) =>
+                      handleInlineEditSubtitleLine(editSourceLineIdx, e.target.value)
+                    }
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md text-slate-900 focus:outline-none focus:border-slate-900"
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           <input
             ref={sceneFileInputRef}

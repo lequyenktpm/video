@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildAssFromCues,
   buildCountdownCues,
+  buildDualSubtitleCues,
   buildMediaClipsPlan,
   buildMoneyPrinterPrompt,
   buildScenePromptsFromScript,
@@ -23,10 +24,14 @@ import {
   hexToAssBgr,
   isBilingualLanguage,
   isKnownPresetSubject,
+  isOutroTag,
+  isTitleOrIntroTag,
   normalizeOutputSubdir,
   parseAiWebOrJsonOutput,
+  pickStudyEnergyEmoji,
   planNarrationSegments,
   RANDOM_XFADE_POOL,
+  resolveCountdownCenterY,
   resolveXfadeTransition,
   safeParseJsonResponse,
   slugifyOutputFilename,
@@ -34,8 +39,10 @@ import {
   splitScriptSentences,
   stripNarrationTags,
   tokenizeSubtitleForEffect,
+  updateScriptLinePreservingTag,
   validateRenderConfig,
   wrapSubtitleLine,
+  RawSegmentTiming,
 } from './mptEngine';
 import { RenderJobConfig, SubtitleConfig } from './types';
 
@@ -640,15 +647,19 @@ test('resolveXfadeTransition, slugifyOutputFilename, and normalizeOutputSubdir w
   assert.ok((RANDOM_XFADE_POOL as readonly string[]).includes(r1));
   assert.notEqual(r0, r1);
 
-  assert.equal(
-    slugifyOutputFilename('Bí ẩn đại dương sâu thẳm chưa từng được giải mã'),
-    'bi_an_dai_duong_sau_tham_chua_tung_duoc_giai_ma'
-  );
-  assert.equal(
-    slugifyOutputFilename('Phản xạ 5s: "Hãy cẩn thận với cô ấy!"'),
-    'phan_xa_5s_hay_can_than_voi_co_ay'
-  );
-  assert.equal(slugifyOutputFilename('   '), 'video_ngan');
+  const oceanName = slugifyOutputFilename('Bí ẩn đại dương sâu thẳm chưa từng được giải mã');
+  assert.equal(oceanName.includes('_'), false);
+  assert.ok(oceanName.startsWith('🌊 '));
+  assert.ok(oceanName.includes('Bí ẩn đại dương'));
+
+  const challengeName = slugifyOutputFilename('Phản xạ 5s: "Hãy cẩn thận với cô ấy!"');
+  assert.equal(challengeName.includes('_'), false);
+  assert.ok(challengeName.startsWith('⚡ '));
+  assert.ok(challengeName.includes('Phản xạ 5s Hãy cẩn thận với cô ấy'));
+
+  const emptyFallback = slugifyOutputFilename('   ');
+  assert.equal(emptyFallback.includes('_'), false);
+  assert.ok(emptyFallback.includes('Video học tập'));
 
   assert.equal(normalizeOutputSubdir(''), 'output');
   assert.equal(normalizeOutputSubdir('output'), 'output');
@@ -656,5 +667,397 @@ test('resolveXfadeTransition, slugifyOutputFilename, and normalizeOutputSubdir w
   assert.equal(normalizeOutputSubdir('output/phong_van/../bi_mat'), 'output/phong_van/bi_mat');
 });
 
+test('buildDualSubtitleCues keeps source text visible below target text until the next source sentence begins', () => {
+  const records: RawSegmentTiming[] = [
+    {
+      text: '私の長所は積極性です。',
+      startSec: 0,
+      endSec: 2.5,
+      voiceSlot: 'primary',
+      segmentKind: 'speech',
+      pauseAfterSec: 0.5,
+    },
+    {
+      text: 'My strength is my proactive nature.',
+      startSec: 3.0,
+      endSec: 5.5,
+      voiceSlot: 'secondary',
+      segmentKind: 'speech',
+      pauseAfterSec: 2.0,
+      pauseKind: 'repeat',
+    },
+    {
+      text: 'My strength is my proactive nature.',
+      startSec: 7.5,
+      endSec: 10.0,
+      voiceSlot: 'secondary',
+      segmentKind: 'speech',
+      pauseAfterSec: 0.5,
+    },
+    {
+      text: '学生時代、スピーチ大会にも参加しました。',
+      startSec: 10.5,
+      endSec: 13.5,
+      voiceSlot: 'primary',
+      segmentKind: 'speech',
+      pauseAfterSec: 0.5,
+    },
+    {
+      text: 'During my student days, I participated in speech contests.',
+      startSec: 14.0,
+      endSec: 17.5,
+      voiceSlot: 'secondary',
+      segmentKind: 'speech',
+      pauseAfterSec: 0,
+    },
+  ];
+
+  const dualCues = buildDualSubtitleCues(records, { stickyDualSubtitle: true });
+
+  // First source stays pinned from 2.5s until 10.5s (exact start of second source sentence)
+  const firstSticky = dualCues.find(
+    (c) => c.isStickySource && c.text === '私の長所は積極性です。'
+  );
+  assert.ok(firstSticky);
+  assert.equal(firstSticky.startSec, 2.5);
+  assert.equal(firstSticky.endSec, 10.5);
+
+  // Target repeat passes collapse into ONE continuous cue (no duplicate cue or static hold)
+  const targetCues = dualCues.filter((c) => c.voiceSlot === 'secondary');
+  assert.equal(targetCues.length, 2);
+  assert.equal(targetCues[0].text, 'My strength is my proactive nature.');
+  assert.equal(targetCues[0].startSec, 3.0);
+  assert.equal(targetCues[0].endSec, 10.0);
+  assert.equal(targetCues[0].animDurationSec, 2.5);
+  assert.equal(dualCues.some((c) => c.isStaticHold), false);
+
+  // Target cues carry companionSourceLines so ASS places them ABOVE StickySource
+  assert.ok(targetCues.every((c) => (c.companionSourceLines ?? 0) >= 1));
+
+  // splitCueIntoShortSubCues keeps sticky intact, preserves companionSourceLines & animDurationSec
+  const split = splitCueIntoShortSubCues(dualCues, 28);
+  const splitSticky = split.filter((c) => c.isStickySource);
+  assert.equal(splitSticky.length, 2);
+  const splitTargets = split.filter((c) => c.voiceSlot === 'secondary');
+  assert.ok(splitTargets.every((c) => (c.companionSourceLines ?? 0) >= 1));
+  assert.ok(splitTargets.some((c) => c.animDurationSec !== undefined));
+
+  // SRT export skips overlapping sticky duplicate rows
+  const srt = buildSrtFromCues(split);
+  assert.ok(!srt.includes('私の長所は積極性です。\n\n2\n00:00:02,500'));
+
+  // ASS output uses crisp M PLUS 1p for Japanese StickySource, independent sourceFontSize, and places Secondary above StickySource
+  const ass = buildAssFromCues(
+    split,
+    {
+      enabled: true,
+      fontName: 'Noto Sans',
+      position: 'bottom',
+      customPositionPct: 84,
+      fontSize: 38,
+      sourceFontSize: 30,
+      textColor: '#FFFFFF',
+      highlightColor: '#2DD4BF',
+      strokeColor: '#0F172A',
+      strokeWidth: 2,
+      boxStyle: 'outline',
+      effect: 'karaoke',
+    },
+    720,
+    1280
+  );
+  assert.ok(ass.includes('Style: StickySource,M PLUS 1p,30,'));
+  const secondaryLine = ass.split('\n').find((l) => l.includes(',Secondary,'));
+  assert.ok(secondaryLine);
+  const fields = secondaryLine.split(',');
+  const marginVOverride = Number(fields[7]);
+  assert.ok(marginVOverride > 173, `Expected target MarginV (${marginVOverride}) > bottom margin 173`);
+});
+
+test('5s thinking countdown triggers ONLY on main Q&A content pairs and skips Title, Subtitle, Outro, Recap, Summary', () => {
+  const fullScript = [
+    'Tiêu đề: 面接時、日本語で自己PRする方法',
+    'English: How to recommend yourself in Japanese during an interview.',
+    'Tiêu đề nhỏ: 自分の長所と短所について',
+    'English: About your strengths and weaknesses.',
+    'Q: あなたの長所と短所を教えてください。',
+    'English: Please tell me your strengths and weaknesses.',
+    'A: 私の長所は積極性です。',
+    'English: My strength is my proactive nature.',
+    '短所は周りの人にも積極性を求めるところです。',
+    'English: My weakness is that I also demand proactiveness from those around me.',
+  ].join('\n');
+
+  assert.equal(isTitleOrIntroTag('Tiêu đề: 面接時、日本語で自己PRする方法'), true);
+  assert.equal(isTitleOrIntroTag('Tiêu đề nhỏ: 自分の長所と短所について'), true);
+  assert.equal(isOutroTag('Outro: Thank you!'), true);
+
+  const segs = planNarrationSegments({
+    subject: '面接時、日本語で自己PRする方法',
+    script: fullScript,
+    language: 'ja_en',
+    scriptStyle: 'language_challenge',
+    voiceId: 'ja-JP-NanamiNeural',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'en-US-JennyNeural',
+    pauseBetweenLinesSec: 5,
+    targetRepeatCount: 1,
+    targetRepeatPauseSec: 2,
+    fullAnswerRecapMode: 'target_full',
+    summarizeAtEnd: true,
+  });
+
+  const titleSeg = segs.find((s) => s.text.includes('自己PRする方法'));
+  const subtitleSeg = segs.find((s) => s.text.includes('長所と短所について'));
+  assert.ok(titleSeg && subtitleSeg);
+  assert.notEqual(titleSeg.pauseKind, 'thinking');
+  assert.ok(titleSeg.pauseAfterSec < 1);
+  assert.notEqual(subtitleSeg.pauseKind, 'thinking');
+  assert.ok(subtitleSeg.pauseAfterSec < 1);
+
+  const qSeg = segs.find((s) => s.text === 'あなたの長所と短所を教えてください。');
+  const a1Seg = segs.find((s) => s.text === '私の長所は積極性です。');
+  const a2Seg = segs.find((s) => s.text === '短所は周りの人にも積極性を求めるところです。');
+  assert.equal(qSeg?.pauseKind, 'thinking');
+  assert.equal(qSeg?.pauseAfterSec, 5);
+  assert.equal(a1Seg?.pauseKind, 'thinking');
+  assert.equal(a1Seg?.pauseAfterSec, 5);
+  assert.equal(a2Seg?.pauseKind, 'thinking');
+  assert.equal(a2Seg?.pauseAfterSec, 5);
+
+  const recapAndSummary = segs.filter((s) => s.segmentKind === 'recap' || s.segmentKind === 'summary');
+  assert.ok(recapAndSummary.length >= 2);
+  assert.ok(recapAndSummary.every((s) => s.pauseKind !== 'thinking'));
+});
+
+test('laser ASS effect, independent sourceFontSize, from_user_script prompt, and inline subtitle updater work', () => {
+  const cues = [
+    {
+      index: 1,
+      startSec: 0,
+      endSec: 3,
+      text: '私の長所は積極性です。',
+      voiceSlot: 'primary' as const,
+      isStickySource: true,
+      companionTargetLines: 1,
+    },
+    {
+      index: 2,
+      startSec: 1,
+      endSec: 6,
+      animDurationSec: 2,
+      text: 'My strength is proactive.',
+      voiceSlot: 'secondary' as const,
+      companionSourceLines: 1,
+    },
+  ];
+  const assLaser = buildAssFromCues(
+    cues,
+    {
+      enabled: true,
+      fontName: 'M PLUS 1p',
+      position: 'bottom',
+      customPositionPct: 84,
+      fontSize: 44,
+      sourceFontSize: 28,
+      textColor: '#FFFFFF',
+      highlightColor: '#38BDF8',
+      strokeColor: '#020617',
+      strokeWidth: 2.2,
+      boxStyle: 'outline',
+      effect: 'laser',
+    },
+    720,
+    1280
+  );
+  assert.ok(assLaser.includes('Style: Secondary,M PLUS 1p,44,'));
+  assert.ok(assLaser.includes('Style: StickySource,M PLUS 1p,28,'));
+  assert.ok(assLaser.includes('\\blur2.2'));
+  assert.ok(assLaser.includes('\\1c&H00F8BD38'));
+
+  const prompt = buildMoneyPrinterPrompt({
+    subject: '面接時、日本語で自己PRする方法',
+    language: 'ja_en',
+    scriptStyle: 'language_challenge',
+    sentenceCount: 6,
+    mode: 'from_user_script',
+    rawScript: 'Tiêu đề: 面接時、日本語で自己PRする方法\nQ: あなたの長所を教えてください。\nEnglish: Please tell me your strengths.',
+    mediaTypeFilter: 'video_only',
+    visualMood: 'bright',
+    aspectRatio: '9:16',
+    dualVoiceEnabled: true,
+    pauseBetweenLinesSec: 5,
+    targetRepeatCount: 1,
+    fullAnswerRecapMode: 'target_full',
+    summarizeAtEnd: true,
+    stickyDualSubtitle: true,
+    subtitleEffect: 'laser',
+  });
+  assert.ok(prompt.includes('Tiêu đề: 面接時、日本語で自己PRする方法'));
+  assert.ok(prompt.includes('"visualMood": "bright"'));
+  assert.ok(prompt.includes('"mediaTypeFilter": "video_only"'));
+  assert.ok(prompt.includes('laser'));
+
+  const parsedUserScript = parseAiWebOrJsonOutput(
+    'Tiêu đề: 面接時、日本語で自己PRする方法\nEnglish: How to recommend yourself.',
+    ''
+  );
+  assert.equal(parsedUserScript?.subject, '面接時、日本語で自己PRする方法');
+
+  const raw = [
+    'Q: あなたの長所を教えてください。 [PAUSE]',
+    'English: Please tell me your strengths.',
+  ].join('\n');
+  const updatedQ = updateScriptLinePreservingTag(raw, 0, 'あなたの長所は何ですか？');
+  assert.ok(updatedQ.startsWith('Q: あなたの長所は何ですか？ [PAUSE]'));
+  const updatedEn = updateScriptLinePreservingTag(updatedQ, 1, 'What are your key strengths?');
+  assert.ok(updatedEn.includes('\nEnglish: What are your key strengths?'));
+});
+
+test('single language with 2-voice style alternates cleanly and from_user_script prompt instructs full analysis', () => {
+  const jaSingleDualQa = planNarrationSegments({
+    script: [
+      'Q: 面接で一番大切なことは何ですか？ [PAUSE]',
+      'A: 結論から簡潔に伝えることです。',
+    ].join('\n'),
+    language: 'ja',
+    scriptStyle: 'language_challenge',
+    voiceId: 'ja-JP-NanamiNeural',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'ja-JP-KeitaNeural',
+    pauseBetweenLinesSec: 5,
+  });
+  assert.equal(jaSingleDualQa.length, 2);
+  assert.equal(jaSingleDualQa[0].voiceId, 'ja-JP-NanamiNeural');
+  assert.equal(jaSingleDualQa[0].voiceSlot, 'primary');
+  assert.equal(jaSingleDualQa[0].pauseKind, 'thinking');
+  assert.equal(jaSingleDualQa[1].voiceId, 'ja-JP-KeitaNeural');
+  assert.equal(jaSingleDualQa[1].voiceSlot, 'secondary');
+
+  const jaSingleUntagged = planNarrationSegments({
+    script: [
+      'あなたの趣味は何ですか？',
+      '休日に写真を撮ることです。',
+    ].join('\n'),
+    language: 'ja',
+    scriptStyle: 'language_challenge',
+    voiceId: 'ja-JP-NanamiNeural',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'ja-JP-KeitaNeural',
+    pauseBetweenLinesSec: 5,
+  });
+  assert.equal(jaSingleUntagged[0].voiceId, 'ja-JP-NanamiNeural');
+  assert.equal(jaSingleUntagged[1].voiceId, 'ja-JP-KeitaNeural');
+
+  const rawPrompt = buildMoneyPrinterPrompt({
+    subject: '',
+    language: 'ja_en',
+    scriptStyle: 'language_challenge',
+    sentenceCount: 6,
+    mode: 'from_user_script',
+    rawScript: 'Tôi thích đọc sách mỗi tối để mở rộng kiến thức.',
+    pauseBetweenLinesSec: 5,
+  });
+  assert.ok(rawPrompt.includes('PHÂN TÍCH & TÁCH CÂU'));
+  assert.ok(rawPrompt.includes('CHÈN NHỊP ĐẾM NGƯỢC 5s `[PAUSE]`'));
+  assert.ok(rawPrompt.includes('Tiêu đề:'));
+  assert.ok(rawPrompt.includes('Tôi thích đọc sách mỗi tối để mở rộng kiến thức.'));
+});
+
+test('countdown avoids overlapping tall/center/top subtitles, Intro/Outro stay 1x, and filenames have no underscores + study emoji', () => {
+  // 1. Collision avoidance math: center & top & rising bottom subtitles
+  const cdHeight = 100;
+  const stageH = 1280;
+  // Center subtitle (y=580..700) -> countdown must move cleanly UP above 580 (bottom <= 580) or DOWN below 700
+  const yCenterSub = resolveCountdownCenterY([{ topPx: 580, bottomPx: 700 }], cdHeight, stageH);
+  assert.ok(
+    yCenterSub + cdHeight / 2 <= 580 || yCenterSub - cdHeight / 2 >= 700,
+    `Countdown center ${yCenterSub} overlapped center subtitle [580, 700]`
+  );
+  // Top subtitle (y=115..260) -> countdown must push BELOW 260
+  const yTopSub = resolveCountdownCenterY([{ topPx: 115, bottomPx: 260 }], cdHeight, stageH);
+  assert.ok(yTopSub - cdHeight / 2 >= 260, `Countdown ${yTopSub} overlapped top subtitle`);
+  // Rising tall bottom subtitle (y=560..1110) -> countdown must push higher above 560
+  const yTallBottom = resolveCountdownCenterY([{ topPx: 560, bottomPx: 1110 }], cdHeight, stageH);
+  assert.ok(yTallBottom + cdHeight / 2 <= 560, `Countdown ${yTallBottom} overlapped tall bottom subtitle`);
+
+  // Build ASS with center subtitle + countdown and confirm \pos(360, Y) moves away from 640
+  const centerAss = buildAssFromCues(
+    [
+      { index: 1, startSec: 1, endSec: 6, text: 'あなたの長所と短所を教えてください。', voiceSlot: 'primary', isStickySource: true },
+      ...buildCountdownCues(1, 5, 2),
+    ],
+    {
+      enabled: true,
+      fontName: 'M PLUS 1p',
+      position: 'center',
+      customPositionPct: 50,
+      fontSize: 42,
+      sourceFontSize: 34,
+      textColor: '#FFFFFF',
+      highlightColor: '#FACC15',
+      strokeColor: '#000000',
+      strokeWidth: 2,
+      boxStyle: 'outline',
+      effect: 'karaoke',
+    },
+    720,
+    1280
+  );
+  const posMatch = centerAss.match(/\\pos\(360,(\d+)\)/);
+  assert.ok(posMatch, 'Expected ASS countdown \\pos(360, Y)');
+  const assCdY = Number(posMatch[1]);
+  assert.notEqual(assCdY, 640, 'Countdown must shift away from center subtitle at 640px');
+
+  // 2. Intro ("1-Minute Instant Translation Challenge!") and Outro only read & display strictly ONCE
+  const segs = planNarrationSegments({
+    subject: 'Instant Translation Interview',
+    script: [
+      '1-Minute Instant Translation Challenge!',
+      'Q: あなたの長所は何ですか？',
+      'English: What is your strength?',
+      'Outro: Great job today! See you next time!',
+    ].join('\n'),
+    language: 'ja_en',
+    scriptStyle: 'language_challenge',
+    voiceId: 'ja-JP-NanamiNeural',
+    dualVoiceEnabled: true,
+    secondaryVoiceId: 'en-US-JennyNeural',
+    pauseBetweenLinesSec: 5,
+    targetRepeatCount: 2,
+    targetRepeatPauseSec: 2,
+    summarizeAtEnd: true,
+  });
+
+  const introReads = segs.filter((s) => s.text.includes('1-Minute Instant Translation Challenge'));
+  assert.equal(introReads.length, 1, 'Intro must only be read once even when targetRepeatCount=2');
+  assert.equal(introReads[0].isIntroOrOutro, true);
+  assert.notEqual(introReads[0].pauseKind, 'thinking');
+
+  const outroReads = segs.filter((s) => s.text.includes('See you next time'));
+  assert.equal(outroReads.length, 1, 'Outro must only be read once even when targetRepeatCount=2');
+  assert.equal(outroReads[0].isIntroOrOutro, true);
+
+  const enAnswerReads = segs.filter((s) => s.text === 'What is your strength?');
+  assert.equal(enAnswerReads.length, 3, 'Main Q&A answer still repeats 1 + 2 = 3 times');
+
+  const cues = buildDualSubtitleCues([
+    { text: '1-Minute Instant Translation Challenge!', startSec: 0, endSec: 2.2, voiceSlot: 'secondary', isIntroOrOutro: true },
+    { text: 'あなたの長所は何ですか？', startSec: 2.6, endSec: 4.5, voiceSlot: 'primary', countdownStartSec: 4.5, countdownEndSec: 9.5 },
+    { text: 'What is your strength?', startSec: 9.5, endSec: 11.5, voiceSlot: 'secondary' },
+    { text: 'Great job today! See you next time!', startSec: 12.0, endSec: 14.5, voiceSlot: 'secondary', isIntroOrOutro: true },
+  ]);
+  assert.equal(cues.filter((c) => c.text.includes('1-Minute')).length, 1);
+  assert.equal(cues.filter((c) => c.text.includes('See you next time')).length, 1);
+
+  // 3. Underscore-free filenames with study-energy emojis matched to topic
+  assert.equal(pickStudyEnergyEmoji('面接時、日本語で自己PRする方法'), '💼');
+  assert.equal(pickStudyEnergyEmoji('Bí ẩn não bộ con người'), '🧠');
+  const interviewFilename = slugifyOutputFilename('Phỏng vấn điểm mạnh_điểm yếu Nhật Anh', 'Video', {
+    language: 'ja_en',
+  });
+  assert.equal(interviewFilename.includes('_'), false);
+  assert.ok(interviewFilename.startsWith('💼 '));
+});
 
 
