@@ -3641,6 +3641,7 @@ async function processRenderJob(jobId: string, config: RenderJobConfig): Promise
           const svgFrame = renderAnimeBeatSvgFrame({
             story,
             beat: timing.beat,
+            prevBeat: bi > 0 ? beatTimings[bi - 1].beat : undefined,
             timeSec: timing.startSec + localSec,
             beatProgress,
             width,

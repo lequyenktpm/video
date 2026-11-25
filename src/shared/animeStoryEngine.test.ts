@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ANIME_STORY_PRESETS,
+  computeAnimeCameraState,
   computeAnimeRigStates,
   DEFAULT_ANIME_DIALOGUE_SCRIPT,
   detectRoomFromCue,
+  interpolateRigStates,
   parseAnimeDialogueScript,
   renderAnimeBeatSvgFrame,
   tokenizeAnimeKaraokeLine,
@@ -290,4 +292,80 @@ test('renderAnimeBeatSvgFrame generates full-body SVGs, karaoke tspans, and pres
   assert.ok(wrapped.join('').includes('KY'));
   const jaTokens = tokenizeAnimeKaraokeLine('日向君、よほどのKYね');
   assert.ok(jaTokens.includes('KY'));
+});
+
+test('interpolateRigStates, computeAnimeCameraState, audioAmplitude visemes, and prevBeat transitions work smoothly', () => {
+  const story = parseAnimeDialogueScript(DEFAULT_ANIME_DIALOGUE_SCRIPT);
+  const confrontBeat = story.beats.find(
+    (b) => b.action === 'lean_confront' && b.presentCharacterIds.includes('日向')
+  )!;
+  const bowBeat = story.beats.find((b) => b.action === 'bow_deep')!;
+
+  const fromRigs = computeAnimeRigStates({
+    story,
+    beat: confrontBeat,
+    timeSec: 1.0,
+    beatProgress: 0.9,
+    width: 720,
+    height: 1280,
+    isPlayingSpeech: false,
+  });
+  const toRigs = computeAnimeRigStates({
+    story,
+    beat: bowBeat,
+    timeSec: 1.1,
+    beatProgress: 0.45,
+    width: 720,
+    height: 1280,
+    isPlayingSpeech: true,
+    audioAmplitude: 0.55,
+  });
+
+  const hinataFrom = fromRigs.find((r) => r.profile.id === '日向')!;
+  const hinataTo = toRigs.find((r) => r.profile.id === '日向')!;
+  assert.ok(hinataTo.mouthPhase > 0.7, 'audioAmplitude should drive mouthPhase directly');
+  assert.notEqual(hinataTo.mouthViseme, 'closed');
+  assert.ok(Number.isFinite(hinataTo.hairSwayDeg) && Number.isFinite(hinataTo.squashX));
+
+  const blendedMid = interpolateRigStates(fromRigs, toRigs, 0.5);
+  const hinataMid = blendedMid.find((r) => r.profile.id === '日向')!;
+  assert.ok(
+    hinataMid.bodyTiltDeg > hinataFrom.bodyTiltDeg && hinataMid.bodyTiltDeg < hinataTo.bodyTiltDeg,
+    'Pose-to-pose interpolation must smoothly blend torso tilt between beats'
+  );
+
+  const cam = computeAnimeCameraState({
+    width: 720,
+    height: 1280,
+    beat: confrontBeat,
+    focusRig: fromRigs.find((r) => r.isActiveFocus),
+    prevBeat: bowBeat,
+    prevFocusX: 500,
+    beatProgress: 0.1,
+    timeSec: 0.5,
+  });
+  assert.ok(cam.scale > 1.0, 'Active dialogue camera should zoom gently on speaker');
+
+  // Room-change transition frame (school_classroom -> street_park)
+  const multiSceneStory = parseAnimeDialogueScript(ANIME_STORY_PRESETS[3].script);
+  const parkCueIdx = multiSceneStory.beats.findIndex((b) => b.isStageCue && b.roomKind === 'street_park');
+  const schoolBeat = multiSceneStory.beats[parkCueIdx - 1];
+  const parkBeat = multiSceneStory.beats[parkCueIdx];
+  const transitionSvg = renderAnimeBeatSvgFrame({
+    story: multiSceneStory,
+    beat: parkBeat,
+    prevBeat: schoolBeat,
+    timeSec: 2.0,
+    beatProgress: 0.08,
+    width: 720,
+    height: 1280,
+  });
+  assert.ok(transitionSvg.includes('fill="#0F172A"'), 'Room switch should emit transition fade overlay');
+
+  const minhAnh = multiSceneStory.characters.find((c) => c.id === 'Minh Anh');
+  const khoa = multiSceneStory.characters.find((c) => c.id === 'Khoa');
+  assert.equal(minhAnh?.gender, 'female');
+  assert.ok(minhAnh?.hairStyle === 'bob' || minhAnh?.hairStyle === 'neat');
+  assert.equal(khoa?.gender, 'male');
+  assert.ok(khoa?.hairStyle === 'spiky' || khoa?.hairStyle === 'tousled');
 });

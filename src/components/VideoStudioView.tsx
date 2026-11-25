@@ -208,6 +208,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const audioCtxRef = useRef<AudioContext | null>(null);
   const stagePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const stagePreviewAbortRef = useRef<AbortController | null>(null);
+  const speechLevelRef = useRef<number | undefined>(undefined);
+  const speechMeterRafRef = useRef<number | null>(null);
 
   const [termsInput, setTermsInput] = useState(config.terms.join(', '));
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
@@ -378,6 +380,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       }
       stagePreviewAudioRef.current = null;
     }
+    if (speechMeterRafRef.current !== null) {
+      window.cancelAnimationFrame(speechMeterRafRef.current);
+      speechMeterRafRef.current = null;
+    }
+    speechLevelRef.current = undefined;
     stopCountdownPreview();
     setIsPlayingPreview(false);
     try {
@@ -500,6 +507,11 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
         }
         stagePreviewAudioRef.current = null;
       }
+      if (speechMeterRafRef.current !== null) {
+        window.cancelAnimationFrame(speechMeterRafRef.current);
+        speechMeterRafRef.current = null;
+      }
+      speechLevelRef.current = undefined;
       try {
         if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
           window.speechSynthesis.cancel();
@@ -971,10 +983,59 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       audio.volume = Math.max(0.2, Math.min(1.0, config.voiceVolume || 1.0));
       stagePreviewAudioRef.current = audio;
 
+      // Real-time Web Audio amplitude envelope for accurate ElevenLabs lip-sync
+      const stopSpeechMeter = () => {
+        if (speechMeterRafRef.current !== null) {
+          window.cancelAnimationFrame(speechMeterRafRef.current);
+          speechMeterRafRef.current = null;
+        }
+        speechLevelRef.current = undefined;
+      };
+      try {
+        const Ctx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (Ctx) {
+          if (!audioCtxRef.current) {
+            audioCtxRef.current = new Ctx();
+          }
+          const ctx = audioCtxRef.current;
+          if (ctx.state === 'suspended') {
+            void ctx.resume();
+          }
+          const srcNode = ctx.createMediaElementSource(audio);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.45;
+          srcNode.connect(analyser);
+          analyser.connect(ctx.destination);
+          const buf = new Uint8Array(analyser.fftSize);
+          const sampleLevel = () => {
+            if (!previewPlayingRef.current || stagePreviewAudioRef.current !== audio || audio.paused) {
+              return;
+            }
+            analyser.getByteTimeDomainData(buf);
+            let sumSq = 0;
+            for (let i = 0; i < buf.length; i++) {
+              const norm = (buf[i] - 128) / 128;
+              sumSq += norm * norm;
+            }
+            const rms = Math.sqrt(sumSq / buf.length);
+            speechLevelRef.current = Math.min(1, rms * 3.4);
+            speechMeterRafRef.current = window.requestAnimationFrame(sampleLevel);
+          };
+          speechMeterRafRef.current = window.requestAnimationFrame(sampleLevel);
+        }
+      } catch {
+        // Gracefully fall back to syllable cadence if Web Audio routing is unavailable
+        speechLevelRef.current = undefined;
+      }
+
       let settled = false;
       const finishOnce = () => {
         if (settled) return;
         settled = true;
+        stopSpeechMeter();
         if (!previewPlayingRef.current) return;
         previewPlayTimerRef.current = window.setTimeout(() => {
           if (previewPlayingRef.current) onFinished();
@@ -985,6 +1046,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
       audio.onerror = () => {
         if (settled) return;
         settled = true;
+        stopSpeechMeter();
         onFallbackSpeak();
         if (previewPlayingRef.current) {
           previewPlayTimerRef.current = window.setTimeout(() => {
@@ -1851,7 +1913,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                     Dàn nhân vật tự động nhận diện ({parsedAnimeStory.characters.length} vai)
                   </span>
                   <span className="text-[11px] text-slate-500">
-                    Toàn thân có chân, bước đi, cúi chào, thì thầm, mở tủ lạnh &amp; nhép miệng
+                    PixiJS + GSAP 60fps · chuyển động mượt, nhép miệng theo giọng &amp; hiệu ứng hạt
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
@@ -4306,6 +4368,7 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   subtitleEffect={config.subtitle.effect}
                   highlightColor={config.subtitle.highlightColor}
                   replayNonce={captionReplayNonce}
+                  speechLevelRef={speechLevelRef}
                 />
               ) : activeScene ? (
                 activeScene.kind === 'video' ? (

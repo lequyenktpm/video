@@ -321,7 +321,15 @@ const FALLBACK_PALETTES: Array<Omit<AnimeCharacterProfile, 'id' | 'displayName'>
 ];
 
 function guessCharacterGender(name: string): 'male' | 'female' {
-  if (/(?:芳蘭|美咲|花|さくら|ゆい|あおい|蘭|Minh Anh|Lan Anh|Lan|Mai|Linh|Hoa|Ngọc|Nữ|Trang|Thảo|Hương)/i.test(name)) {
+  if (/(?:芳蘭|美咲|花|さくら|ゆい|あおい|蘭|結衣|葵|凛)/.test(name)) {
+    return 'female';
+  }
+  const normalized = name.trim();
+  if (
+    /(?:^|[\s_-])(?:Minh Anh|Lan Anh|Ngọc Anh|Bảo Anh|Lan|Mai|Linh|Hoa|Ngọc|Nữ|Trang|Thảo|Hương|Phương|Vy|Hà|Nhi|My|Quỳnh|Yến|Chi|Trâm|Tiên|Ánh)(?:$|[\s_-])/i.test(
+      normalized
+    )
+  ) {
     return 'female';
   }
   return 'male';
@@ -343,8 +351,10 @@ function buildCharacterProfile(
   voiceOverrides?: Record<string, VoiceOptionId>
 ): AnimeCharacterProfile {
   const preset = CHARACTER_PRESETS[name];
-  const fallback = FALLBACK_PALETTES[orderIdx % FALLBACK_PALETTES.length];
   const gender = preset?.gender ?? guessCharacterGender(name);
+  const genderPalettes = FALLBACK_PALETTES.filter((p) => p.gender === gender);
+  const fallbackPool = genderPalettes.length > 0 ? genderPalettes : FALLBACK_PALETTES;
+  const fallback = fallbackPool[orderIdx % fallbackPool.length];
   const langDefaultVoice = preset?.defaultVoiceId ?? detectLanguageVoiceForScript(fullScript, gender, orderIdx);
   const assignedVoice = voiceOverrides?.[name] ?? langDefaultVoice;
   const sameMaleIndex = orderIdx === 0 ? 0.94 : orderIdx >= 2 ? 1.12 : 1.02;
@@ -918,17 +928,24 @@ export function tokenizeAnimeKaraokeLine(line: string): string[] {
   return line.match(/\S+\s*/g) ?? [line];
 }
 
+export type AnimeMouthViseme = 'closed' | 'a' | 'i' | 'u' | 'e' | 'o';
+
 export interface ComputedCharRig {
   profile: AnimeCharacterProfile;
   x: number;
   y: number; // Ground foot baseline!
   scale: number;
+  squashX: number;
+  squashY: number;
   facing: 1 | -1;
   hipDropY: number;
+  shoulderBreathY: number;
   bodyTiltDeg: number;
   headTiltDeg: number;
+  hairSwayDeg: number;
   blinkAmt: number;
   mouthPhase: number;
+  mouthViseme: AnimeMouthViseme;
   isSpeaking: boolean;
   isActiveFocus: boolean;
   lookOffsetX: number;
@@ -947,6 +964,125 @@ export interface ComputedCharRig {
   opacity: number;
 }
 
+export function easeOutCubic(t: number): number {
+  const c = Math.max(0, Math.min(1, t));
+  return 1 - Math.pow(1 - c, 3);
+}
+
+export function easeOutBack(t: number, overshoot = 1.45): number {
+  const c = Math.max(0, Math.min(1, t));
+  const c3 = overshoot + 1;
+  return 1 + c3 * Math.pow(c - 1, 3) + overshoot * Math.pow(c - 1, 2);
+}
+
+export function easeInOutSine(t: number): number {
+  const c = Math.max(0, Math.min(1, t));
+  return -(Math.cos(Math.PI * c) - 1) / 2;
+}
+
+export function lerpNum(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+export function interpolateRigStates(
+  fromRigs: ComputedCharRig[],
+  toRigs: ComputedCharRig[],
+  rawT: number
+): ComputedCharRig[] {
+  const t = easeOutCubic(rawT);
+  if (t >= 0.999) return toRigs;
+  const fromMap = new Map(fromRigs.map((r) => [r.profile.id, r]));
+
+  return toRigs.map((to) => {
+    const from = fromMap.get(to.profile.id);
+    if (!from) {
+      // Newly entering character fades in cleanly without snapping
+      return {
+        ...to,
+        opacity: to.opacity * Math.min(1, t * 1.4),
+      };
+    }
+    const facing = t < 0.35 ? from.facing : to.facing;
+    return {
+      ...to,
+      x: lerpNum(from.x, to.x, t),
+      y: lerpNum(from.y, to.y, t),
+      scale: lerpNum(from.scale, to.scale, t),
+      squashX: lerpNum(from.squashX, to.squashX, t),
+      squashY: lerpNum(from.squashY, to.squashY, t),
+      facing,
+      hipDropY: lerpNum(from.hipDropY, to.hipDropY, t),
+      shoulderBreathY: lerpNum(from.shoulderBreathY, to.shoulderBreathY, t),
+      bodyTiltDeg: lerpNum(from.bodyTiltDeg, to.bodyTiltDeg, t),
+      headTiltDeg: lerpNum(from.headTiltDeg, to.headTiltDeg, t),
+      hairSwayDeg: lerpNum(from.hairSwayDeg, to.hairSwayDeg, t),
+      lookOffsetX: lerpNum(from.lookOffsetX, to.lookOffsetX, t),
+      leftArmAngle: lerpNum(from.leftArmAngle, to.leftArmAngle, t),
+      leftForearmAngle: lerpNum(from.leftForearmAngle, to.leftForearmAngle, t),
+      rightArmAngle: lerpNum(from.rightArmAngle, to.rightArmAngle, t),
+      rightForearmAngle: lerpNum(from.rightForearmAngle, to.rightForearmAngle, t),
+      leftThighAngle: lerpNum(from.leftThighAngle, to.leftThighAngle, t),
+      leftShinAngle: lerpNum(from.leftShinAngle, to.leftShinAngle, t),
+      rightThighAngle: lerpNum(from.rightThighAngle, to.rightThighAngle, t),
+      rightShinAngle: lerpNum(from.rightShinAngle, to.rightShinAngle, t),
+      opacity: lerpNum(from.opacity, to.opacity, Math.min(1, t * 1.25)),
+    };
+  });
+}
+
+export interface ComputedCameraState {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  shakeX: number;
+  shakeY: number;
+}
+
+export function computeAnimeCameraState(params: {
+  width: number;
+  height: number;
+  beat: AnimeStoryboardBeat;
+  focusRig: ComputedCharRig | undefined;
+  prevBeat?: AnimeStoryboardBeat;
+  prevFocusX?: number;
+  beatProgress: number;
+  timeSec: number;
+}): ComputedCameraState {
+  const { width, height, beat, focusRig, prevBeat, prevFocusX, beatProgress, timeSec } = params;
+  const targetScale = beat.isStageCue
+    ? 1.0
+    : beat.emotion === 'angry' || beat.emotion === 'shocked'
+    ? 1.055
+    : 1.024;
+  const prevScale =
+    !prevBeat || prevBeat.isStageCue
+      ? 1.0
+      : prevBeat.emotion === 'angry' || prevBeat.emotion === 'shocked'
+      ? 1.055
+      : 1.024;
+
+  const camEase = easeOutCubic(Math.min(1, beatProgress / 0.28));
+  const scale = lerpNum(prevScale, targetScale, camEase) + Math.sin(timeSec * 0.9) * 0.003;
+
+  const targetFocusX = focusRig ? focusRig.x : width * 0.5;
+  const startFocusX = prevFocusX ?? targetFocusX;
+  const curFocusX = lerpNum(startFocusX, targetFocusX, camEase);
+  const offsetX = (width * 0.5 - curFocusX) * 0.095 + Math.sin(timeSec * 0.65) * 2.5;
+  const offsetY = (height * 0.5 - height * 0.54) * 0.03 + Math.cos(timeSec * 0.8) * 1.8;
+
+  // Impact micro-shake for shock or anger during opening 0.35s of beat
+  const impactWindow =
+    (beat.emotion === 'shocked' || beat.emotion === 'angry' || beat.action === 'jump_recoil') &&
+    beatProgress < 0.28
+      ? (1 - beatProgress / 0.28)
+      : 0;
+  const shakeAmp = impactWindow * impactWindow * (beat.emotion === 'shocked' ? 6.5 : 4.2);
+  const shakeX = shakeAmp > 0.05 ? Math.sin(timeSec * 52) * shakeAmp : 0;
+  const shakeY = shakeAmp > 0.05 ? Math.cos(timeSec * 44) * shakeAmp * 0.7 : 0;
+
+  return { scale, offsetX, offsetY, shakeX, shakeY };
+}
+
 export function computeAnimeRigStates(params: {
   story: ParsedAnimeStory;
   beat: AnimeStoryboardBeat;
@@ -955,8 +1091,18 @@ export function computeAnimeRigStates(params: {
   width: number;
   height: number;
   isPlayingSpeech: boolean;
+  audioAmplitude?: number; // optional real-time RMS 0..1 from live TTS AnalyserNode
 }): ComputedCharRig[] {
-  const { story, beat, timeSec, beatProgress, width, height, isPlayingSpeech } = params;
+  const {
+    story,
+    beat,
+    timeSec,
+    beatProgress,
+    width,
+    height,
+    isPlayingSpeech,
+    audioAmplitude,
+  } = params;
   const presentIds =
     beat.presentCharacterIds.length > 0
       ? beat.presentCharacterIds
@@ -985,11 +1131,18 @@ export function computeAnimeRigStates(params: {
   return presentIds.map((id, idx) => {
     const profile =
       story.characters.find((c) => c.id === id) ?? buildCharacterProfile(id, idx, '', undefined);
-    let x = xSlots[idx];
+    const breathPhase = timeSec * 2.4 + profile.phaseSeed;
+    const swayPhase = timeSec * 1.35 + profile.phaseSeed;
+
+    let x = xSlots[idx] + Math.sin(swayPhase * 0.7) * 2.2;
     let y = stageY;
-    let hipDropY = Math.sin(timeSec * 2.2 + profile.phaseSeed) * 1.6;
-    let bodyTiltDeg = Math.sin(timeSec * 1.4 + profile.phaseSeed) * 1.1;
-    let headTiltDeg = Math.sin(timeSec * 1.8 + profile.phaseSeed + 0.5) * 1.6;
+    let squashX = 1 + Math.sin(breathPhase) * 0.012;
+    let squashY = 1 - Math.sin(breathPhase) * 0.012;
+    let hipDropY = Math.sin(breathPhase) * 2.1;
+    let shoulderBreathY = -Math.sin(breathPhase - 0.35) * 1.4;
+    let bodyTiltDeg = Math.sin(swayPhase) * 1.6;
+    let headTiltDeg = Math.sin(timeSec * 1.9 + profile.phaseSeed + 0.55) * 2.4;
+    let hairSwayDeg = -bodyTiltDeg * 0.55 + Math.sin(timeSec * 2.1 + profile.phaseSeed - 0.8) * 2.2;
     let opacity = 1;
 
     const isActive = !beat.isStageCue && beat.speakerId === id;
@@ -1043,18 +1196,21 @@ export function computeAnimeRigStates(params: {
         : activeSpeakerX >= x
         ? 1
         : -1;
-    const lookOffsetX = isActive ? 2.0 : 2.5;
+    const lookOffsetX = isActive
+      ? 2.0 + Math.sin(timeSec * 1.1 + profile.phaseSeed) * 0.7
+      : 2.5 + Math.sin(timeSec * 0.9 + profile.phaseSeed) * 0.6;
 
-    // Default articulated limb angles (in local coordinates where +X is forward facing!)
-    let leftArmAngle = 14 + Math.sin(timeSec * 1.9 + profile.phaseSeed) * 3; // back arm
-    let leftForearmAngle = -14;
-    let rightArmAngle = -14 - Math.sin(timeSec * 1.9 + profile.phaseSeed + 0.7) * 3; // front arm
-    let rightForearmAngle = -18;
+    // Default articulated limb angles with subtle organic breathing & weight-shift
+    const weightShift = Math.sin(swayPhase);
+    let leftArmAngle = 15 + Math.sin(breathPhase + 0.4) * 4.5; // back arm
+    let leftForearmAngle = -15 + Math.cos(breathPhase) * 3.5;
+    let rightArmAngle = -15 - Math.sin(breathPhase + 0.9) * 4.5; // front arm
+    let rightForearmAngle = -20 + Math.sin(breathPhase + 1.1) * 4.0;
 
-    let leftThighAngle = 4 + Math.sin(timeSec * 1.2 + profile.phaseSeed) * 1.5;
-    let leftShinAngle = 2;
-    let rightThighAngle = -4 - Math.sin(timeSec * 1.2 + profile.phaseSeed) * 1.5;
-    let rightShinAngle = 2;
+    let leftThighAngle = 4.5 + weightShift * 2.4;
+    let leftShinAngle = 2 + Math.max(0, -weightShift) * 2.0;
+    let rightThighAngle = -4.5 - weightShift * 2.4;
+    let rightShinAngle = 2 + Math.max(0, weightShift) * 2.0;
 
     if (action === 'walk_in') {
       facing = -1; // walking in from the right door towards center!
@@ -1130,6 +1286,10 @@ export function computeAnimeRigStates(params: {
       leftForearmAngle = 6;
       rightArmAngle = 14;
       rightForearmAngle = 8;
+      const bounce = Math.sin(Math.min(1, beatProgress / 0.35) * Math.PI);
+      squashX = 1 - bounce * 0.04;
+      squashY = 1 + bounce * 0.05;
+      hairSwayDeg = -6 - Math.sin(timeSec * 7.5) * 4.5;
     } else if (action === 'jump_recoil') {
       const crouch = beatProgress < 0.14 ? (beatProgress / 0.14) * 12 : 0;
       const hop = beatProgress >= 0.14 && beatProgress < 0.48
@@ -1139,6 +1299,14 @@ export function computeAnimeRigStates(params: {
       x -= facing * stepBack;
       y -= hop * 28 * baseScale;
       hipDropY = crouch;
+      if (beatProgress < 0.14) {
+        squashX = 1.09;
+        squashY = 0.91;
+      } else if (hop > 0.1) {
+        squashX = 1 - hop * 0.08;
+        squashY = 1 + hop * 0.09;
+      }
+      hairSwayDeg = hop * 14 + Math.sin(timeSec * 13) * 4;
       bodyTiltDeg = -10 * hop + Math.sin(timeSec * 14) * 1.5;
       headTiltDeg = -8;
       leftThighAngle = -18 - hop * 12;
@@ -1150,12 +1318,13 @@ export function computeAnimeRigStates(params: {
       rightArmAngle = -96 - Math.sin(timeSec * 12) * 12;
       rightForearmAngle = -58;
     } else if (action === 'lean_confront') {
-      const stepFwd = Math.min(1, beatProgress / 0.32);
+      const stepFwd = easeOutCubic(Math.min(1, beatProgress / 0.32));
       x += facing * 26 * stepFwd * baseScale;
       const leanPulse = 0.72 + 0.28 * Math.sin(timeSec * 6);
       bodyTiltDeg = 12 * leanPulse;
       headTiltDeg = 6;
       hipDropY = 4;
+      hairSwayDeg = -7 + Math.sin(timeSec * 6) * 3;
       leftThighAngle = 15; // back leg braced
       leftShinAngle = 4;
       rightThighAngle = -16; // front leg stepped forward
@@ -1171,7 +1340,7 @@ export function computeAnimeRigStates(params: {
       const partnerX = xSlots[Math.min(xSlots.length - 1, Math.max(0, nearestPartnerIdx))];
       const stepDir = partnerX >= x ? 1 : -1;
       facing = stepDir;
-      const slideT = Math.min(1, beatProgress / 0.35);
+      const slideT = easeOutCubic(Math.min(1, beatProgress / 0.35));
       x += stepDir * Math.min(54, Math.abs(partnerX - x) * 0.34) * slideT * baseScale;
       bodyTiltDeg = 14;
       headTiltDeg = 8;
@@ -1187,7 +1356,7 @@ export function computeAnimeRigStates(params: {
       leftForearmAngle = -24;
     } else if (action === 'scratch_head') {
       bodyTiltDeg = -4;
-      headTiltDeg = 11;
+      headTiltDeg = 11 + Math.sin(timeSec * 4) * 2;
       hipDropY = 4;
       leftThighAngle = -10;
       leftShinAngle = 14;
@@ -1210,7 +1379,7 @@ export function computeAnimeRigStates(params: {
       rightArmAngle = -104 + Math.sin(timeSec * 5.2) * 8;
       rightForearmAngle = -28;
     } else if (action === 'hold_prop_offer') {
-      const stepT = Math.min(1, beatProgress / 0.35);
+      const stepT = easeOutCubic(Math.min(1, beatProgress / 0.35));
       x += facing * 18 * stepT * baseScale;
       bodyTiltDeg = 6;
       hipDropY = 2;
@@ -1225,7 +1394,11 @@ export function computeAnimeRigStates(params: {
       leftForearmAngle = -22;
     } else if (action === 'cheer_wave') {
       const wave = Math.sin(timeSec * 8.5);
-      y -= Math.abs(wave) * 7 * baseScale;
+      const hopAmt = Math.abs(wave);
+      y -= hopAmt * 7 * baseScale;
+      squashX = 1 - hopAmt * 0.035;
+      squashY = 1 + hopAmt * 0.04;
+      hairSwayDeg = wave * 7;
       hipDropY = 0;
       leftThighAngle = -8 + wave * 6;
       leftShinAngle = 10;
@@ -1252,7 +1425,9 @@ export function computeAnimeRigStates(params: {
     } else if (action === 'gesture_talk') {
       const g = Math.sin(timeSec * 6.5 + profile.phaseSeed);
       const sway = Math.sin(timeSec * 2.1 + profile.phaseSeed);
-      hipDropY = 2 + Math.abs(sway) * 2;
+      hipDropY = 2 + Math.abs(sway) * 2.4;
+      bodyTiltDeg = sway * 2.2;
+      headTiltDeg = Math.sin(timeSec * 3.4 + profile.phaseSeed) * 3.2;
       leftThighAngle = 6 + sway * 4;
       leftShinAngle = 4;
       rightThighAngle = -8 - sway * 4;
@@ -1264,21 +1439,49 @@ export function computeAnimeRigStates(params: {
     }
 
     const isSpeaking = isActive && isPlayingSpeech;
+    const rawFallbackMouth = Math.abs(
+      Math.sin(timeSec * 14.5 + profile.phaseSeed) * 0.58 +
+        Math.sin(timeSec * 23.0) * 0.28 +
+        Math.sin(timeSec * 9.2) * 0.14
+    );
+    const hasAudioLevel = typeof audioAmplitude === 'number' && Number.isFinite(audioAmplitude);
     const mouthPhase = isSpeaking
-      ? Math.abs(Math.sin(timeSec * 14.5) * 0.65 + Math.sin(timeSec * 23.0) * 0.35)
+      ? hasAudioLevel
+        ? Math.min(1, Math.max(0.05, audioAmplitude * 1.55))
+        : rawFallbackMouth
       : 0;
+    const visemeCycle = Math.floor(timeSec * 9.5) % 5;
+    const mouthViseme: AnimeMouthViseme =
+      !isSpeaking || mouthPhase <= 0.14
+        ? 'closed'
+        : mouthPhase > 0.68
+        ? 'a'
+        : visemeCycle === 0
+        ? 'a'
+        : visemeCycle === 1
+        ? 'e'
+        : visemeCycle === 2
+        ? 'o'
+        : visemeCycle === 3
+        ? 'i'
+        : 'u';
 
     return {
       profile,
       x,
       y,
       scale: baseScale,
+      squashX,
+      squashY,
       facing,
       hipDropY,
+      shoulderBreathY,
       bodyTiltDeg,
       headTiltDeg,
+      hairSwayDeg,
       blinkAmt,
       mouthPhase,
+      mouthViseme,
       isSpeaking,
       isActiveFocus: isActive || isEntering,
       lookOffsetX,
@@ -1340,12 +1543,17 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
     x,
     y,
     scale,
+    squashX,
+    squashY,
     facing,
     hipDropY,
+    shoulderBreathY,
     bodyTiltDeg,
     headTiltDeg,
+    hairSwayDeg,
     blinkAmt,
     mouthPhase,
+    mouthViseme,
     isSpeaking,
     emotion,
     handProp,
@@ -1367,17 +1575,25 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
 
   const backHairSvg =
     hairStyle === 'bob'
-      ? `<path d="M-46 -136 C-56 -110 -56 -72 -44 -56 L44 -56 C56 -72 56 -110 46 -136 Z" fill="${hairShadeHex}" stroke="#1E1B18" stroke-width="2.6"/>`
+      ? `<g transform="rotate(${(hairSwayDeg * 0.65).toFixed(2)}, 0, -148)">
+           <path d="M-46 -136 C-56 -110 -56 -72 -44 -56 L44 -56 C56 -72 56 -110 46 -136 Z" fill="${hairShadeHex}" stroke="#1E1B18" stroke-width="2.6"/>
+         </g>`
       : '';
 
   const frontHairSvg =
     hairStyle === 'spiky'
-      ? `<path d="M-44 -146 C-44 -186 -14 -202 8 -196 C32 -196 48 -176 46 -144 C42 -154 32 -162 24 -152 C14 -165 0 -150 -8 -164 C-18 -148 -32 -158 -44 -146 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
-         <path d="M-36 -184 L-48 -200 L-22 -190 L-8 -208 L6 -190 L28 -204 L26 -182" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.4" stroke-linejoin="round"/>`
+      ? `<g transform="rotate(${(hairSwayDeg * 0.45).toFixed(2)}, 0, -165)">
+           <path d="M-44 -146 C-44 -186 -14 -202 8 -196 C32 -196 48 -176 46 -144 C42 -154 32 -162 24 -152 C14 -165 0 -150 -8 -164 C-18 -148 -32 -158 -44 -146 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
+           <path d="M-36 -184 L-48 -200 L-22 -190 L-8 -208 L6 -190 L28 -204 L26 -182" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.4" stroke-linejoin="round"/>
+         </g>`
       : hairStyle === 'bob'
-      ? `<path d="M-47 -142 C-48 -188 -16 -202 0 -202 C18 -202 48 -188 47 -142 C36 -156 22 -160 12 -148 C2 -160 -12 -160 -22 -148 C-32 -156 -40 -154 -47 -142 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
-         <rect x="26" y="-158" width="12" height="5" rx="2.5" transform="rotate(-18 32 -156)" fill="#F43F5E"/>`
-      : `<path d="M-45 -144 C-46 -186 -16 -202 4 -200 C28 -198 48 -180 45 -144 C34 -156 22 -146 12 -160 C2 -144 -10 -158 -22 -146 C-32 -158 -40 -152 -45 -144 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>`;
+      ? `<g transform="rotate(${(hairSwayDeg * 0.4).toFixed(2)}, 0, -165)">
+           <path d="M-47 -142 C-48 -188 -16 -202 0 -202 C18 -202 48 -188 47 -142 C36 -156 22 -160 12 -148 C2 -160 -12 -160 -22 -148 C-32 -156 -40 -154 -47 -142 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
+           <rect x="26" y="-158" width="12" height="5" rx="2.5" transform="rotate(-18 32 -156)" fill="#F43F5E"/>
+         </g>`
+      : `<g transform="rotate(${(hairSwayDeg * 0.45).toFixed(2)}, 0, -165)">
+           <path d="M-45 -144 C-46 -186 -16 -202 4 -200 C28 -198 48 -180 45 -144 C34 -156 22 -146 12 -160 C2 -144 -10 -158 -22 -146 C-32 -158 -40 -152 -45 -144 Z" fill="${hairHex}" stroke="#1E1B18" stroke-width="2.6" stroke-linejoin="round"/>
+         </g>`;
 
   const eyeScaleY = Math.max(0.08, 1 - blinkAmt);
   let eyesSvg = '';
@@ -1426,8 +1642,18 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
 
   let mouthSvg = '';
   if (isSpeaking && mouthPhase > 0.14) {
-    const mh = (3.5 + mouthPhase * 9.5).toFixed(1);
-    const mw = (5.5 + (1 - mouthPhase * 0.3) * 5.0).toFixed(1);
+    const mh =
+      mouthViseme === 'i'
+        ? (2.6 + mouthPhase * 4.5).toFixed(1)
+        : mouthViseme === 'o' || mouthViseme === 'u'
+        ? (4.2 + mouthPhase * 7.8).toFixed(1)
+        : (3.5 + mouthPhase * 9.5).toFixed(1);
+    const mw =
+      mouthViseme === 'i' || mouthViseme === 'e'
+        ? (7.8 + mouthPhase * 3.5).toFixed(1)
+        : mouthViseme === 'u' || mouthViseme === 'o'
+        ? (4.2 + mouthPhase * 2.8).toFixed(1)
+        : (5.5 + (1 - mouthPhase * 0.3) * 5.0).toFixed(1);
     mouthSvg = `<ellipse cx="0" cy="-96" rx="${mw}" ry="${mh}" fill="#9F1239" stroke="#1E1B18" stroke-width="2.2"/>
                 <ellipse cx="0" cy="${(-96 + Number(mh) * 0.45).toFixed(1)}" rx="${(Number(mw) * 0.65).toFixed(1)}" ry="${(Number(mh) * 0.35).toFixed(1)}" fill="#FB7185"/>`;
   } else if (emotion === 'happy') {
@@ -1498,7 +1724,7 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
       : `<path d="M-30 -88 L30 -88 L32 -70 L-32 -70 Z" fill="${pantsHex}" stroke="#1E1B18" stroke-width="2.4"/>`;
 
   return `
-    <g transform="translate(${x.toFixed(1)},${y.toFixed(1)}) scale(${scale.toFixed(3)})" opacity="${opacity.toFixed(2)}">
+    <g transform="translate(${x.toFixed(1)},${y.toFixed(1)}) scale(${(scale * squashX).toFixed(3)},${(scale * squashY).toFixed(3)})" opacity="${opacity.toFixed(2)}">
       <!-- Ground contact shadow under shoes -->
       <ellipse cx="0" cy="4" rx="46" ry="9" fill="#0F172A" fill-opacity="0.18"/>
 
@@ -1515,9 +1741,9 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
         </g>
 
         <!-- Upper Body pivoting at hip (-82 + hipDropY) -->
-        <g transform="translate(0,${(-82 + hipDropY).toFixed(1)}) rotate(${bodyTiltDeg.toFixed(2)})">
+        <g transform="translate(0,${(-82 + hipDropY + shoulderBreathY * 0.45).toFixed(1)}) rotate(${bodyTiltDeg.toFixed(2)})">
           <!-- Back Articulated Arm -->
-          <g transform="translate(-26,-70) rotate(${rig.leftArmAngle.toFixed(1)})">
+          <g transform="translate(-26,${(-70 + shoulderBreathY * 0.5).toFixed(1)}) rotate(${rig.leftArmAngle.toFixed(1)})">
             <rect x="-8" y="0" width="16" height="38" rx="8" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.4"/>
             <g transform="translate(0,34) rotate(${rig.leftForearmAngle.toFixed(1)})">
               <rect x="-7" y="0" width="14" height="32" rx="7" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.4"/>
@@ -1549,7 +1775,7 @@ function renderAnimeCharacterSvg(rig: ComputedCharRig, timeSec: number): string 
           </g>
 
           <!-- Front Articulated Arm + Hand Prop -->
-          <g transform="translate(26,-70) rotate(${rig.rightArmAngle.toFixed(1)})">
+          <g transform="translate(26,${(-70 + shoulderBreathY * 0.5).toFixed(1)}) rotate(${rig.rightArmAngle.toFixed(1)})">
             <rect x="-8" y="0" width="16" height="38" rx="8" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.4"/>
             <g transform="translate(0,34) rotate(${rig.rightForearmAngle.toFixed(1)})">
               <rect x="-7" y="0" width="14" height="32" rx="7" fill="${outfitHex}" stroke="#1E1B18" stroke-width="2.4"/>
@@ -1906,9 +2132,58 @@ function renderSpeechBubbleSvg(params: {
   `;
 }
 
+function renderAmbientParticlesSvg(params: {
+  width: number;
+  height: number;
+  roomKind: AnimeRoomKind;
+  timeSec: number;
+  fridgeOpen: boolean;
+}): string {
+  const { width, height, roomKind, timeSec, fridgeOpen } = params;
+  const parts: string[] = [];
+  const count = 14;
+  for (let i = 0; i < count; i++) {
+    const seed = (i * 1.6180339) % 1;
+    const baseX = ((seed * 1.37 + timeSec * (0.015 + (i % 3) * 0.008)) % 1) * width;
+    if (roomKind === 'street_park') {
+      const py = (((i * 0.19 + timeSec * 0.11) % 1) * height * 0.85);
+      const px = (baseX + Math.sin(timeSec * 2 + i) * 24 + width) % width;
+      const rot = (timeSec * 45 + i * 37) % 360;
+      parts.push(
+        `<ellipse cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" rx="5.5" ry="3.2" fill="#FBCFE8" fill-opacity="0.8" transform="rotate(${rot.toFixed(0)} ${px.toFixed(1)} ${py.toFixed(1)})"/>`
+      );
+    } else if (roomKind === 'restaurant_izakaya') {
+      const py = height * 0.78 - (((i * 0.23 + timeSec * 0.14) % 1) * height * 0.65);
+      const px = baseX + Math.sin(timeSec * 2.5 + i) * 14;
+      const r = 2 + (i % 3) * 1.5;
+      parts.push(
+        `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${r}" fill="#FDE047" fill-opacity="0.32"/>`
+      );
+    } else if (roomKind === 'cafe_corner') {
+      const py = height * 0.72 - (((i * 0.21 + timeSec * 0.12) % 1) * height * 0.48);
+      const px = width * 0.25 + ((i * 53) % (width * 0.55)) + Math.sin(timeSec * 2 + i) * 10;
+      const alpha = (0.28 * (1 - ((height * 0.72 - py) / (height * 0.48)))).toFixed(2);
+      parts.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${3 + (i % 3)}" fill="#FFFBEB" fill-opacity="${alpha}"/>`);
+    } else {
+      const py = height * 0.12 + (((i * 0.29 + Math.sin(timeSec * 0.5 + i) * 0.08) % 0.68) * height);
+      const alpha = (0.22 + 0.18 * Math.sin(timeSec * 2.2 + i * 1.3)).toFixed(2);
+      parts.push(`<circle cx="${baseX.toFixed(1)}" cy="${py.toFixed(1)}" r="${1.8 + (i % 2) * 1.2}" fill="#FEF3C7" fill-opacity="${alpha}"/>`);
+    }
+  }
+  if (fridgeOpen) {
+    for (let j = 0; j < 6; j++) {
+      const cx = width * 0.14 + Math.sin(timeSec * 3 + j) * 26;
+      const cy = height * 0.42 + ((timeSec * 40 + j * 14) % 45);
+      parts.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${5 + (j % 3) * 2}" fill="#E0F2FE" fill-opacity="0.55"/>`);
+    }
+  }
+  return parts.join('');
+}
+
 export function renderAnimeBeatSvgFrame(params: {
   story: ParsedAnimeStory;
   beat: AnimeStoryboardBeat;
+  prevBeat?: AnimeStoryboardBeat;
   timeSec: number;
   beatProgress: number;
   width: number;
@@ -1922,6 +2197,7 @@ export function renderAnimeBeatSvgFrame(params: {
   const {
     story,
     beat,
+    prevBeat,
     timeSec,
     beatProgress,
     width,
@@ -1938,7 +2214,7 @@ export function renderAnimeBeatSvgFrame(params: {
       ? "'BIZ UDPGothic', 'M PLUS 1p', 'Noto Sans', sans-serif"
       : "'M PLUS 1p', 'BIZ UDPGothic', 'Noto Sans', sans-serif";
 
-  const rigs = computeAnimeRigStates({
+  const targetRigs = computeAnimeRigStates({
     story,
     beat,
     timeSec,
@@ -1948,10 +2224,34 @@ export function renderAnimeBeatSvgFrame(params: {
     isPlayingSpeech: isPlayingSpeech && !beat.isStageCue,
   });
 
+  // Smooth pose-to-pose transition from previous beat over first ~26% of beat
+  let rigs = targetRigs;
+  let prevFocusX: number | undefined;
+  if (prevBeat && beatProgress < 0.28) {
+    const prevRigs = computeAnimeRigStates({
+      story,
+      beat: prevBeat,
+      timeSec: Math.max(0, timeSec - 0.04),
+      beatProgress: 0.96,
+      width,
+      height,
+      isPlayingSpeech: false,
+    });
+    prevFocusX = (prevRigs.find((r) => r.isActiveFocus) ?? prevRigs[0])?.x;
+    rigs = interpolateRigStates(prevRigs, targetRigs, beatProgress / 0.28);
+  }
+
   const focusRig = rigs.find((r) => r.isActiveFocus) ?? rigs[0];
-  const camScale = beat.isStageCue ? 1.0 : beat.emotion === 'angry' || beat.emotion === 'shocked' ? 1.04 : 1.018;
-  const focusDx = focusRig ? (width * 0.5 - focusRig.x) * 0.08 : 0;
-  const focusDy = (height * 0.5 - height * 0.54) * 0.025;
+  const cam = computeAnimeCameraState({
+    width,
+    height,
+    beat,
+    focusRig,
+    prevBeat,
+    prevFocusX,
+    beatProgress,
+    timeSec,
+  });
 
   const sortedRigs = [...rigs].sort((a, b) => (a.isActiveFocus ? 1 : 0) - (b.isActiveFocus ? 1 : 0));
   const charactersSvg = sortedRigs.map((r) => renderAnimeCharacterSvg(r, timeSec)).join('');
@@ -1985,16 +2285,26 @@ export function renderAnimeBeatSvgFrame(params: {
           fontFamily,
           beatProgress,
           isPlayingSpeech,
-          karaokeEnabled: subtitleEffect === 'karaoke',
+          karaokeEnabled: subtitleEffect === 'karaoke' || subtitleEffect === 'laser',
           highlightColor,
         })
       : '';
 
+  const roomTransitionOverlay =
+    prevBeat && prevBeat.roomKind !== beat.roomKind && beatProgress < 0.25
+      ? `<rect x="0" y="0" width="${width}" height="${height}" fill="#0F172A" fill-opacity="${(
+          (1 - easeOutCubic(beatProgress / 0.25)) *
+          0.55
+        ).toFixed(2)}"/>`
+      : '';
+
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-    <g transform="translate(${(width / 2 + focusDx).toFixed(1)},${(height / 2 + focusDy).toFixed(1)}) scale(${camScale.toFixed(3)}) translate(${(-width / 2).toFixed(1)},${(-height / 2).toFixed(1)})">
+    <g transform="translate(${(width / 2 + cam.offsetX + cam.shakeX).toFixed(1)},${(height / 2 + cam.offsetY + cam.shakeY).toFixed(1)}) scale(${cam.scale.toFixed(3)}) translate(${(-width / 2).toFixed(1)},${(-height / 2).toFixed(1)})">
       ${renderRoomBackdropSvg({ width, height, beat, sceneStyle, timeSec, beatProgress })}
+      ${renderAmbientParticlesSvg({ width, height, roomKind: beat.roomKind, timeSec, fridgeOpen: beat.fridgeOpen })}
       ${charactersSvg}
     </g>
+    ${roomTransitionOverlay}
     ${bannerSvg}
     ${speechBubbleSvg}
   </svg>`;
