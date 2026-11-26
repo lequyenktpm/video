@@ -259,48 +259,17 @@ const Animated2411Avatar: React.FC<Animated2411AvatarProps> = ({
       aria-hidden="true"
     >
       <path d="M-22 30 C-20 14 20 14 22 30 Z" fill={shirtHex} />
-      <path
-        d="M-7 17 L0 21.5 L7 17"
-        fill="none"
-        stroke="#FFFFFF"
-        strokeOpacity="0.48"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="0" cy="0" r="16" fill="#FDE68A" stroke="#F59E0B" strokeOpacity="0.3" strokeWidth="1" />
-      <ellipse cx="-8.5" cy="4.2" rx="2.8" ry="1.5" fill="#FB7185" fill-opacity="0.22" />
-      <ellipse cx="8.5" cy="4.2" rx="2.8" ry="1.5" fill="#FB7185" fill-opacity="0.22" />
+      <circle cx="0" cy="0" r="16" fill="#FDE68A" />
       {hairStyle === 'bob' ? (
-        <>
-          <path
-            d="M-20 -4 C-22 -24 22 -24 20 -4 L20 10 C15 6 11 -4 0 -6 C-11 -4 -15 6 -20 10 Z"
-            fill={hairHex}
-          />
-          <path
-            d="M-12 -14 Q-2 -19 9 -15"
-            fill="none"
-            stroke="#FFFFFF"
-            strokeOpacity="0.26"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </>
+        <path
+          d="M-20 -4 C-22 -24 22 -24 20 -4 L20 10 C15 6 11 -4 0 -6 C-11 -4 -15 6 -20 10 Z"
+          fill={hairHex}
+        />
       ) : (
-        <>
-          <path
-            d="M-17 -6 C-16 -22 16 -22 17 -6 C10 -11 -10 -11 -17 -6 Z"
-            fill={hairHex}
-          />
-          <path
-            d="M-10 -14 Q-1 -18 8 -14"
-            fill="none"
-            stroke="#FFFFFF"
-            strokeOpacity="0.24"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          />
-        </>
+        <path
+          d="M-17 -6 C-16 -22 16 -22 17 -6 C10 -11 -10 -11 -17 -6 Z"
+          fill={hairHex}
+        />
       )}
       <circle cx="-5" cy="0" r="2.1" fill="#1E293B" />
       <circle cx="5" cy="0" r="2.1" fill="#1E293B" />
@@ -320,17 +289,19 @@ const Animated2411Avatar: React.FC<Animated2411AvatarProps> = ({
             className={useLiveSync ? undefined : 'animate-2411-mouth-talk'}
           />
           <g ref={handRef} className={useLiveSync ? undefined : 'animate-2411-hand-wave'}>
-            <path
-              d={`M${dir * 14} 21 Q${dir * 20} 16 ${dir * 23} 10`}
-              fill="none"
+            <line
+              x1={dir * 13}
+              y1="21"
+              x2={dir * 23}
+              y2="9.5"
               stroke={shirtHex}
-              strokeWidth="4.6"
+              strokeWidth="4.4"
               strokeLinecap="round"
             />
             <circle
               cx={dir * 23}
               cy="8.5"
-              r="4.2"
+              r="3.8"
               fill="#FDE68A"
               stroke="#1E293B"
               strokeWidth="1.1"
@@ -347,17 +318,19 @@ const Animated2411Avatar: React.FC<Animated2411AvatarProps> = ({
             strokeLinecap="round"
           />
           <g className="animate-2411-hand-think">
-            <path
-              d={`M${dir * -14} 23 Q${dir * -10} 17 ${dir * -5} 13.5`}
-              fill="none"
+            <line
+              x1={dir * -13}
+              y1="22"
+              x2={dir * -5}
+              y2="13.5"
               stroke={shirtHex}
-              strokeWidth="4.2"
+              strokeWidth="4.0"
               strokeLinecap="round"
             />
             <circle
               cx={dir * -4.5}
               cy="12.5"
-              r="3.8"
+              r="3.6"
               fill="#FDE68A"
               stroke="#1E293B"
               strokeWidth="1.1"
@@ -757,38 +730,28 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
         const isIntro = spec.layoutKind === 'intro_hero';
         const isOutro = spec.layoutKind === 'outro_recap';
         const isQuizPrompt = spec.layoutKind === 'quiz_prompt';
-        const isAnswerReveal = spec.layoutKind === 'answer_reveal';
+        const isAnswerReveal = !isIntro && !isOutro && (spec.layoutKind === 'answer_reveal' || isSecondarySlot);
         const rawLabelA = spec.labels[0]?.trim() ?? '';
         const rawLabelB = spec.labels[1]?.trim() ?? '';
-        const spkA = rawLabelA && !isGenericSpeakerLabel(rawLabelA) ? rawLabelA : '';
-        const spkB = rawLabelB && !isGenericSpeakerLabel(rawLabelB) ? rawLabelB : '';
-        const promptBubbleText = isAnswerReveal
-          ? spec.promptPreviewText || spec.contextLabel || 'Prompt'
-          : spec.speechText;
-        const replyBubbleText = isAnswerReveal
-          ? spec.speechText
-          : spec.subtitle && spec.subtitle !== promptBubbleText
-          ? spec.subtitle
-          : spec.highlightWord;
+        const spkLabel = isAnswerReveal
+          ? rawLabelB && !isGenericSpeakerLabel(rawLabelB)
+            ? rawLabelB
+            : rawLabelA && !isGenericSpeakerLabel(rawLabelA)
+            ? rawLabelA
+            : ''
+          : rawLabelA && !isGenericSpeakerLabel(rawLabelA)
+          ? rawLabelA
+          : '';
 
-        let speakerAPose: 'talking' | 'thinking' | 'idle' = 'idle';
-        let speakerBPose: 'talking' | 'thinking' | 'idle' = 'idle';
-        if (countdownActive) {
-          speakerAPose = 'idle';
-          speakerBPose = 'thinking';
-        } else if (!isPlayingPreview) {
-          speakerAPose = 'idle';
-          speakerBPose = 'idle';
-        } else if (!isIntro && !isOutro && (isSecondarySlot || isAnswerReveal)) {
-          speakerAPose = 'idle';
-          speakerBPose = 'talking';
-        } else {
-          speakerAPose = 'talking';
-          speakerBPose = 'idle';
-        }
-
-        const isAActive = speakerAPose !== 'idle' || isIntro || isOutro || isQuizPrompt;
-        const isBActive = speakerBPose !== 'idle' || (!isIntro && !isOutro && isAnswerReveal);
+        const spokenBubbleText = spec.speechText;
+        const showThinkingDots = isQuizPrompt && (countdownActive || !isPlayingPreview);
+        const speakerPose: 'talking' | 'thinking' | 'idle' = countdownActive
+          ? 'thinking'
+          : isPlayingPreview
+          ? 'talking'
+          : 'idle';
+        const bubbleAccent = isAnswerReveal ? secondaryAccent : primaryAccent;
+        const bubbleFill = isAnswerReveal ? `${secondaryAccent}1C` : theme.surfaceTintHex;
 
         const bubbleFontCls = (str: string) => {
           const len = str.trim().length;
@@ -806,8 +769,6 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             ? 'text-[12.5px]'
             : 'text-[13.5px]';
         };
-        const isLongPrompt = promptBubbleText.trim().length > 34;
-        const isLongReply = replyBubbleText.trim().length > 34;
 
         return (
           <div
@@ -820,127 +781,85 @@ export const Studio2411StageCard: React.FC<Studio2411StageCardProps> = ({
             }`}
             data-testid="studio-2411-friends-chat"
           >
-            {/* Row 1: Speaker A stationary avatar + source/intro/outro bubble */}
-            <div className={`flex items-center gap-2 transition-opacity duration-150 ${isAActive ? 'opacity-100' : 'opacity-92'}`}>
-              <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[34px]' : 'min-w-[42px]'}`}>
+            {/* Single speaker on stage: shows whichever dialogue line is active, plus 3-dot 5s think bubble on pause */}
+            <div className="flex items-start gap-2.5">
+              <div className={`flex flex-col items-center gap-0.5 shrink-0 pt-0.5 ${isCompactStage ? 'min-w-[34px]' : 'min-w-[42px]'}`}>
                 <Animated2411Avatar
                   shirtHex={primaryAccent}
                   hairHex="#1E293B"
                   hairStyle="short"
-                  pose={speakerAPose}
+                  pose={speakerPose}
                   side="left"
-                  isPlayingAudio={isPlayingPreview && speakerAPose === 'talking'}
+                  dotAccentHex={secondaryAccent}
+                  isPlayingAudio={isPlayingPreview && speakerPose === 'talking'}
                   speechLevelRef={speechLevelRef}
                   className={isCompactStage ? 'w-7 h-7' : 'w-9 h-9'}
                 />
-                {spkA && (
+                {spkLabel && (
                   <span
                     className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight break-words`}
-                    style={{ backgroundColor: primaryAccent }}
+                    style={{ backgroundColor: bubbleAccent }}
                   >
-                    {spkA}
+                    {spkLabel}
                   </span>
                 )}
               </div>
 
-              <div className="flex-1 min-w-0 flex justify-start">
+              <div className="flex-1 min-w-0 flex flex-col items-start gap-2">
                 <div
-                  className={`w-fit min-w-[84px] max-w-full rounded-xl rounded-tl-sm border transition-all duration-200 ${
+                  className={`w-fit min-w-[96px] max-w-full rounded-xl rounded-tl-sm border transition-all duration-200 ${
                     isLandscape ? 'px-2.5 py-1.5' : isSquare ? 'px-3 py-1.5' : 'px-3.5 py-2'
                   }`}
                   style={{
-                    backgroundColor: theme.surfaceTintHex,
-                    borderColor: primaryAccent,
-                    borderWidth: isAActive ? '1.5px' : '1px',
+                    backgroundColor: bubbleFill,
+                    borderColor: bubbleAccent,
+                    borderWidth: '1.5px',
                   }}
                 >
                   <div
-                    className={`${bubbleFontCls(promptBubbleText)} font-semibold leading-snug tracking-[0.015em] [overflow-wrap:break-word] whitespace-normal`}
+                    className={`${bubbleFontCls(spokenBubbleText)} font-semibold leading-snug tracking-[0.015em] [overflow-wrap:break-word] whitespace-normal`}
                     style={{ color: theme.textHex }}
                   >
-                    {promptBubbleText}
+                    {spokenBubbleText}
                   </div>
                 </div>
-              </div>
-            </div>
 
-            {/* Row 2: Speaker B stationary avatar + animated 3-dot thinking bubble OR target answer bubble */}
-            <div className={`flex items-center justify-end gap-2 transition-opacity duration-150 ${isBActive ? 'opacity-100' : 'opacity-92'}`}>
-              <div className="flex-1 min-w-0 flex justify-end">
-                {isIntro || isOutro ? (
-                  <div className="min-h-[34px]" aria-hidden="true" />
-                ) : (
+                {showThinkingDots && (
                   <div
-                    className={`w-fit min-w-[96px] max-w-full rounded-xl rounded-tr-sm border transition-all duration-200 ${
-                      isLandscape ? 'px-2.5 py-1.5' : isSquare ? 'px-3 py-1.5' : 'px-3.5 py-2'
-                    } ${isQuizPrompt ? 'border-dashed' : ''}`}
+                    data-testid="studio-2411-thinking-bubble"
+                    className={`w-fit min-w-[132px] rounded-xl rounded-tl-sm border border-dashed flex items-center justify-between gap-2.5 transition-all duration-200 ${
+                      isLandscape ? 'px-2.5 py-1' : 'px-3 py-1.5'
+                    }`}
                     style={{
-                      backgroundColor: `${secondaryAccent}1C`,
+                      backgroundColor: `${secondaryAccent}18`,
                       borderColor: secondaryAccent,
-                      borderWidth: isBActive ? '1.5px' : '1px',
                     }}
                   >
-                    {isQuizPrompt ? (
-                      <div
-                        data-testid="studio-2411-thinking-bubble"
-                        className="flex items-center justify-between gap-2.5 py-0.5"
-                      >
-                        <span
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-bold shrink-0"
-                          style={{
-                            backgroundColor: `${secondaryAccent}22`,
-                            color: secondaryAccent,
-                          }}
-                        >
-                          <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
-                          <span>Think {Math.max(1, spec.pauseSec || 5)}s</span>
-                        </span>
-                        <div className="inline-flex items-center gap-1.5 pr-0.5">
-                          <span
-                            className="animate-2411-think-dot-1 w-2 h-2 rounded-full inline-block"
-                            style={{ backgroundColor: secondaryAccent }}
-                          />
-                          <span
-                            className="animate-2411-think-dot-2 w-2 h-2 rounded-full inline-block"
-                            style={{ backgroundColor: secondaryAccent }}
-                          />
-                          <span
-                            className="animate-2411-think-dot-3 w-2 h-2 rounded-full inline-block"
-                            style={{ backgroundColor: secondaryAccent }}
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <div
-                        className={`${bubbleFontCls(replyBubbleText)} font-semibold leading-snug tracking-[0.015em] [overflow-wrap:break-word] whitespace-normal`}
-                        style={{ color: theme.textHex }}
-                      >
-                        {replyBubbleText}
-                      </div>
-                    )}
+                    <span
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-bold shrink-0"
+                      style={{
+                        backgroundColor: `${secondaryAccent}22`,
+                        color: secondaryAccent,
+                      }}
+                    >
+                      <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                      <span>Think {Math.max(1, spec.pauseSec || 5)}s</span>
+                    </span>
+                    <div className="inline-flex items-center gap-1.5 pr-0.5">
+                      <span
+                        className="animate-2411-think-dot-1 w-2 h-2 rounded-full inline-block"
+                        style={{ backgroundColor: secondaryAccent }}
+                      />
+                      <span
+                        className="animate-2411-think-dot-2 w-2 h-2 rounded-full inline-block"
+                        style={{ backgroundColor: secondaryAccent }}
+                      />
+                      <span
+                        className="animate-2411-think-dot-3 w-2 h-2 rounded-full inline-block"
+                        style={{ backgroundColor: secondaryAccent }}
+                      />
+                    </div>
                   </div>
-                )}
-              </div>
-
-              <div className={`flex flex-col items-center gap-0.5 shrink-0 ${isCompactStage ? 'min-w-[34px]' : 'min-w-[40px]'}`}>
-                <Animated2411Avatar
-                  shirtHex={secondaryAccent}
-                  hairHex="#78350F"
-                  hairStyle="bob"
-                  pose={speakerBPose}
-                  side="right"
-                  dotAccentHex={secondaryAccent}
-                  isPlayingAudio={isPlayingPreview && speakerBPose === 'talking'}
-                  speechLevelRef={speechLevelRef}
-                  className={isCompactStage ? 'w-6.5 h-6.5' : 'w-8.5 h-8.5'}
-                />
-                {spkB && (
-                  <span
-                    className={`${isCompactStage ? 'px-1 py-0 text-[8px]' : 'px-1.5 py-0.5 text-[8.5px]'} rounded-full font-bold text-white text-center leading-tight break-words`}
-                    style={{ backgroundColor: secondaryAccent }}
-                  >
-                    {spkB}
-                  </span>
                 )}
               </div>
             </div>

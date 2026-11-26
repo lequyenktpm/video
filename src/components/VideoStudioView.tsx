@@ -224,7 +224,9 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
   const [aiWebPasteText, setAiWebPasteText] = useState('');
   const [aiWebStatus, setAiWebStatus] = useState<string | null>(null);
 
-  const [previewScenes, setPreviewScenes] = useState<ScenePreviewItem[]>([]);
+  const [previewScenes, setPreviewScenes] = useState<ScenePreviewItem[]>(
+    () => config.customScenes ?? []
+  );
   const [isLoadingScenes, setIsLoadingScenes] = useState(false);
   const [scenesError, setScenesError] = useState<string | null>(null);
   const [activeSceneIdx, setActiveSceneIdx] = useState(0);
@@ -3447,8 +3449,8 @@ export const VideoStudioView: React.FC<VideoStudioViewProps> = ({
                   </>
                 ) : (
                   <>
-                    <option value="vi">Tiếng Việt</option>
                     <option value="en">Tiếng Anh (English)</option>
+                    <option value="vi">Tiếng Việt</option>
                     <option value="ja">Tiếng Nhật (日本語)</option>
                     <option value="bilingual">Song ngữ Việt – Anh</option>
                     <option value="vi_ja">Song ngữ Việt – Nhật</option>

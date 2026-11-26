@@ -12,25 +12,27 @@ import { safeParseJsonResponse } from './shared/mptEngine';
 import { DEFAULT_ANIME_DIALOGUE_SCRIPT } from './shared/animeStoryEngine';
 
 const HISTORY_STORAGE_KEY = 'mpt_vn_history_v1';
+const DRAFT_CONFIGS_STORAGE_KEY = 'mpt_vn_draft_configs_v1';
+const ACTIVE_TAB_STORAGE_KEY = 'mpt_vn_active_tab_v1';
 
 const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
-  subject: 'Bí ẩn đại dương sâu thẳm chưa từng được giải mã',
-  language: 'vi',
+  subject: 'Why Time Feels Faster As We Get Older',
+  language: 'en',
   scriptStyle: 'curious_facts',
   sentenceCount: 4,
   llmProvider: 'pollinations',
   script: [
-    'Hơn 80% đại dương sâu thẳm trên Trái Đất vẫn chưa từng được con người đặt chân tới.',
-    'Ở độ sâu tối đen hàng nghìn mét, nhiều sinh vật biển tự phát sáng để săn mồi.',
-    'Tại đáy rãnh Mariana, áp suất lớn gấp nghìn lần mặt đất nhưng sự sống vẫn tồn tại.',
-    'Theo dõi kênh để khám phá thêm những bí ẩn kỳ vĩ của hành tinh xanh mỗi ngày nhé!',
+    'Why does a single year feel endless at age ten, yet fly by in a blink at thirty?',
+    'Neuroscientists found our brains record far fewer new memories when every day follows the same routine.',
+    'Because time feels longer in hindsight when filled with novelty, familiar weeks compress into nothing.',
+    'Try one unfamiliar habit this week to make your days feel richer and longer!',
   ].join('\n'),
-  terms: ['deep ocean', 'underwater coral', 'jellyfish ocean', 'ocean waves'],
+  terms: ['hourglass clock', 'brain memory', 'city sunrise', 'mountain adventure'],
   scenePrompts: [
-    'vast dark deep blue ocean abyss from above, underwater sunbeams, cinematic 8k',
-    'glowing jellyfish floating in deep sea, macro underwater photography',
-    'deep sea coral reef and ocean currents in dramatic light',
-    'aerial view of turquoise ocean waves breaking at sunrise',
+    'cinematic closeup of golden hourglass sand flowing in warm sunlight, shallow depth of field',
+    'abstract glowing neural pathways inside human mind, soft moody studio lighting',
+    'vibrant city sunrise over modern skyline, crisp morning atmosphere',
+    'person standing on mountain overlook at golden hour looking at vast horizon',
   ],
   materialSource: 'studio_2411',
   neutralBgTheme: 'slate_studio',
@@ -46,9 +48,9 @@ const DEFAULT_SHORT_CONFIG: RenderJobConfig = {
   transitionMode: 'random',
   clipDurationSec: 3,
   ttsProvider: 'edge_auto',
-  voiceId: 'vi-VN-HoaiMyNeural',
+  voiceId: 'en-US-JennyNeural',
   dualVoiceEnabled: false,
-  secondaryVoiceId: 'vi-VN-NamMinhNeural',
+  secondaryVoiceId: 'en-US-GuyNeural',
   pauseBetweenLinesSec: 0,
   clockTickEnabled: true,
   targetRepeatCount: 0,
@@ -204,14 +206,59 @@ const DEFAULT_ANIME_STORY_CONFIG: RenderJobConfig = {
   },
 };
 
+function mergeDraftConfig(
+  defaults: RenderJobConfig,
+  saved?: Partial<RenderJobConfig> | null
+): RenderJobConfig {
+  if (!saved || typeof saved !== 'object') return { ...defaults };
+  return {
+    ...defaults,
+    ...saved,
+    subtitle: {
+      ...defaults.subtitle,
+      ...(saved.subtitle && typeof saved.subtitle === 'object' ? saved.subtitle : {}),
+    },
+    terms: Array.isArray(saved.terms) ? saved.terms : defaults.terms,
+    scenePrompts: Array.isArray(saved.scenePrompts) ? saved.scenePrompts : defaults.scenePrompts,
+    selectedMediaIds: Array.isArray(saved.selectedMediaIds)
+      ? saved.selectedMediaIds
+      : defaults.selectedMediaIds,
+  };
+}
+
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [activeTab, setActiveTab] = useState<StudioTab>('short_video');
-  const [configsByTab, setConfigsByTab] = useState<Record<StudioTab, RenderJobConfig>>(() => ({
-    short_video: { ...DEFAULT_SHORT_CONFIG },
-    learning: { ...DEFAULT_LEARNING_CONFIG },
-    anime_story: { ...DEFAULT_ANIME_STORY_CONFIG },
-  }));
+  const [activeTab, setActiveTab] = useState<StudioTab>(() => {
+    try {
+      const savedTab = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+      if (savedTab === 'short_video' || savedTab === 'learning' || savedTab === 'anime_story') {
+        return savedTab;
+      }
+    } catch {
+      // Ignore storage read errors safely
+    }
+    return 'short_video';
+  });
+  const [configsByTab, setConfigsByTab] = useState<Record<StudioTab, RenderJobConfig>>(() => {
+    try {
+      const raw = window.localStorage.getItem(DRAFT_CONFIGS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<Record<StudioTab, Partial<RenderJobConfig>>>;
+        return {
+          short_video: mergeDraftConfig(DEFAULT_SHORT_CONFIG, parsed.short_video),
+          learning: mergeDraftConfig(DEFAULT_LEARNING_CONFIG, parsed.learning),
+          anime_story: mergeDraftConfig(DEFAULT_ANIME_STORY_CONFIG, parsed.anime_story),
+        };
+      }
+    } catch {
+      // Ignore corrupted draft JSON and fall back to defaults
+    }
+    return {
+      short_video: { ...DEFAULT_SHORT_CONFIG },
+      learning: { ...DEFAULT_LEARNING_CONFIG },
+      anime_story: { ...DEFAULT_ANIME_STORY_CONFIG },
+    };
+  });
 
   const [uploadedMedia, setUploadedMedia] = useState<MediaAssetItem[]>([]);
   const [builtinBgm, setBuiltinBgm] = useState<MediaAssetItem[]>([]);
@@ -231,6 +278,22 @@ export default function App() {
       return [];
     }
   });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
+    } catch {
+      // Ignore storage quota errors safely
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DRAFT_CONFIGS_STORAGE_KEY, JSON.stringify(configsByTab));
+    } catch {
+      // Ignore storage quota errors safely
+    }
+  }, [configsByTab]);
 
   useEffect(() => {
     try {
